@@ -194,7 +194,7 @@ func (c config) scores(ctx context.Context) []quota {
 				pending <- quota{name: name, err: fmt.Errorf("rate limited; retry in %s", d.Round(time.Second))}
 				return
 			}
-			q := a.inspectQuota(ctx)
+			q := a.inspectQuota(ctx, c.model)
 			q.name = name
 			q.capacity = a.capacity()
 			if a.Capacity == nil {
@@ -218,7 +218,7 @@ func (c config) scores(ctx context.Context) []quota {
 	}
 	return result
 }
-func (a account) inspectQuota(ctx context.Context) quota {
+func (a account) inspectQuota(ctx context.Context, model string) quota {
 	if a.Provider == "codex" && len(a.Usage) == 0 && executable(a.Env["CODEX_PATH"], "codex") != "" {
 		data, err := a.codexQuota(ctx)
 		if err != nil {
@@ -236,6 +236,10 @@ func (a account) inspectQuota(ctx context.Context) quota {
 	q := quota{remaining: -1}
 	if len(a.Usage) != 0 {
 		q.remaining, q.err = a.probeRemaining(ctx)
+	} else if a.Provider == "claude" {
+		if cli := executable(a.Env["CLAUDE_CODE_EXECUTABLE"], "claude"); cli != "" {
+			q.remaining, q.err = a.claudeQuota(ctx, cli, model)
+		}
 	}
 	q.tier = <-tier
 	return q

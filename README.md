@@ -70,7 +70,7 @@ Petal reads the Codex plan ID from the local app server and the Claude tier from
 pro = 4
 ```
 
-Auto probes accounts that support the requested model in parallel. For Codex it asks the local app server for rate limits and takes the lowest remaining percentage across its primary and secondary windows. Set `accounts.NAME.usage = ["/path/to/probe", "arg"]` to override this or provide quota data for Claude Code. A probe inherits the profile environment and prints a number from 0 to 100.
+Auto probes accounts that support the requested model in parallel. For Codex it asks the local app server for rate limits and takes the lowest remaining percentage across its primary and secondary windows. For Claude it sends a read-only `get_usage` control request to the profile’s CLI and checks the five-hour, seven-day, and matching model-family windows. This experimental CLI interface was verified on Claude Code 2.1.325. A failed request excludes the profile from Auto. A successful response without quota data leaves it unmetered. Set `accounts.NAME.usage = ["/path/to/probe", "arg"]` to override either provider’s probe. A probe inherits the profile environment and prints a number from 0 to 100.
 
 - Set `accounts.NAME.capacity` to the relative size of a full subscription for the workload you route. An account setting overrides tier detection. Auto picks the largest estimated remaining capacity (capacity multiplied by the remaining fraction). For example, a 5× account at 30% has 1.5 baseline subscriptions left and beats a 1× account at 90%. Equal scores split new sessions randomly.
 - Accounts with no quota source are labeled **unmetered**. Auto uses them when no measured account has capacity. Exhausted, invalid, timed-out and failed probes are excluded.
