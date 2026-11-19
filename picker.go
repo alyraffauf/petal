@@ -83,6 +83,12 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				default:
 					m.usage[s.name] = fmt.Sprintf("%.0f%% remaining", s.remaining)
 				}
+				if s.tier != "" {
+					m.usage[s.name] += " · " + s.tier
+				}
+				if s.capacity > 0 && s.capacity != 1 {
+					m.usage[s.name] += fmt.Sprintf(" · %g× capacity", s.capacity)
+				}
 			}
 		}
 	case tea.KeyPressMsg:
@@ -167,9 +173,7 @@ func (m *picker) View() tea.View {
 				if detail == "" {
 					detail = "checking quota…"
 				}
-				if size := m.cfg.Accounts[label].capacity(); size != 1 {
-					detail += fmt.Sprintf(" · %g× capacity", size)
-				}
+
 				label += "   ·   " + detail
 			}
 		}

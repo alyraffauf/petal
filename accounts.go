@@ -84,6 +84,7 @@ func (a account) command(ctx context.Context, argv []string) *exec.Cmd {
 type config struct {
 	quiet         bool
 	Accounts      map[string]account
+	Tiers         map[string]map[string]float64
 	model, forced string
 	hints         []string
 }
@@ -104,6 +105,13 @@ func readConfig(args []string) (config, error) {
 	}
 	if err != nil {
 		return c, err
+	}
+	for provider, tiers := range c.Tiers {
+		for tier, size := range tiers {
+			if size <= 0 || math.IsNaN(size) || math.IsInf(size, 0) {
+				return c, fmt.Errorf("tiers.%s.%s must be a positive finite number", provider, tier)
+			}
+		}
 	}
 	for name, a := range c.Accounts {
 		if err := a.configureHome(filepath.Dir(args[0])); err != nil {
@@ -146,7 +154,7 @@ func (c config) choose(ctx context.Context) (string, error) {
 		if s.remaining > 0 {
 			// Compare exact products of two float64 values. The common
 			// divisor of 100 cannot change their order.
-			score.Mul(&score, big.NewFloat(c.Accounts[s.name].capacity()))
+			score.Mul(&score, big.NewFloat(s.capacity))
 		}
 		order := score.Cmp(&best)
 		if order > 0 {
@@ -164,6 +172,8 @@ func (c config) choose(ctx context.Context) (string, error) {
 }
 
 type quota struct {
+	tier      string
+	capacity  float64
 	name      string
 	remaining float64
 	err       error
@@ -181,11 +191,25 @@ func (c config) scores(ctx context.Context) []quota {
 		count++
 		go func() {
 			if d := remainingBackoff(name); d > 0 {
-				pending <- quota{name, 0, fmt.Errorf("rate limited; retry in %s", d.Round(time.Second))}
+				pending <- quota{name: name, err: fmt.Errorf("rate limited; retry in %s", d.Round(time.Second))}
 				return
 			}
-			value, err := a.remaining(ctx)
-			pending <- quota{name, value, err}
+			q := a.inspectQuota(ctx)
+			q.name = name
+			q.capacity = a.capacity()
+			if a.Capacity == nil {
+				if size := c.Tiers[a.Provider][q.tier]; q.tier != "" && size > 0 {
+					q.capacity = size
+				} else if a.Provider == "claude" {
+					switch q.tier {
+					case "max_5x":
+						q.capacity = 5
+					case "max_20x":
+						q.capacity = 20
+					}
+				}
+			}
+			pending <- q
 		}()
 	}
 	result := make([]quota, 0, count)
@@ -194,13 +218,65 @@ func (c config) scores(ctx context.Context) []quota {
 	}
 	return result
 }
-func (a account) remaining(ctx context.Context) (float64, error) {
-	if len(a.Usage) == 0 {
-		if a.Provider == "codex" && executable(a.Env["CODEX_PATH"], "codex") != "" {
-			return a.codexQuota(ctx)
+func (a account) inspectQuota(ctx context.Context) quota {
+	if a.Provider == "codex" && len(a.Usage) == 0 && executable(a.Env["CODEX_PATH"], "codex") != "" {
+		data, err := a.codexQuota(ctx)
+		if err != nil {
+			return quota{err: err}
 		}
-		return -1, nil
+		remaining, err := codexRemaining(data)
+		return quota{remaining: remaining, err: err, tier: codexTier(data)}
 	}
+	tier := make(chan string, 1)
+	go func() {
+		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		tier <- a.detectTier(probe)
+	}()
+	q := quota{remaining: -1}
+	if len(a.Usage) != 0 {
+		q.remaining, q.err = a.probeRemaining(ctx)
+	}
+	q.tier = <-tier
+	return q
+}
+
+func codexTier(data json.RawMessage) string {
+	var status struct{ RateLimits struct{ PlanType string } }
+	if json.Unmarshal(data, &status) != nil {
+		return ""
+	}
+	return status.RateLimits.PlanType
+}
+
+func (a account) detectTier(ctx context.Context) string {
+	switch a.Provider {
+	case "codex":
+		if executable(a.Env["CODEX_PATH"], "codex") != "" {
+			data, _ := a.codexQuota(ctx)
+			return codexTier(data)
+		}
+	case "claude":
+		if cli := executable(a.Env["CLAUDE_CODE_EXECUTABLE"], "claude"); cli != "" {
+			cmd := a.command(ctx, []string{cli, "auth", "status", "--json"})
+			cmd.WaitDelay = 200 * time.Millisecond
+			data, err := cmd.Output()
+			var status struct {
+				LoggedIn                               bool
+				AuthMethod, PlanTier, SubscriptionType string
+			}
+			if err == nil && json.Unmarshal(data, &status) == nil && status.LoggedIn && status.AuthMethod == "claude.ai" {
+				if status.PlanTier != "" && status.PlanTier != "other" && status.PlanTier != "unknown" {
+					return status.PlanTier
+				}
+				return status.SubscriptionType
+			}
+		}
+	}
+	return ""
+}
+
+func (a account) probeRemaining(ctx context.Context) (float64, error) {
 	cmd := a.command(ctx, a.Usage)
 	cmd.WaitDelay = time.Second
 	output, err := cmd.Output()

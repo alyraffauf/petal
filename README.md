@@ -63,9 +63,16 @@ Petal expands `~/` using your home directory and resolves relative paths against
 
 Named profiles replace the automatically discovered default account for that provider. Explicit `accounts.NAME.models.MODEL` command arrays override discovered launch commands. Those commands must start an authenticated stdio ACP agent configured for the model.
 
+Petal reads the Codex plan ID from the local app server and the Claude tier from `claude auth status --json` in each profile. Press Tab on a model to see its accounts and detected tiers. Claude’s explicit `max_5x` and `max_20x` tiers supply estimated weights of 5 and 20 relative to Pro. For other tiers the default weight is 1. You can set a weight once for every account reporting the same provider tier. For example, if your measured Codex Pro workload supports four times as much usage as your baseline:
+
+```toml
+[tiers.codex]
+pro = 4
+```
+
 Auto probes accounts that support the requested model in parallel. For Codex it asks the local app server for rate limits and takes the lowest remaining percentage across its primary and secondary windows. Set `accounts.NAME.usage = ["/path/to/probe", "arg"]` to override this or provide quota data for Claude Code. A probe inherits the profile environment and prints a number from 0 to 100.
 
-- Set `accounts.NAME.capacity` to the relative size of a full subscription for the workload you route. The default is 1. Auto picks the largest estimated remaining capacity (capacity multiplied by the remaining fraction). For example, a 5× account at 30% has 1.5 baseline subscriptions left and beats a 1× account at 90%. Equal scores split new sessions randomly.
+- Set `accounts.NAME.capacity` to the relative size of a full subscription for the workload you route. An account setting overrides tier detection. Auto picks the largest estimated remaining capacity (capacity multiplied by the remaining fraction). For example, a 5× account at 30% has 1.5 baseline subscriptions left and beats a 1× account at 90%. Equal scores split new sessions randomly.
 - Accounts with no quota source are labeled **unmetered**. Auto uses them when no measured account has capacity. Exhausted, invalid, timed-out and failed probes are excluded.
 - A structured rate-limit error puts the account on a five-minute Auto cooldown shared between Petal processes. A manual pin bypasses probes and cooldowns.
 - Each thread keeps its original account. Petal never replays a prompt on another subscription after a failure.

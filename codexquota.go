@@ -8,19 +8,19 @@ import (
 	"io"
 )
 
-func (a account) codexQuota(ctx context.Context) (float64, error) {
+func (a account) codexQuota(ctx context.Context) (json.RawMessage, error) {
 	cmd := a.command(ctx, []string{executable(a.Env["CODEX_PATH"], "codex"), "app-server", "--listen", "stdio://"})
 	in, err := cmd.StdinPipe()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer in.Close()
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if err = cmd.Start(); err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer func() { in.Close(); cmd.Process.Kill(); cmd.Wait() }()
 	scan := bufio.NewScanner(out)
@@ -45,21 +45,17 @@ func (a account) codexQuota(ctx context.Context) (float64, error) {
 		return nil, io.EOF
 	}
 	if _, err = io.WriteString(in, `{"id":1,"method":"initialize","params":{"clientInfo":{"name":"petal","version":"1"}}}`+"\n"); err != nil {
-		return 0, err
+		return nil, err
 	}
 	if _, err = read(1); err != nil {
-		return 0, err
+		return nil, err
 	}
 	if _, err = io.WriteString(in, `{"method":"initialized"}
 {"id":2,"method":"account/rateLimits/read","params":{}}
 `); err != nil {
-		return 0, err
+		return nil, err
 	}
-	data, err := read(2)
-	if err != nil {
-		return 0, err
-	}
-	return codexRemaining(data)
+	return read(2)
 }
 
 func codexRemaining(data json.RawMessage) (float64, error) {
