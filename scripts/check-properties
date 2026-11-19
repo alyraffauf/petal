@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Replay regressions, then give each native Go fuzz target a separate budget.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export CGO_ENABLED="${CGO_ENABLED:-0}"
+go test ./...
+targets=$(go test -list '^Fuzz' .)
+count=0
+while IFS= read -r target; do
+  [[ $target =~ ^Fuzz[[:alnum:]_]+$ ]] || continue
+  ((count+=1))
+  go test -run '^$' -fuzz "^$target$" -fuzztime "${FUZZ_TIME:-5s}" -parallel "${FUZZ_WORKERS:-2}" .
+done <<< "$targets"
+if ((count == 0)); then
+  echo 'No fuzz targets found.' >&2
+  exit 1
+fi
