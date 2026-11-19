@@ -6,9 +6,12 @@
       version = "0-unstable";
       src = pkgs.lib.fileset.toSource {
         root = ../..;
-        fileset = pkgs.lib.fileset.fileFilter (file:
-          file.hasExt "go" || builtins.elem file.name [ "go.mod" "go.sum" ]
-        ) ../..;
+        fileset = pkgs.lib.fileset.unions [
+          ../../testdata
+          (pkgs.lib.fileset.fileFilter (file:
+            file.hasExt "go" || builtins.elem file.name [ "go.mod" "go.sum" ]
+          ) ../..)
+        ];
       };
       vendorHash = "sha256-frby66cZK0GSTwCW2izgyvWvTeNoQGM50MwdK0Fi7Dg=";
       subPackages = [ "." ];
