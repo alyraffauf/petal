@@ -1,0 +1,124 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	acp "github.com/coder/acp-go-sdk"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+)
+
+func TestPlacementUsesOnlyEligibleSubscriptions(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	script := filepath.Join(t.TempDir(), "quota")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' \"$REMAINING\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	accountFor := func(model, value string) account {
+		return account{Models: map[string][]string{model: {"agent"}}, Usage: []string{script}, Env: map[string]string{"REMAINING": value}}
+	}
+	c := config{model: "m", Accounts: map[string]account{"a": accountFor("m", "76"), "b": accountFor("m", "90"), "other": accountFor("another", "100"), "bad": accountFor("m", "nan"), "exhausted": accountFor("m", "0"), "unmetered": {Models: map[string][]string{"m": {"agent"}}}}}
+	choose := func(want string) {
+		t.Helper()
+		got, err := c.choose(context.Background())
+		if err != nil || got != want {
+			t.Fatalf("got %q, %v; want %q", got, err, want)
+		}
+	}
+	choose("b")
+	large := c.Accounts["a"]
+	size := 5.0
+	large.Capacity = &size
+	large.Env["REMAINING"] = "30"
+	c.Accounts["a"] = large
+	choose("a")
+	large.Env["REMAINING"] = "10"
+	choose("b")
+	delete(c.Accounts, "b")
+	choose("a")
+	delete(c.Accounts, "a")
+	choose("unmetered")
+	delete(c.Accounts, "unmetered")
+	if _, err := c.choose(context.Background()); err == nil {
+		t.Fatal("all eligible probes failed or reported exhaustion")
+	}
+	c.forced = "exhausted"
+	choose("exhausted")
+}
+func TestProfileDiscoveryPreservesExplicitCommands(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"codex", "codex-acp", "claude", "claude-agent-acp", "opencode"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nprintf 'local/chat:latest\\n'\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	if err := os.WriteFile(filepath.Join(dir, "models_cache.json"), []byte(`{"models":[{"slug":"gpt-test","visibility":"list"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := config{Accounts: map[string]account{"work": {Provider: "codex", Env: map[string]string{"CODEX_HOME": dir}, Models: map[string][]string{"gpt-test": {"custom"}}}}}
+	c.discover()
+	if _, exists := c.Accounts["opencode"]; exists {
+		t.Fatal("discovered an unsupported provider")
+	}
+	if _, dup := c.Accounts["codex"]; dup {
+		t.Fatal("default credentials duplicated a configured provider")
+	}
+	if a := c.Accounts["work"]; a.selectModel["gpt-test"] || !slices.Equal(a.Models["gpt-test"], []string{"custom"}) {
+		t.Fatal("discovery replaced explicit model command")
+	}
+	for _, want := range []string{"sonnet", "gpt-test"} {
+		if !slices.Contains(c.modelNames(), want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+}
+
+func TestRateLimitMovesOnlyFutureAutoRoutes(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	a := account{Models: map[string][]string{"model": {"agent"}}}
+	c := config{Accounts: map[string]account{"work": a, "other": a}, model: "model"}
+	rememberRateLimit("work", &acp.RequestError{Code: -32603, Data: json.RawMessage(`{"errorKind":"rate_limit"}`)})
+	n, err := c.choose(context.Background())
+	if err != nil || n != "other" {
+		t.Fatalf("cooled route won: %s %v", n, err)
+	}
+	c.forced = "work"
+	n, err = c.choose(context.Background())
+	if err != nil || n != "work" {
+		t.Fatalf("manual override failed: %s %v", n, err)
+	}
+}
+
+func TestConfiguredHomesReachProviderCommands(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("PATH", dir)
+	const profiles = `[accounts.work]
+provider = "claude"
+home = "~/.claude-work"
+[accounts.personal]
+provider = "codex"
+home = "profiles/codex"
+`
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(profiles), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := readConfig([]string{path, ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ key, dir string }{
+		"work":     {"CLAUDE_CONFIG_DIR", ".claude-work"},
+		"personal": {"CODEX_HOME", "profiles/codex"},
+	} {
+		t.Setenv(tc.key, "/unrelated")
+		out, err := c.Accounts[name].command(context.Background(), []string{"/bin/sh", "-c", "printf %s \"$" + tc.key + "\""}).Output()
+		if err != nil || string(out) != filepath.Join(dir, tc.dir) {
+			t.Errorf("%s profile directory = %q, err = %v", name, out, err)
+		}
+	}
+}

@@ -1,0 +1,207 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/pelletier/go-toml/v2"
+	"math"
+	"math/rand/v2"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type account struct {
+	Provider    string
+	Home        string
+	Capacity    *float64
+	selectModel map[string]bool
+	Env         map[string]string
+	Models      map[string][]string
+	Usage       []string
+}
+
+func (a *account) configureHome(configDir string) error {
+	var key string
+	switch a.Provider {
+	case "claude":
+		key = "CLAUDE_CONFIG_DIR"
+	case "codex":
+		key = "CODEX_HOME"
+	case "":
+		if a.Home == "" {
+			return nil // Explicit ACP command without a managed provider.
+		}
+		return fmt.Errorf("home requires provider claude or codex")
+	default:
+		return fmt.Errorf("unsupported provider %q (expected claude or codex)", a.Provider)
+	}
+	if a.Home == "" {
+		return nil
+	}
+	dir := a.Home
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		dir = filepath.Join(home, dir[1:])
+	} else if !filepath.IsAbs(dir) {
+		dir = filepath.Join(configDir, dir)
+	}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if a.Env == nil {
+		a.Env = make(map[string]string)
+	}
+	a.Env[key] = dir
+	return nil
+}
+
+func (a account) capacity() float64 {
+	if a.Capacity == nil {
+		return 1
+	}
+	return *a.Capacity
+}
+
+func (a account) command(ctx context.Context, argv []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = os.Environ()
+	for k, v := range a.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	return cmd
+}
+
+type config struct {
+	quiet         bool
+	Accounts      map[string]account
+	model, forced string
+	hints         []string
+}
+
+func readConfig(args []string) (config, error) {
+	var c config
+	if len(args) < 2 || len(args) > 3 {
+		return c, fmt.Errorf("usage: petal CONFIG.toml MODEL [ACCOUNT]")
+	}
+	data, err := os.ReadFile(args[0])
+	if err != nil {
+		return c, err
+	}
+	if filepath.Ext(args[0]) == ".json" {
+		err = json.Unmarshal(data, &c)
+	} else {
+		err = toml.Unmarshal(data, &c)
+	}
+	if err != nil {
+		return c, err
+	}
+	for name, a := range c.Accounts {
+		if err := a.configureHome(filepath.Dir(args[0])); err != nil {
+			return c, fmt.Errorf("accounts.%s: %w", name, err)
+		}
+		c.Accounts[name] = a
+		if size := a.capacity(); size <= 0 || math.IsNaN(size) || math.IsInf(size, 0) {
+			return c, fmt.Errorf("accounts.%s.capacity must be a positive finite number", name)
+		}
+	}
+	c.model = args[1]
+	if len(args) == 3 {
+		c.forced = args[2]
+	}
+	c.discover()
+	if c.model == "" {
+		return c, nil
+	}
+	return c, c.validate()
+}
+
+func (c config) choose(ctx context.Context) (string, error) {
+	if c.forced != "" {
+		return c.forced, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	scores := c.scores(ctx)
+	best := -1.0
+	var choices []string
+	for _, s := range scores {
+		if s.err != nil || s.remaining == 0 {
+			continue
+		}
+		score := s.remaining
+		if score > 0 {
+			score = c.Accounts[s.name].capacity() * (s.remaining / 100)
+		}
+		if score > best {
+			best = score
+			choices = nil
+		}
+		if score == best {
+			choices = append(choices, s.name)
+		}
+	}
+	if len(choices) == 0 {
+		return "", fmt.Errorf("no matching subscription has available quota; check the account probes or choose a subscription manually")
+	}
+	return choices[rand.IntN(len(choices))], nil
+}
+
+type quota struct {
+	name      string
+	remaining float64
+	err       error
+}
+
+func (c config) scores(ctx context.Context) []quota {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	pending := make(chan quota, len(c.Accounts))
+	count := 0
+	for name, a := range c.Accounts {
+		if len(a.Models[c.model]) == 0 {
+			continue
+		}
+		count++
+		go func() {
+			if d := remainingBackoff(name); d > 0 {
+				pending <- quota{name, 0, fmt.Errorf("rate limited; retry in %s", d.Round(time.Second))}
+				return
+			}
+			value, err := a.remaining(ctx)
+			pending <- quota{name, value, err}
+		}()
+	}
+	result := make([]quota, 0, count)
+	for range count {
+		result = append(result, <-pending)
+	}
+	return result
+}
+func (a account) remaining(ctx context.Context) (float64, error) {
+	if len(a.Usage) == 0 {
+		if a.Provider == "codex" && executable(a.Env["CODEX_PATH"], "codex") != "" {
+			return a.codexQuota(ctx)
+		}
+		return -1, nil
+	}
+	cmd := a.command(ctx, a.Usage)
+	cmd.WaitDelay = time.Second
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
+	if err != nil || math.IsNaN(n) || n < 0 || n > 100 {
+		return 0, fmt.Errorf("expected a percentage from 0 to 100")
+	}
+	return n, nil
+}
