@@ -4,8 +4,10 @@ import (
 	"context"
 	"math"
 	"math/big"
+	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 )
@@ -31,7 +33,17 @@ type routingCandidate struct {
 func FuzzAutoRouting(f *testing.F) {
 	f.Setenv("XDG_STATE_HOME", f.TempDir())
 	for _, name := range []string{"0", "1", "2", "3", "4", "5"} {
-		rememberRateLimit(name+"-cooling", &acp.RequestError{Code: 429})
+		account := name + "-cooling"
+		rememberRateLimit(account, &acp.RequestError{Code: 429})
+		// Hold this fixture in cooldown during campaigns longer than five minutes.
+		path, err := limitPath(account)
+		if err != nil {
+			f.Fatal(err)
+		}
+		future := time.Now().AddDate(1, 0, 0)
+		if err := os.Chtimes(path, future, future); err != nil {
+			f.Fatal(err)
+		}
 	}
 	// Each record encodes eligibility, capacity, probe kind, and percentage.
 	f.Add(byte(0), []byte{0, 0, 0, 90, 0, 5, 0, 30})
