@@ -57,6 +57,10 @@ func petalMasthead(w, h, frame int, route, status string) []string {
 	return rows
 }
 
+func petalLabel(s string) string {
+	return strings.ReplaceAll(clean(s), "\n", " ")
+}
+
 func petal(v screen) string {
 	w, h := v.Width, v.Height
 	if w < 1 || h < 1 {
@@ -70,8 +74,8 @@ func petal(v screen) string {
 	if h >= 27 && w >= 65 {
 		header = 2
 	}
-	route := strings.Trim(clean(v.Model)+" / "+clean(v.Account), " /")
-	rows := petalMasthead(w, header, v.Frame, route, clean(v.Status))
+	route := strings.Trim(petalLabel(v.Model)+" / "+petalLabel(v.Account), " /")
+	rows := petalMasthead(w, header, v.Frame, route, petalLabel(v.Status))
 	gutter := min(3, w/4)
 	col := max(1, w-gutter-2)
 	body := transcript(v, col, h-header-footer)
@@ -103,10 +107,10 @@ func petal(v screen) string {
 	for len(rows) < h-footer {
 		rows = append(rows, richBand("", w, petalText, petalInk, false))
 	}
-	input := clean(v.Input)
+	input := petalLabel(v.Input)
 	fg := petalText
 	if input == "" {
-		input = "Ask " + clean(v.Model) + "…"
+		input = "Ask " + petalLabel(v.Model) + "…"
 		fg = petalMuted
 	}
 	action := " ↵ Send "
@@ -125,7 +129,7 @@ func petal(v screen) string {
 			hint = fmt.Sprintf(" ↓ %d lines   Ctrl+End latest ", v.backlog.limit-v.backlog.top)
 		}
 		hw := min(w, ansi.StringWidth(hint))
-		rows = append(rows, richBand("  "+clean(v.Cwd), w-hw, petalMuted, petalInk, false)+richBand(hint, hw, petalMuted, petalInk, false))
+		rows = append(rows, richBand("  "+petalLabel(v.Cwd), w-hw, petalMuted, petalInk, false)+richBand(hint, hw, petalMuted, petalInk, false))
 	}
 	return strings.Join(rows, "\n")
 }
