@@ -59,12 +59,16 @@ func (a account) codexQuota(ctx context.Context) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
+	return codexRemaining(data)
+}
+
+func codexRemaining(data json.RawMessage) (float64, error) {
 	type window struct{ UsedPercent *float64 }
 	var r struct {
 		OrdinaryUsageAllowed *bool
 		RateLimits           struct{ Primary, Secondary *window }
 	}
-	if err = json.Unmarshal(data, &r); err != nil {
+	if err := json.Unmarshal(data, &r); err != nil {
 		return 0, err
 	}
 	if r.OrdinaryUsageAllowed != nil && !*r.OrdinaryUsageAllowed {
@@ -72,9 +76,13 @@ func (a account) codexQuota(ctx context.Context) (float64, error) {
 	}
 	available := 101.0
 	for _, w := range []*window{r.RateLimits.Primary, r.RateLimits.Secondary} {
-		if w != nil && w.UsedPercent != nil && *w.UsedPercent >= 0 && *w.UsedPercent <= 100 {
-			available = min(available, 100-*w.UsedPercent)
+		if w == nil || w.UsedPercent == nil {
+			continue
 		}
+		if *w.UsedPercent < 0 || *w.UsedPercent > 100 {
+			return 0, errors.New("invalid Codex used percentage")
+		}
+		available = min(available, 100-*w.UsedPercent)
 	}
 	if available == 101 {
 		return -1, nil
