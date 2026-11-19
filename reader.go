@@ -1,10 +1,12 @@
 package main
 
 import (
+	"strings"
+
 	"bloomfx.dev/bloom"
 	"bloomfx.dev/bloom/fx"
 	"charm.land/lipgloss/v2"
-	"strings"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func (m *terminal) scene(v screen) bloom.Child {
@@ -29,7 +31,8 @@ func (m *terminal) scene(v screen) bloom.Child {
 			role = strings.ToUpper(r.Role)
 		}
 		last = r.Role
-		body = append(body, richBand(" "+role, gutter, "208;170;231", "25;23;37", true)+richBand(r.Text, max(1, w-gutter-2), "246;239;255", "25;23;37", false))
+		label := ansi.Truncate(" "+role, gutter-1, "")
+		body = append(body, richBand(label, gutter, "208;170;231", "25;23;37", true)+richBand(r.Text, max(1, w-gutter-2), "246;239;255", "25;23;37", false))
 	}
 	content := bloom.Column(bloom.Fixed(1, bloom.Text("  Conversation").Style(chrome)), bloom.Fill(bloom.Text(strings.Join(body, "\n"))), bloom.Fixed(1, bloom.Text("  ↑↓ scroll   PgUp/PgDn page   Esc close").Style(chrome)))
 	layer := bloom.Layer(bloom.Box(panel, content)).Size(w, h).Modal().Backdrop(fx.Dim{Amount: .65}).Shadow(1, 1, fx.Dim{Amount: .4}).Presence(m.reader, fx.Unfold{})
