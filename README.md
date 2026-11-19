@@ -82,3 +82,19 @@ Enter sends the draft, arrow keys edit it, the mouse wheel, trackpad, or Page Up
 Petal saves the last session ID for each model and working directory under `$XDG_STATE_HOME/petal/sessions` (default `~/.local/state/petal/sessions`). The adapter owns conversation history and must support ACP session loading to resume. Overriding an existing route requires the selected account to have access to that history.
 
 Both commands accept `--config PATH`. Existing editor registrations can keep using `petal CONFIG MODEL [ACCOUNT]`, including explicit legacy JSON files.
+
+## Property tests
+
+Run `CGO_ENABLED=0 go test ./...` to replay deterministic regressions and every fuzz target's seeds. Run `scripts/check-properties` to replay them and then generate new cases for each target. The default budget is five seconds per target with two workers. A longer campaign can use:
+
+```sh
+FUZZ_TIME=1m FUZZ_WORKERS=4 scripts/check-properties
+```
+
+The targets use Go's native fuzzer. A failure prints a replay command and saves its minimized input under `testdata/fuzz/<target>/`. Keep that input or add an equivalent deterministic regression when fixing the bug. For a single target, run:
+
+```sh
+CGO_ENABLED=0 go test -run '^$' -fuzz '^FuzzSessionResumePlacement$' -fuzztime=1m .
+```
+
+The session target uses local ACP subprocesses and temporary state directories. It creates and resumes sessions across two accounts, projects, and models, then asks the running adapter which account received the request. The Auto routing target compares eligible winners against an independent exact-arithmetic model. Both run offline.
