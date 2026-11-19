@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	acp "github.com/coder/acp-go-sdk"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -120,5 +121,21 @@ home = "profiles/codex"
 		if err != nil || string(out) != filepath.Join(dir, tc.dir) {
 			t.Errorf("%s profile directory = %q, err = %v", name, out, err)
 		}
+	}
+}
+
+func TestAutoRoutingPreservesTinyQuotaOnLargeSubscription(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	large, small := math.MaxFloat64, math.SmallestNonzeroFloat64
+	models := map[string][]string{"m": {"agent"}}
+	c := config{model: "m", Accounts: map[string]account{
+		"large": {Capacity: &large, Models: models, Usage: []string{"/bin/sh", "-c", "printf 5e-324"}},
+		"small": {Capacity: &small, Models: models, Usage: []string{"/bin/sh", "-c", "printf 100"}},
+	}}
+	// The large subscription has about 9e-18 units left. The small
+	// subscription has about 5e-324 units even at full quota.
+	got, err := c.choose(context.Background())
+	if err != nil || got != "large" {
+		t.Fatalf("expected large subscription, got %q (%v)", got, err)
 	}
 }

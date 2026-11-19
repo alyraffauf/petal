@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/pelletier/go-toml/v2"
 	"math"
+	"math/big"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -131,21 +132,28 @@ func (c config) choose(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	scores := c.scores(ctx)
-	best := -1.0
+	// A product of two float64 significands fits in 106 bits.
+	const scorePrecision = 106
+	var best big.Float
+	best.SetPrec(scorePrecision).SetInt64(-1)
 	var choices []string
 	for _, s := range scores {
 		if s.err != nil || s.remaining == 0 {
 			continue
 		}
-		score := s.remaining
-		if score > 0 {
-			score = c.Accounts[s.name].capacity() * (s.remaining / 100)
+		var score big.Float
+		score.SetPrec(scorePrecision).SetFloat64(s.remaining)
+		if s.remaining > 0 {
+			// Compare exact products of two float64 values. The common
+			// divisor of 100 cannot change their order.
+			score.Mul(&score, big.NewFloat(c.Accounts[s.name].capacity()))
 		}
-		if score > best {
-			best = score
+		order := score.Cmp(&best)
+		if order > 0 {
+			best.Set(&score)
 			choices = nil
 		}
-		if score == best {
+		if order >= 0 {
 			choices = append(choices, s.name)
 		}
 	}
