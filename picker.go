@@ -143,7 +143,7 @@ func (m *picker) View() tea.View {
 	}
 	w, h := max(1, m.width), max(1, m.height)
 	blank := func() string { return richBand("", w, petalText, petalInk, false) }
-	row := func(s, fg string, bold bool) string { return richBand(clean(s), w, fg, petalInk, bold) }
+	row := func(s, fg string, bold bool) string { return richBand(petalLabel(s), w, fg, petalInk, bold) }
 	var rows []string
 	status := "New session"
 	if m.resume {
@@ -184,7 +184,7 @@ func (m *picker) View() tea.View {
 			nameWidth := min(w/2, 36)
 			label = ansi.Truncate(label, nameWidth, "…") + strings.Repeat(" ", max(2, nameWidth-ansi.StringWidth(label)+2)) + strings.Join(names, ", ")
 		}
-		label = ansi.Truncate(clean(label), max(1, w-5), "…")
+		label = ansi.Truncate(petalLabel(label), max(1, w-5), "…")
 		if i == m.index {
 			rows = append(rows, richBand(" › "+label, w, petalRose, petalSurface, true))
 		} else {
