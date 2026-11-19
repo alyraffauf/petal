@@ -58,6 +58,7 @@ func TestPropertyACPAdapter(t *testing.T) {
 func FuzzSessionResumePlacement(f *testing.F) {
 	f.Add([]byte{0, 1, 2, 3, 4, 0, 3})
 	f.Add([]byte{2, 5, 0, 4, 2, 5})
+	f.Add([]byte{0, 7, 2, 8, 11})
 	f.Fuzz(func(t *testing.T, trace []byte) {
 		t.Setenv("XDG_STATE_HOME", t.TempDir())
 		exe, err := os.Executable()
@@ -65,22 +66,25 @@ func FuzzSessionResumePlacement(f *testing.F) {
 			t.Fatal(err)
 		}
 		names := [2]string{"personal", "work"}
-		c := config{model: "shared-model", Accounts: map[string]account{}}
+		models := [2]string{"shared-model", "other-model"}
+		c := config{Accounts: map[string]account{}}
 		for _, name := range names {
 			c.Accounts[name] = account{
-				Models: map[string][]string{c.model: {exe, "-test.run=^TestPropertyACPAdapter$"}},
+				Models: map[string][]string{models[0]: {exe, "-test.run=^TestPropertyACPAdapter$"}, models[1]: {exe, "-test.run=^TestPropertyACPAdapter$"}},
 				Env:    map[string]string{"PETAL_TEST_ADAPTER_PROFILE": name},
 			}
 		}
 		// Each operation opens a fresh client in one of two projects.
-		// The oracle remembers only the most recently created account per project.
-		var saved [2]string
+		// The oracle remembers only the most recently created account per (project, model).
+		var saved [2][2]string
 		for step, op := range trace[:min(len(trace), 8)] {
 			project := int(op / 3 % 2)
+			model := int(op / 6 % 2)
+			c.model = models[model]
 			action := int(op % 3)
 			resume := action == 2
 			c.forced = ""
-			want := saved[project]
+			want := saved[project][model]
 			if !resume {
 				want = names[action]
 				c.forced = want
@@ -105,7 +109,7 @@ func FuzzSessionResumePlacement(f *testing.F) {
 				if err != nil || got.Profile != want {
 					t.Fatalf("step %d: routed to %q, %v; want %q", step, got.Profile, err, want)
 				}
-				saved[project] = want
+				saved[project][model] = want
 			}()
 		}
 	})
