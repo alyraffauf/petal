@@ -120,7 +120,8 @@ func petal(v screen) string {
 	}
 	room := max(1, w-aw-4)
 	if n := ansi.StringWidth(input); n > room {
-		input = ansi.TruncateLeft(input, n-room+1, "…")
+		start := max(0, v.cursorColumn-room+1)
+		input = ansi.Cut(input, start, start+room)
 	}
 	rows = append(rows, richBand("  › "+input, w-aw, fg, petalSurface, false)+richBand(action, aw, petalInk, petalRose, true))
 	if footer == 2 {

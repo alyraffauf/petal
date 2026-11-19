@@ -8,6 +8,7 @@ import (
 	"fmt"
 	acp "github.com/coder/acp-go-sdk"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,6 +128,7 @@ func startHarness(ctx context.Context, c config) *harness {
 	newProxy(ctx, c, proxyOut, toProxy)
 	h := &harness{events: make(chan tea.Msg, 128), permissions: make(chan struct{}, 1), close: func() { clientOut.Close(); proxyOut.Close() }}
 	h.conn = acp.NewConnection(h.callback, clientOut, toClient)
+	h.conn.SetLogger(slog.New(slog.DiscardHandler))
 	return h
 }
 func (h *harness) open(ctx context.Context, c config, cwd string, resume bool) (string, error) {

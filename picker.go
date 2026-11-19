@@ -91,6 +91,11 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+	case tea.PasteMsg:
+		if !m.choosingRoute {
+			m.query += strings.Join(strings.Fields(clean(t.Content)), " ")
+			m.index = 0
+		}
 	case tea.KeyPressMsg:
 		opts := m.options()
 		switch t.String() {

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -19,7 +21,7 @@ type entry struct{ Role, Text string }
 type screen struct {
 	backlog                            *backlogViewport
 	markdown                           *markdownCache
-	Width, Height, Frame               int
+	Width, Height, Frame, cursorColumn int
 	Model, Account, Cwd, Status, Input string
 	Messages                           []entry
 	Busy                               bool
@@ -180,8 +182,9 @@ func (m *terminal) View() tea.View {
 	v := m.screen
 	v.backlog = &m.chatBacklog
 	if len(m.draft) > 0 {
-		v.Input = string(m.draft[:m.cursor]) + "▏" + string(m.draft[m.cursor:])
-		v.Input = strings.ReplaceAll(v.Input, "\n", " ↵ ")
+		prefix := strings.ReplaceAll(string(m.draft[:m.cursor]), "\n", " ↵ ")
+		v.cursorColumn = ansi.StringWidth(prefix)
+		v.Input = prefix + "▏" + strings.ReplaceAll(string(m.draft[m.cursor:]), "\n", " ↵ ")
 	}
 	v.Cwd = clean(v.Cwd)
 	v.Account = clean(v.Account)
@@ -256,7 +259,9 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch msg.(type) {
-		case tea.WindowSizeMsg, tea.KeyPressMsg, routeBalances:
+		case tea.MouseWheelMsg:
+			return m, nil
+		case tea.WindowSizeMsg, tea.KeyPressMsg, tea.PasteMsg, routeBalances:
 			_, cmd := m.launch.Update(msg)
 			if m.launch.chosen {
 				m.next = &m.launch.cfg
@@ -286,7 +291,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t.err != nil {
 			m.pending = turnLog{}
 			m.Status = "Connection failed"
-			m.Messages = append(m.Messages, entry{"system", t.err.Error()})
+			m.Messages = append(m.Messages, entry{"system", terminalError(t.err)})
 		} else {
 			m.Messages = m.pending.commit(m.Messages[:m.turnStart])
 			m.ready = true
@@ -311,11 +316,11 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ask = nil
 		}
 		if t.err != nil {
-			m.Messages = append(m.Messages, entry{"system", t.err.Error()})
+			m.Messages = append(m.Messages, entry{"system", terminalError(t.err)})
 		}
 	case cancelFailed:
 		m.Status = "Cancellation failed"
-		m.recordNote(t.err.Error())
+		m.recordNote(terminalError(t.err))
 	case event:
 		cmd = m.listen
 		if t.tool != nil {
@@ -458,6 +463,18 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = tea.Batch(cmd, nextFrame())
 	}
 	return m, tea.Batch(ui, cmd)
+}
+
+func terminalError(err error) string {
+	var rpc *acp.RequestError
+	if !errors.As(err, &rpc) || rpc.Message == "" {
+		return err.Error()
+	}
+	var data struct{ Details string }
+	if json.Unmarshal(rpc.Data, &data) == nil && data.Details != "" && rpc.Message == "Internal error" {
+		return rpc.Message + ": " + data.Details
+	}
+	return rpc.Message
 }
 
 func (m *terminal) recordNote(text string) {

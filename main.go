@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -172,6 +173,9 @@ func (p *proxy) open(ctx context.Context, init json.RawMessage, method string, p
 		return nil, err
 	}
 	conn := acp.NewConnection(callback, in, out)
+	if p.quiet {
+		conn.SetLogger(slog.New(slog.DiscardHandler))
+	}
 	go func() { <-conn.Done(); stop(); cmd.Wait() }()
 	hello, err := acp.SendRequest[acp.InitializeResponse](conn, ctx, "initialize", init)
 	if err != nil {
@@ -239,6 +243,9 @@ func newProxy(lifetime context.Context, c config, out io.Writer, in io.Reader) *
 		result, err := p.handle(ctx, method, params)
 		return result, rpcError(err)
 	}, out, in)
+	if c.quiet {
+		p.editor.SetLogger(slog.New(slog.DiscardHandler))
+	}
 	close(ready)
 	return p.editor
 }
