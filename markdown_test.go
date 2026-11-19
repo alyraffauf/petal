@@ -30,3 +30,17 @@ func TestBothSpeakersRenderMarkdownAtConversationWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkdownPaddingDoesNotAddRowsToNarrowTranscript(t *testing.T) {
+	rows := transcript(screen{Messages: []entry{
+		{"user", "**first**"},
+		{"assistant", "second"},
+	}}, 20, 3)
+	var visible []string
+	for _, row := range rows {
+		visible = append(visible, strings.TrimSpace(ansi.Strip(row.Text)))
+	}
+	if strings.Join(visible, "|") != "first||second" {
+		t.Fatalf("visible rows = %q, want first, separator, second", visible)
+	}
+}

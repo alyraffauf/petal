@@ -60,8 +60,6 @@ func (v screen) messageLines(e entry, width int) []string {
 		}
 	}
 	lines := strings.Split(strings.Trim(rendered, "\n"), "\n")
-	// Glamour pads some blocks to the wrap width. Avoid adding extra rows when
-	// the decorated margin consumes a cell in smaller terminal windows.
 	for len(lines) > 1 && strings.TrimSpace(ansi.Strip(lines[0])) == "" {
 		lines = lines[1:]
 	}
@@ -70,7 +68,13 @@ func (v screen) messageLines(e entry, width int) []string {
 	}
 	var wrapped []string
 	for _, line := range lines {
-		wrapped = append(wrapped, strings.Split(ansi.Hardwrap(line, width, true), "\n")...)
+		parts := strings.Split(ansi.Hardwrap(line, width, true), "\n")
+		// Glamour pads to its wrap width, which can exceed the transcript width.
+		// Preserve original blank lines and discard rows created from padding.
+		for len(parts) > 1 && strings.TrimSpace(ansi.Strip(parts[len(parts)-1])) == "" {
+			parts = parts[:len(parts)-1]
+		}
+		wrapped = append(wrapped, parts...)
 	}
 	if c.lines == nil || len(c.lines) >= 192 {
 		c.lines = make(map[markdownKey][]string)
