@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -65,13 +64,17 @@ func FuzzSessionResumePlacement(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		projects := [2]string{t.TempDir(), t.TempDir()}
 		names := [2]string{"personal", "work"}
 		models := [2]string{"shared-model", "other-model"}
 		c := config{Accounts: map[string]account{}}
 		for _, name := range names {
 			c.Accounts[name] = account{
-				Models: map[string][]string{models[0]: {exe, "-test.run=^TestPropertyACPAdapter$"}, models[1]: {exe, "-test.run=^TestPropertyACPAdapter$"}},
-				Env:    map[string]string{"PETAL_TEST_ADAPTER_PROFILE": name},
+				Models: map[string][]string{
+					models[0]: {exe, "-test.run=^TestPropertyACPAdapter$"},
+					models[1]: {exe, "-test.run=^TestPropertyACPAdapter$"},
+				},
+				Env: map[string]string{"PETAL_TEST_ADAPTER_PROFILE": name},
 			}
 		}
 		// Each operation opens a fresh client in one of two projects.
@@ -94,8 +97,7 @@ func FuzzSessionResumePlacement(f *testing.F) {
 				defer cancel()
 				h := startHarness(ctx, c)
 				defer h.close()
-				cwd := filepath.Join(os.Getenv("XDG_STATE_HOME"), []string{"alpha", "beta"}[project])
-				account, err := h.open(ctx, c, cwd, resume)
+				account, err := h.open(ctx, c, projects[project], resume)
 				if want == "" {
 					if !os.IsNotExist(err) {
 						t.Fatalf("step %d: missing history, got %v", step, err)
