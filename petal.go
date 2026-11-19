@@ -78,7 +78,8 @@ func petal(v screen) string {
 	rows := petalMasthead(w, header, v.Frame, route, petalLabel(v.Status))
 	gutter := min(3, w/4)
 	col := max(1, w-gutter-2)
-	body := transcript(v, col, h-header-footer)
+	menuHeight := min(len(v.commands), max(0, h-header-footer-1))
+	body := transcript(v, col, h-header-footer-menuHeight)
 	previous := ""
 	for _, line := range body {
 		mark, fg, bg := "", petalText, petalInk
@@ -104,8 +105,17 @@ func petal(v screen) string {
 		n := min(w-gutter, ansi.StringWidth(line.Text)+1)
 		rows = append(rows, richBand(" "+mark, gutter, petalRose, petalInk, true)+richBand(line.Text, n, fg, bg, false)+richBand("", w-gutter-n, fg, petalInk, false))
 	}
-	for len(rows) < h-footer {
+	for len(rows) < h-footer-menuHeight {
 		rows = append(rows, richBand("", w, petalText, petalInk, false))
+	}
+	menuStart := max(0, v.commandIndex-menuHeight+1)
+	for i := menuStart; i < menuStart+menuHeight; i++ {
+		c := v.commands[i]
+		bg, mark := petalInk, "   "
+		if i == v.commandIndex {
+			bg, mark = petalSurface, " › "
+		}
+		rows = append(rows, richBand(mark+c.name+"  "+c.description, w, petalRose, bg, false))
 	}
 	input := petalLabel(v.Input)
 	fg := petalText
@@ -114,6 +124,14 @@ func petal(v screen) string {
 		fg = petalMuted
 	}
 	action := " ↵ Send "
+	switch {
+	case v.Status == "Connection failed":
+		input, action = "Enter retry   Tab subscription", ""
+	case v.Status == "Connecting" || v.Busy:
+		action = ""
+	case len(v.commands) > 0:
+		action = " ↵ Run "
+	}
 	aw := 0
 	if w >= 38 {
 		aw = ansi.StringWidth(action)
@@ -125,7 +143,14 @@ func petal(v screen) string {
 	}
 	rows = append(rows, richBand("  › "+input, w-aw, fg, petalSurface, false)+richBand(action, aw, petalInk, petalRose, true))
 	if footer == 2 {
-		hint := " ^N new   Pg↑↓ history   F3 read   Esc cancel "
+		hint := " / commands   ^N new   Pg↑↓ history   F3 read "
+		if v.Status == "Connection failed" {
+			hint = " ^N new thread   ^C quit "
+		} else if len(v.commands) > 0 {
+			hint = " ↑↓ select   Enter run   Esc dismiss "
+		} else if v.Busy {
+			hint = " Pg↑↓ history   F3 read   Esc cancel "
+		}
 		if v.backlog != nil && v.backlog.browsing {
 			hint = fmt.Sprintf(" ↓ %d lines   Ctrl+End latest ", v.backlog.limit-v.backlog.top)
 		}

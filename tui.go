@@ -25,6 +25,8 @@ type screen struct {
 	Model, Account, Cwd, Status, Input string
 	Messages                           []entry
 	Busy                               bool
+	commands                           []chatCommand
+	commandIndex                       int
 }
 
 func clean(s string) string {
@@ -83,7 +85,7 @@ func nextFrame() tea.Cmd {
 
 type terminal struct {
 	launch        *picker
-	next          *config
+	next          *sessionStart
 	tools         map[string]toolEvent
 	reader        anim.Presence
 	readerBacklog backlogViewport
@@ -113,20 +115,29 @@ func demoScreen() screen {
 		{"assistant", "### Your thread stays pinned\nExisting turns stay on **the original adapter**. Only new sessions run the quota probes.\n\n| Action | Route |\n| :--- | :--- |\n| Continue | Original account |\n| Start fresh | Highest quota |\n\nResume the thread:\n\n```sh\npetal tui sonnet --resume\n```"},
 	}}
 }
+
+type sessionStart struct {
+	cfg    config
+	resume bool
+	draft  []rune
+	cursor int
+}
+
 func runTUI(parent context.Context, c config, resume, demo bool) error {
+	start := sessionStart{cfg: c, resume: resume}
 	for {
-		next, err := runSession(parent, c, resume, demo)
+		next, err := runSession(parent, start, demo)
 		if err != nil || next == nil {
 			return err
 		}
-		c = *next
-		resume = false
+		start = *next
 	}
 }
-func runSession(parent context.Context, c config, resume, demo bool) (*config, error) {
+func runSession(parent context.Context, start sessionStart, demo bool) (*sessionStart, error) {
+	c := start.cfg
 	ctx, stop := context.WithCancel(parent)
 	defer stop()
-	m := &terminal{reader: anim.NewPresence(anim.Duration(160 * time.Millisecond)), root: bloom.New(), ctx: ctx, cfg: c, resume: resume}
+	m := &terminal{reader: anim.NewPresence(anim.Duration(160 * time.Millisecond)), root: bloom.New(), ctx: ctx, cfg: c, resume: start.resume, draft: start.draft, cursor: start.cursor}
 	if demo {
 		m.screen = demoScreen()
 		m.ready = true
@@ -180,6 +191,8 @@ func (m *terminal) View() tea.View {
 		return m.launch.View()
 	}
 	v := m.screen
+	v.commands = m.commandMatches()
+	v.commandIndex = min(m.commandIndex, max(0, len(v.commands)-1))
 	v.backlog = &m.chatBacklog
 	if len(m.draft) > 0 {
 		prefix := strings.ReplaceAll(string(m.draft[:m.cursor]), "\n", " ↵ ")
@@ -253,7 +266,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if t.String() == "ctrl+c" {
 				return m, tea.Quit
 			}
-			if t.String() == "esc" && !m.launch.choosingRoute {
+			if t.String() == "esc" && (!m.launch.choosingRoute || m.launch.routeOnly) {
 				m.launch = nil
 				return m, nil
 			}
@@ -264,7 +277,10 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.WindowSizeMsg, tea.KeyPressMsg, tea.PasteMsg, routeBalances:
 			_, cmd := m.launch.Update(msg)
 			if m.launch.chosen {
-				m.next = &m.launch.cfg
+				m.next = &sessionStart{cfg: m.launch.cfg, resume: m.launch.resume}
+				if m.Status == "Connection failed" {
+					m.next.draft, m.next.cursor = m.draft, m.cursor
+				}
 				return m, tea.Quit
 			}
 			return m, cmd
@@ -353,7 +369,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			target.move(3)
 		}
 	case tea.PasteMsg:
-		if !m.reader.Shown() {
+		if !m.reader.Shown() && m.Status != "Connection failed" {
 			m.insert(t.Content)
 		}
 	case tea.KeyPressMsg:
@@ -377,12 +393,40 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			break
 		}
+		if m.Status == "Connection failed" {
+			switch t.String() {
+			case "enter", "r":
+				m.next = &sessionStart{cfg: m.cfg, resume: m.resume, draft: m.draft, cursor: m.cursor}
+				return m, tea.Quit
+			case "tab":
+				return m, m.openPicker(true)
+			case "ctrl+n", "ctrl+c", "f3", "pgup", "pgdown", "ctrl+end":
+				// These shortcuts also work on the recovery screen.
+			default:
+				return m, nil
+			}
+		}
+		if matches := m.commandMatches(); len(matches) > 0 {
+			index := min(m.commandIndex, len(matches)-1)
+			switch t.String() {
+			case "up":
+				m.commandIndex = max(0, index-1)
+				return m, nil
+			case "down":
+				m.commandIndex = min(len(matches)-1, index+1)
+				return m, nil
+			case "enter":
+				return m, m.runCommand(matches[index])
+			case "esc":
+				m.draft, m.cursor, m.commandIndex = nil, 0, 0
+				return m, nil
+			}
+		}
+		m.commandIndex = 0
 		switch t.String() {
 		case "ctrl+n":
 			if m.h != nil && !m.Busy && m.Status != "Connecting" {
-				c := m.cfg
-				c.forced = ""
-				m.launch = &picker{cfg: c, models: c.modelNames(), width: m.Width, height: m.Height}
+				cmd = m.openPicker(false)
 			}
 		case "f3":
 			m.readerBacklog.browsing = false

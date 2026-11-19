@@ -36,7 +36,7 @@ The transcript is a continuous Markdown conversation. It includes user prompts, 
 
 ## Connect an agent
 
-Run `petal` or `petal tui` in the project directory. Type to filter the model list and press **Enter** to start with automatic routing. To pick the subscription yourself, highlight a model, press **Tab**, then select an account. **Ctrl+N** opens the picker for a new thread when the current turn is idle. Escape returns to your draft.
+Run `petal` or `petal tui` in the project directory. Type to filter the model list and press **Enter** to start with automatic routing. To pick the subscription yourself, highlight a model, press **Tab**, then select an account. **Ctrl+N** opens the picker for a new thread when the current turn is idle. Escape returns to your draft. Type **/** in the composer to discover commands, filter by name, and press Enter to run the highlighted action. After a connection failure, press **Enter** to retry or **Tab** to choose another subscription for the same model. Retrying a resume attempts to load the same conversation.
 
 Petal discovers Claude Code and Codex on PATH. The Nix package includes ACP bridges for locally installed Claude Code and Codex. For a standalone Go build, install `claude-agent-acp` or `codex-acp` on PATH. Sign in using each provider's CLI. Petal offers Claude model aliases and visible entries from each Codex profile’s model cache. Each provider also has a `provider/default` entry for its configured model. Discovered concrete model selections are sent to the adapter over ACP before the first prompt.
 

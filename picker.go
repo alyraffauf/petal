@@ -22,6 +22,7 @@ type picker struct {
 	usage                         map[string]string
 	index, width, height          int
 	choosingRoute, chosen, resume bool
+	routeOnly                     bool
 }
 
 func (m *picker) Init() tea.Cmd { return nil }
