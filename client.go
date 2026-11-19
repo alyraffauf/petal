@@ -42,8 +42,9 @@ func (h *harness) callback(ctx context.Context, method string, raw json.RawMessa
 	case "session/update":
 		var p struct {
 			Update struct {
-				SessionUpdate, Title, ToolCallID, Status, MessageID string
-				Content                                             json.RawMessage
+				SessionUpdate, ToolCallID, Status, MessageID string
+				Title                                        *string
+				Content                                      json.RawMessage
 			}
 		}
 		if err := json.Unmarshal(raw, &p); err != nil {

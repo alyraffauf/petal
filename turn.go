@@ -49,8 +49,8 @@ func (t *turnLog) commit(dst []entry) []entry {
 }
 
 type toolEvent struct {
-	id, title, status string
-	body              *string
+	id, status  string
+	title, body *string
 }
 
 func (m *terminal) toolResult(update toolEvent) (event, bool) {
@@ -59,7 +59,7 @@ func (m *terminal) toolResult(update toolEvent) (event, bool) {
 		m.tools = make(map[string]toolEvent)
 	}
 	call := m.tools[update.id]
-	if update.title != "" {
+	if update.title != nil {
 		call.title = update.title
 	}
 	if update.body != nil {
@@ -70,10 +70,11 @@ func (m *terminal) toolResult(update toolEvent) (event, bool) {
 		return event{}, false
 	}
 	delete(m.tools, update.id)
-	if call.title == "" {
-		call.title = update.id
+	title := update.id
+	if call.title != nil && *call.title != "" {
+		title = *call.title
 	}
-	result := "**" + call.title + "** · " + update.status
+	result := "**" + title + "** · " + update.status
 	if call.body != nil && *call.body != "" {
 		result += "\n\n" + *call.body
 	}

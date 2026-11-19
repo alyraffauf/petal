@@ -13,7 +13,8 @@ func TestTurnPublishesWholeMessages(t *testing.T) {
 	for _, reason := range []string{"end_turn", "cancelled"} {
 		m := terminal{root: bloom.New(), screen: screen{Busy: true}}
 		m.Update(event{role: "assistant", chunk: true, id: "first", text: "**one"})
-		m.Update(event{tool: &toolEvent{id: "read", title: "Read file", status: "in_progress"}})
+		title := "Read file"
+		m.Update(event{tool: &toolEvent{id: "read", title: &title, status: "in_progress"}})
 		if len(m.Messages) != 0 {
 			t.Fatalf("uncompleted content became visible: %v", m.Messages)
 		}
@@ -50,6 +51,25 @@ func TestToolNullContentPreservesPriorOutput(t *testing.T) {
 	}
 	m.Update(finished{reason: "end_turn"})
 	want := []entry{{"tool", "**Read** · completed\n\nresult"}}
+	if !reflect.DeepEqual(m.Messages, want) {
+		t.Fatalf("got %v, want %v", m.Messages, want)
+	}
+}
+
+func TestToolEmptyTitleReplacesPriorTitle(t *testing.T) {
+	m := terminal{root: bloom.New(), screen: screen{Busy: true}}
+	h := harness{events: make(chan tea.Msg, 1)}
+	for _, update := range []string{
+		`{"sessionUpdate":"tool_call","toolCallId":"read","title":"Read","status":"in_progress"}`,
+		`{"sessionUpdate":"tool_call_update","toolCallId":"read","title":"","status":"completed"}`,
+	} {
+		if _, err := h.callback(t.Context(), "session/update", json.RawMessage(`{"update":`+update+`}`)); err != nil {
+			t.Fatal(err)
+		}
+		m.Update(<-h.events)
+	}
+	m.Update(finished{reason: "end_turn"})
+	want := []entry{{"tool", "**read** · completed"}}
 	if !reflect.DeepEqual(m.Messages, want) {
 		t.Fatalf("got %v, want %v", m.Messages, want)
 	}
