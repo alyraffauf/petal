@@ -64,7 +64,8 @@ func (h *harness) callback(ctx context.Context, method string, raw json.RawMessa
 					Type, Path, TerminalID string
 					Content                struct{ Type, Text string }
 				}
-				if err := json.Unmarshal(u.Content, &parts); err == nil {
+				// Null leaves existing content intact. An empty array replaces it.
+				if err := json.Unmarshal(u.Content, &parts); err == nil && parts != nil {
 					var output []string
 					for _, p := range parts {
 						switch p.Type {

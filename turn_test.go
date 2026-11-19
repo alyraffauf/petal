@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
 	"bloomfx.dev/bloom"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestTurnPublishesWholeMessages(t *testing.T) {
@@ -31,5 +33,24 @@ func TestTurnPublishesWholeMessages(t *testing.T) {
 		if !reflect.DeepEqual(m.Messages, want) {
 			t.Fatalf("%s: got %v, want %v", reason, m.Messages, want)
 		}
+	}
+}
+
+func TestToolNullContentPreservesPriorOutput(t *testing.T) {
+	m := terminal{root: bloom.New(), screen: screen{Busy: true}}
+	h := harness{events: make(chan tea.Msg, 1)}
+	for _, update := range []string{
+		`{"sessionUpdate":"tool_call","toolCallId":"read","title":"Read","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"result"}}]}`,
+		`{"sessionUpdate":"tool_call_update","toolCallId":"read","status":"completed","content":null}`,
+	} {
+		if _, err := h.callback(t.Context(), "session/update", json.RawMessage(`{"update":`+update+`}`)); err != nil {
+			t.Fatal(err)
+		}
+		m.Update(<-h.events)
+	}
+	m.Update(finished{reason: "end_turn"})
+	want := []entry{{"tool", "**Read** · completed\n\nresult"}}
+	if !reflect.DeepEqual(m.Messages, want) {
+		t.Fatalf("got %v, want %v", m.Messages, want)
 	}
 }
