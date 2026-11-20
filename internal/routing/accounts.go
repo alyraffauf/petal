@@ -90,8 +90,9 @@ type Config struct {
 	BusyInput             string `toml:"busy_input" json:"busy_input"`
 	Accounts              map[string]Account
 	Tiers                 map[string]map[string]float64
-	Model, PinnedAccount  string   `toml:"-" json:"-"`
-	Hints                 []string `toml:"-" json:"-"`
+	MCPServers            []MCPServer `toml:"mcp_servers" json:"mcp_servers"`
+	Model, PinnedAccount  string      `toml:"-" json:"-"`
+	Hints                 []string    `toml:"-" json:"-"`
 }
 
 func Load(path, model, accountName string) (Config, error) {

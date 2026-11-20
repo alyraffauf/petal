@@ -35,7 +35,7 @@ Petal compares **capacity × remaining quota fraction** across accounts that off
 
 Capacity defaults to 1. Detected Claude Max 5× and 20× tiers use their named weights. Add a `[[tiers]]` entry with `provider = "codex"`, `name = "pro"`, and `capacity = 4` to give all detected Codex Pro profiles a relative weight of 4. An account's `capacity` takes precedence.
 
-Auto uses an unmetered account when no measured account has quota. Failed probes and exhausted accounts are excluded. A rate-limit error starts a five-minute cooldown. Use `petal --account work` to bypass probing and pin the account. For a custom quota source, set `usage` in the work account to a command array that prints the percentage remaining.
+Auto uses an unmetered account when no measured account has quota. If all matching accounts are exhausted or their probes fail, Petal still opens the thread on the first matching account alphabetically. The provider enforces quota when you send a prompt. A rate-limit error starts a five-minute cooldown. Use `petal --account work` to bypass probing and pin the account. For a custom quota source, set `usage` in the work account to a command array that prints the percentage remaining.
 
 ## Run a custom ACP server
 
@@ -55,6 +55,23 @@ command = ["opencode", "acp"]
 Open **new session** in Petal and choose `opencode/default`, or start `petal acp opencode/default` from your editor. The ID names the route in Petal. OpenCode picks its model from its own settings. For another server, replace the ID and command array with your route name, executable, and arguments.
 
 To route between two custom accounts, give both the same route name. Add a `[[accounts.env]]` entry with `name` and `value` for each profile variable. To compare quota, set each account's `usage` to a command array. Petal runs it with that account's environment and expects one number from 0 to 100 on stdout. Without a probe, Petal treats the account as unmetered.
+
+## Give agents access to MCP tools
+
+Add a top-level `[[mcp_servers]]` entry for each stdio Model Context Protocol (MCP) server. The adapter starts the command. Use an absolute executable path if your editor has a different `PATH` from your shell.
+
+```toml
+[[mcp_servers]]
+name = "project-tools"
+command = "/opt/project-tools/bin/mcp-server"
+args = ["--stdio"]
+
+[[mcp_servers.env]]
+name = "PROJECT_TOOLS_MODE"
+value = "read-only"
+```
+
+Use the command, arguments, and environment variables that your server supports. You can omit `args` and `env`. Petal passes these definitions when you start, load, resume, or fork a session in the TUI or an editor. If an editor supplies a server with the same case-sensitive name, its definition wins. Reopen the client connection after editing the config.
 
 ## Terminal background
 

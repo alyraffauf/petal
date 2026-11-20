@@ -118,7 +118,7 @@ func runPTYAdapter(t *testing.T) {
 				t.Fatal("expected steering during active turn")
 			}
 			send(map[string]any{"id": request.ID, "result": map[string]string{"outcome": "injected"}})
-			send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "steering-confirmed"}}}})
+			send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "steered"}}}})
 			send(map[string]any{"id": activePrompt, "result": map[string]string{"stopReason": "end_turn"}})
 			continue
 		default:
@@ -225,7 +225,7 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	write("\r")
 	await("partial-reply-visible")
 	write("revised\r")
-	await("steering-confirmed")
+	await("steered")
 	write("\x1bOR") // xterm F3
 	await("conversation")
 	write("\x1bOR")

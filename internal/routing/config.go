@@ -3,16 +3,30 @@ package routing
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
+type MCPServer struct {
+	Name    string           `json:"name"`
+	Command string           `json:"command"`
+	Args    []string         `json:"args"`
+	Env     []MCPEnvVariable `json:"env"`
+}
+
+type MCPEnvVariable struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 // Keep identifiers in values because Viper folds configuration keys to lowercase.
 type fileSettings struct {
-	StreamResponses       bool   `mapstructure:"stream_responses"`
-	TransparentBackground bool   `mapstructure:"transparent_background"`
-	BusyInput             string `mapstructure:"busy_input"`
+	StreamResponses       bool        `mapstructure:"stream_responses"`
+	TransparentBackground bool        `mapstructure:"transparent_background"`
+	BusyInput             string      `mapstructure:"busy_input"`
+	MCPServers            []MCPServer `mapstructure:"mcp_servers"`
 	Accounts              []struct {
 		Name, Provider, Home string
 		Capacity             *float64
@@ -46,6 +60,10 @@ func (c *Config) readSettings(path string) error {
 	}); err != nil {
 		return err
 	}
+	if err := normalizeMCPServers(file.MCPServers); err != nil {
+		return err
+	}
+	c.MCPServers = file.MCPServers
 	c.StreamResponses = file.StreamResponses
 	c.BusyInput = file.BusyInput
 	c.TransparentBackground = file.TransparentBackground
@@ -91,6 +109,32 @@ func (c *Config) readSettings(path string) error {
 			return fmt.Errorf("provider %q repeats tier %q", tier.Provider, tier.Name)
 		}
 		c.Tiers[tier.Provider][tier.Name] = tier.Capacity
+	}
+	return nil
+}
+
+func normalizeMCPServers(servers []MCPServer) error {
+	names := make(map[string]struct{}, len(servers))
+	for i := range servers {
+		server := &servers[i]
+		if strings.TrimSpace(server.Name) == "" || strings.TrimSpace(server.Command) == "" {
+			return fmt.Errorf("mcp_servers entry %d needs a name and command", i+1)
+		}
+		if _, exists := names[server.Name]; exists {
+			return fmt.Errorf("duplicate MCP server %q", server.Name)
+		}
+		names[server.Name] = struct{}{}
+		for _, env := range server.Env {
+			if env.Name == "" {
+				return fmt.Errorf("MCP server %q has an empty environment variable name", server.Name)
+			}
+		}
+		if server.Args == nil {
+			server.Args = []string{}
+		}
+		if server.Env == nil {
+			server.Env = []MCPEnvVariable{}
+		}
 	}
 	return nil
 }

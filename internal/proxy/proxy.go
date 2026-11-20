@@ -135,6 +135,14 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		}
 	}
 	switch method {
+	case "session/new", "session/load", "session/resume", "session/fork":
+		var err error
+		params, err = mergeMCPServers(params, p.MCPServers)
+		if err != nil {
+			return nil, err
+		}
+	}
+	switch method {
 	case "session/list":
 		return p.list(ctx, params)
 	case "authenticate":
@@ -161,10 +169,18 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	}
 	var name, native, public string
 	if method == "session/new" {
-		var err error
-		name, err = p.Choose(ctx)
-		if err != nil {
-			return nil, err
+		if len(p.accounts) == 0 {
+			return nil, fmt.Errorf("no subscription offers %q", p.Model)
+		}
+		// Opening a thread consumes no model quota. Prefer the best measured
+		// account, but let the provider enforce its limit when the user sends.
+		name = p.accounts[0]
+		if len(p.accounts) > 1 {
+			if chosen, err := p.Choose(ctx); err == nil {
+				name = chosen
+			} else if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 		}
 	} else if _, exists := params["sessionId"]; exists {
 		id, err := SessionID(params)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,12 @@ func TestAccountAdapter(t *testing.T) {
 				t.Fatal(q.Params)
 			}
 			r = map[string]string{"account": name}
+		}
+		if os.Getenv("PETAL_NEGOTIATE_ECHO_MCP") != "" {
+			switch q.Method {
+			case "session/new", "session/load", "session/resume", "session/fork":
+				r = map[string]any{"sessionId": "same", "mcpServers": q.Params["mcpServers"]}
+			}
 		}
 		if q.ID != nil {
 			if err := enc.Encode(map[string]any{"id": q.ID, "jsonrpc": "2.0", "result": r}); err != nil {
@@ -317,6 +324,55 @@ func fixtureAccount(t *testing.T, env map[string]string) routing.Account {
 	return routing.Account{
 		Models: map[string][]string{"m": {exe, "-test.run=^TestAccountAdapter$"}},
 		Env:    env,
+	}
+}
+
+func TestSessionOpensWhenEveryAccountReportsZeroQuota(t *testing.T) {
+	account := fixtureAccount(t, map[string]string{})
+	account.Usage = []string{"sh", "-c", "echo 0"}
+	client, ctx := connectTestEditor(t, routing.Config{Model: "m", Accounts: map[string]routing.Account{"work": account, "personal": account}}, nil)
+	if _, err := acp.SendRequest[Object](client, ctx, "initialize", map[string]int{"protocolVersion": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acp.SendRequest[Object](client, ctx, "session/new", Object{"cwd": encoded(t.TempDir()), "mcpServers": json.RawMessage("[]")}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionRequestsMergeConfiguredMCPServers(t *testing.T) {
+	cfg := routing.Config{Model: "m", Accounts: map[string]routing.Account{
+		"b": fixtureAccount(t, map[string]string{
+			"PETAL_NEGOTIATE_CAPABILITIES": `{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"resume":{},"fork":{}}}}`,
+			"PETAL_NEGOTIATE_ECHO_MCP":     "1",
+		}),
+	}, MCPServers: []routing.MCPServer{
+		{Name: "Editor", Command: "/shadowed", Args: []string{}, Env: []routing.MCPEnvVariable{}},
+		{Name: "editor", Command: "/case-sensitive", Args: []string{"--quiet"}, Env: []routing.MCPEnvVariable{{Name: "MODE", Value: "read"}}},
+	}}
+	client, ctx := connectTestEditor(t, cfg, nil)
+	_, err := acp.SendRequest[Object](client, ctx, "initialize", map[string]int{"protocolVersion": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := Object{
+		"cwd":        encoded("/work"),
+		"mcpServers": json.RawMessage(`[{"extension":{"key":"value"},"name":"Editor","type":"future"},{"name":"second","type":"acp"}]`),
+	}
+	expected := []map[string]any{
+		{"name": "Editor", "type": "future", "extension": map[string]any{"key": "value"}},
+		{"name": "second", "type": "acp"},
+		{"name": "editor", "command": "/case-sensitive", "args": []any{"--quiet"}, "env": []any{map[string]any{"name": "MODE", "value": "read"}}},
+	}
+	for _, method := range []string{"session/new", "session/load", "session/resume", "session/fork"} {
+		response, err := acp.SendRequest[Object](client, ctx, method, params)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		var got []map[string]any
+		if err := json.Unmarshal(response["mcpServers"], &got); err != nil || !reflect.DeepEqual(got, expected) {
+			t.Fatalf("%s forwarded %s, want %v", method, response["mcpServers"], expected)
+		}
+		params["sessionId"] = response["sessionId"]
 	}
 }
 
