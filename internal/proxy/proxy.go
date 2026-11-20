@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -284,18 +285,23 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 		stop()
 		return nil, err
 	}
-	out, err := cmd.StdoutPipe()
+	// Own the read end so reaping the adapter cannot discard its final reply.
+	out, childOutput, err := os.Pipe()
 	if err != nil {
 		stop()
 		in.Close()
 		return nil, err
 	}
+	cmd.Stdout = childOutput
 	if err := cmd.Start(); err != nil {
+		childOutput.Close()
 		stop()
 		in.Close()
 		out.Close()
 		return nil, err
 	}
+	childOutput.Close()
+	context.AfterFunc(lifetime, func() { out.Close(); in.Close() })
 	wire := &adapterWire{Writer: in}
 	conn := acp.NewConnection(func(ctx context.Context, method string, raw json.RawMessage) (any, *acp.RequestError) {
 		native, notification := strings.CutPrefix(method, notificationPrefix)
@@ -390,7 +396,13 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 	if p.embedded {
 		conn.SetLogger(slog.New(slog.DiscardHandler))
 	}
-	go func() { <-conn.Done(); stop(); cmd.Wait() }()
+	go func() {
+		_ = cmd.Wait()
+		// A surviving helper may still hold stdout. Allow the reader to drain
+		// buffered frames, then terminate any blocked read.
+		_ = out.SetReadDeadline(time.Now().Add(time.Second))
+	}()
+	go func() { <-conn.Done(); stop() }()
 	rawHello, err := forward[Object](conn, ctx, "initialize", init)
 	if err != nil {
 		stop()
