@@ -96,6 +96,7 @@ func (p *proxy) initialize(ctx context.Context, raw json.RawMessage) (any, error
 func (p *proxy) installBackends(version uint16, names []string, backends map[string]*backend, repeat bool) {
 	p.mu.Lock()
 	previous := p.backends
+	p.editorWire.selectedV2.Store(version == 2)
 	p.version, p.accounts, p.backends = version, names, backends
 	p.repeatInitialize, p.initialized = repeat, true
 	for _, b := range backends {

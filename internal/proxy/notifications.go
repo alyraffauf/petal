@@ -83,6 +83,8 @@ type v2Request struct {
 }
 
 type adapterWire struct {
+	outputMu    sync.Mutex
+	selectedV2  atomic.Bool
 	updates     chan struct{}
 	lifetime    context.Context
 	nativeV2    bool
@@ -94,6 +96,8 @@ type adapterWire struct {
 }
 
 func (w *adapterWire) Write(line []byte) (int, error) {
+	w.outputMu.Lock()
+	defer w.outputMu.Unlock()
 	if !bytes.Contains(line, []byte(`\u0000petal/request/`)) && !bytes.Contains(line, []byte(`\u0000petal/v2-request/`)) {
 		return w.Writer.Write(line)
 	}
@@ -151,7 +155,7 @@ func incoming(r io.Reader, adapter *adapterWire) *wireReader {
 	return &wireReader{scan: s, adapter: adapter}
 }
 func (r *wireReader) Read(dst []byte) (int, error) {
-	if len(r.pending) == 0 {
+	for len(r.pending) == 0 {
 		if !r.scan.Scan() {
 			if err := r.scan.Err(); err != nil {
 				return 0, err
@@ -159,6 +163,13 @@ func (r *wireReader) Read(dst []byte) (int, error) {
 			return 0, io.EOF
 		}
 		line := r.scan.Bytes()
+		if r.editor != nil && r.editor.selectedV2.Load() && bytes.HasPrefix(bytes.TrimSpace(line), []byte("[")) && json.Valid(line) {
+			// A v2 receiver rejects a batch as one invalid request.
+			if _, err := r.editor.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"ACP does not support batches"}}` + "\n")); err != nil {
+				return 0, err
+			}
+			continue
+		}
 		var head struct {
 			ID     json.RawMessage
 			Method string

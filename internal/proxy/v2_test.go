@@ -271,6 +271,10 @@ func TestNativeV2SessionAndCancellation(t *testing.T) {
 	if string(hello["protocolVersion"]) != "2" {
 		t.Fatalf("initialize response: %s", jsonValue(hello))
 	}
+	wire.send(`[{"jsonrpc":"2.0","id":42,"method":"session/new","params":{"cwd":"/work"}}]`)
+	if reply := wire.read(); string(reply["id"]) != "null" || string(reply.member("error")["code"]) != "-32600" {
+		t.Fatalf("batch rejection: %s", jsonValue(reply))
+	}
 	var methods []Object
 	if json.Unmarshal(hello["authMethods"], &methods) != nil || len(methods) != 1 || stringField(methods[0], "type") != "agent" {
 		t.Fatalf("auth methods: %s", hello["authMethods"])
