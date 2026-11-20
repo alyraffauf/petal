@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/spf13/cobra"
@@ -33,15 +34,21 @@ func main() {
 		if err != nil {
 			return err
 		}
-		if model == "" {
-			c.Model = c.DefaultModel()
-		}
 		if terminalAuth != "" {
 			login, err := proxy.LoginCommand(cmd.Context(), c, terminalAuth)
 			if err != nil {
 				return err
 			}
 			return login.Run()
+		}
+		if model == "" {
+			c.Model = c.DefaultModel()
+			if c.Model == "" {
+				if c.PinnedAccount != "" {
+					return fmt.Errorf("no ACP model available for account %q", c.PinnedAccount)
+				}
+				return fmt.Errorf("no ACP model available")
+			}
 		}
 		proxy.Serve(c)
 		return nil

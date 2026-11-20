@@ -25,6 +25,9 @@ func TestPTYChild(t *testing.T) {
 	case "client":
 		os.Args = []string{"petal", "--config", os.Getenv("PETAL_PTY_CONFIG")}
 		main()
+	case "server":
+		os.Args = []string{"petal", "acp", "--config", os.Getenv("PETAL_PTY_CONFIG"), "--account", "missing"}
+		main()
 	case "adapter":
 		runPTYAdapter(t)
 	}
@@ -240,4 +243,27 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	await("ready")
 	write("\x1b[5~") // Page up past the settings confirmation in the short viewport.
 	await("restored transcript")
+}
+
+func TestACPCLIRejectsUnrunnableDefaultAccount(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[accounts.local.models]\nfixture=['unused']\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestPTYChild$")
+	cmd.Env = append(os.Environ(), "PATH="+dir, "PETAL_PTY_ROLE=server", "PETAL_PTY_CONFIG="+configPath)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 1 || len(output) != 0 || !strings.Contains(stderr.String(), "missing") {
+		t.Fatalf("expected a startup error identifying the pin on stderr, got %v, stdout %q, stderr %q", err, output, stderr.String())
+	}
 }
