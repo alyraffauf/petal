@@ -5,7 +5,7 @@
 
 Petal is a meta-harness and implementing both the client and server sides of the Agent Client Protocol. Petal provides a beautiful TUI client, a proxied agent server accessible from your editor or other Agent Development Environment, and a load balancer which maximizes usage across multiple Claude or Codex subscriptions.
 
-Open Petal, pick a model. Petal checks the accounts that offer it and chooses the one with the most estimated quota left, weighted by subscription size. Each conversation stays on its account when you resume it. You can also pick the account yourself. [How quota windows affect routing](docs/configuration.md#how-quota-windows-affect-routing)
+Pick a model and Petal [chooses an account](docs/configuration.md#how-quota-windows-affect-routing) based on remaining quota and subscription size. You can also pick the account yourself. When you resume a conversation, it stays on its original account.
 
 ![Petal control center showing a thread, its subagents, and the selected subagent's activity](docs/screenshots/control-center.png)
 
