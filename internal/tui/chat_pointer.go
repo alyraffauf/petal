@@ -37,7 +37,7 @@ func (m *terminal) handleChatClick(click tea.MouseClickMsg) tea.Cmd {
 	if hits.question != m.ask {
 		return nil
 	}
-	if point.In(hits.commands) {
+	if point.In(hits.commands) && !point.In(hits.action) {
 		row := point.Y - hits.commands.Min.Y
 		index := hits.firstCommand + row
 		matches := m.commandMatches()
@@ -56,7 +56,7 @@ func (m *terminal) handleChatClick(click tea.MouseClickMsg) tea.Cmd {
 			return nil
 		}
 	case chatRun:
-		if m.Busy || m.connection != connected || len(matches) == 0 ||
+		if len(matches) == 0 ||
 			matches[min(m.commandIndex, len(matches)-1)] != hits.actionCommand {
 			return nil
 		}

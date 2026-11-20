@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"bloomfx.dev/bloom"
-	"github.com/charmbracelet/x/ansi"
 )
 
 func readerBodyHeight(h int) int {
@@ -26,15 +25,11 @@ func (m *terminal) scene(v screen) bloom.Child {
 	if h >= 12 {
 		rows = append(rows, richBand("", w, petalText, v.background, false))
 	}
-	gutter := min(w-1, min(12, max(2, w/4)))
+	gutter := roleGutter(w)
 	last := ""
 	for _, r := range transcript(v, max(1, w-gutter), readerBodyHeight(h)) {
-		label := ""
-		if r.Role != last {
-			label = " " + sentenceLabel(r.Role)
-		}
+		rows = append(rows, transcriptRow(r, r.Role != last, w, gutter, v.background))
 		last = r.Role
-		rows = append(rows, richBand(ansi.Truncate(label, max(0, gutter-1), ""), gutter, petalRose, v.background, true)+richBand(r.Text, w-gutter, petalText, v.background, false))
 	}
 	for len(rows) < h-navFooterHeight(h) {
 		rows = append(rows, richBand("", w, petalText, v.background, false))

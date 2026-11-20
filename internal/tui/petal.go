@@ -160,9 +160,13 @@ func renderChat(v screen, hits *chatHitTargets) string {
 		}
 		header = len(rows)
 	}
-	gutter := min(3, w/4)
+	gutter := roleGutter(w)
 	col := max(1, w-gutter-2)
 	menuHeight := min(5, len(v.commands), max(0, h-header-footer-1))
+	menuHeading := 0
+	if len(v.commands) > 1 && h-header-footer-menuHeight >= 3 && w >= 32 {
+		menuHeading = 1
+	}
 	model := v.Model
 	if v.activeModel != "" {
 		model = v.activeModel
@@ -180,21 +184,21 @@ func renderChat(v screen, hits *chatHitTargets) string {
 		input, action = "Enter retry   Tab subscription", ""
 	case v.busyAction != "" && len(v.commands) == 0:
 		action = v.busyAction
-	case v.connection == connecting || v.Busy:
-		action = ""
 	case len(v.commands) > 0:
 		action = chatRun
+	case v.connection == connecting || v.Busy:
+		action = ""
 	}
 	aw := 0
 	actionLabel := ""
-	if w >= 38 && action != "" {
+	if w >= 38 && action != "" && action != chatRun {
 		actionLabel = " ↵ " + string(action) + " "
 		aw = ansi.StringWidth(actionLabel)
 	}
 	room := max(1, w-aw-4)
 	inputHeight := 1
 	if v.editor != nil && v.connection != connectionFailed {
-		limit := max(1, min(4, h-header-footer-menuHeight, h/4))
+		limit := max(1, min(4, h-header-footer-menuHeight-menuHeading, h/4))
 		if v.editor.Width() != room || v.editor.MaxHeight != limit {
 			v.editor.MaxHeight = limit
 			v.editor.SetWidth(room)
@@ -206,51 +210,21 @@ func renderChat(v screen, hits *chatHitTargets) string {
 			inputHeight = v.editor.Height()
 		}
 	}
-	available := h - header - footer - menuHeight - (inputHeight - 1)
+	available := h - header - footer - menuHeight - menuHeading - (inputHeight - 1)
 	gap := min(2, max(0, available-1), h/8)
 	body := transcript(v, col, available-gap)
 	previous := ""
 	for _, line := range body {
-		mark, fg := "", petalText
-		switch line.Role {
-		case "user":
-			mark = "❯"
-		case "assistant":
-			mark = "✿"
-		case "tool":
-			mark = "↳"
-			fg = petalMuted
-		case "system":
-			mark = "·"
-			fg = petalRose
-		}
-		if line.Role == previous || line.Text == "" {
-			mark = ""
-		}
+		rows = append(rows, transcriptRow(line, line.Role != previous, w, gutter, v.background))
 		previous = line.Role
-		rows = append(rows, richBand(" "+mark, gutter, petalRose, v.background, true)+richBand(line.Text, w-gutter, fg, v.background, false))
 	}
-	for len(rows) < h-footer-menuHeight-(inputHeight-1) {
+	for len(rows) < h-footer-menuHeight-menuHeading-(inputHeight-1) {
 		rows = append(rows, richBand("", w, petalText, v.background, false))
-	}
-	menuStart := max(0, v.commandIndex-menuHeight+1)
-	if menuHeight > 0 {
-		hits.commands = image.Rect(1, len(rows), w, len(rows)+menuHeight)
-		hits.firstCommand = menuStart
-		hits.visibleCommands = v.commands[menuStart : menuStart+menuHeight]
-	}
-	for i := menuStart; i < menuStart+menuHeight; i++ {
-		c := v.commands[i]
-		bg, mark := v.background, "   "
-		if i == v.commandIndex {
-			bg, mark = selectionBand, " › "
-		}
-		rows = append(rows, richBand("", 1, petalText, v.background, false)+richBand(mark+c.name+"  "+c.description, w-1, petalText, bg, false))
 	}
 	hits.action = image.Rect(w-aw, len(rows), w, len(rows)+1)
 	hits.actionKind = action
-	if action == chatRun {
-		hits.actionCommand = v.commands[v.commandIndex]
+	if menuHeight > 0 {
+		rows = appendCommandMenu(rows, v, hits, menuHeight, menuHeading > 0)
 	}
 	hits.question = v.question
 	if v.editor != nil && v.connection != connectionFailed && room+4 <= w {

@@ -38,6 +38,7 @@ var (
 	quitPetal          = shortcut([]string{"ctrl+c"}, "^C", "quit")
 	declineRequest     = shortcut([]string{"esc"}, "Esc", "decline")
 	cancelTurn         = shortcut([]string{"esc"}, "Esc", "cancel")
+	selectCommand      = shortcut([]string{"up", "down"}, "↑↓", "select")
 	selectPrevious     = shortcut([]string{"up"}, "↑", "previous")
 	selectNext         = shortcut([]string{"down"}, "↓", "next")
 	runSelected        = shortcut([]string{"enter"}, "Enter", "run")
@@ -64,7 +65,14 @@ func chatHelp(v screen) string {
 	case v.connection == connectionFailed:
 		return shortHelp(v.Width, newThread, quitPetal)
 	case len(v.commands) > 0:
-		return shortHelp(v.Width, selectPrevious, selectNext, runSelected, dismissMenu)
+		var hints []key.Binding
+		if len(v.commands) > 1 {
+			hints = append(hints, selectCommand)
+		}
+		if v.Width < 38 {
+			hints = append(hints, runSelected)
+		}
+		return shortHelp(v.Width, append(hints, dismissMenu)...)
 	case v.Busy && v.hasAgents:
 		return shortHelp(v.Width, cancelTurn, inspectAgents, readHistory, pageEarlier, pageLater)
 	case v.hasAgents:

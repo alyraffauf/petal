@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestReaderSeparatesTruncatedRoleFromMessage(t *testing.T) {
+func TestReaderSeparatesRoleFromMessage(t *testing.T) {
 	m := terminal{reading: true}
 	v := screen{Width: 38, Height: 16, Messages: []entry{{"assistant", "answer"}}}
 	frame := ansi.Strip(bloom.Render(v.Width, v.Height, m.scene(v)))
@@ -20,7 +20,7 @@ func TestReaderSeparatesTruncatedRoleFromMessage(t *testing.T) {
 			continue
 		}
 		fields := strings.Fields(row)
-		if len(fields) >= 2 && strings.HasPrefix("Assistant", fields[0]) && fields[1] == "answer" {
+		if slices.Equal(fields, []string{"✦", "agent", "answer"}) {
 			return
 		}
 	}

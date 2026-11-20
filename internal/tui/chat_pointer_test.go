@@ -36,7 +36,7 @@ func TestClickSelectsCommandInScrolledMenu(t *testing.T) {
 		m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	clickChatLabel(t, m, "/history")
-	if m.reading || !strings.Contains(ansi.Strip(m.View().Content), "› /history") {
+	if m.reading || m.commandMatches()[m.commandIndex].name != "/history" {
 		t.Fatal("click did not select the visible command")
 	}
 	clickChatLabel(t, m, "↵ Run")
