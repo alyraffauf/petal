@@ -31,11 +31,24 @@ CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude
 
 Once you name a provider's profiles, list every account you want Petal to use for that provider. Relative home paths resolve against the config file.
 
-Petal compares **capacity × remaining quota fraction** across accounts that offer the model. A 5× account at 30% beats a 1× account at 90%. Ties split randomly. Petal reads Codex limits from `account/rateLimits/read` in `codex app-server`. For Claude, Petal sends a `get_usage` control request to the CLI. Both probes use the account's environment. Petal uses the tightest applicable window, including Claude's model-specific weekly limit when available.
+Set the account's `capacity` to its size relative to your other subscriptions. Capacity defaults to 1. Petal recognizes Claude Max 5× and 20× automatically. To give all detected Codex Pro profiles a weight of 4, add a `[[tiers]]` entry with `provider = "codex"`, `name = "pro"`, and `capacity = 4`. An account's explicit `capacity` takes precedence.
 
-Capacity defaults to 1. Detected Claude Max 5× and 20× tiers use their named weights. Add a `[[tiers]]` entry with `provider = "codex"`, `name = "pro"`, and `capacity = 4` to give all detected Codex Pro profiles a relative weight of 4. An account's `capacity` takes precedence.
+### How quota windows affect routing
 
-Auto uses an unmetered account when no measured account has quota. If all matching accounts are exhausted or their probes fail, Petal still opens the thread on the first matching account alphabetically. The provider enforces quota when you send a prompt. A rate-limit error starts a five-minute cooldown. Use `petal --account work` to bypass probing and pin the account. For a custom quota source, set `usage` in the work account to a command array that prints the percentage remaining.
+For a new session, Petal checks each account that offers the model and uses the lowest remaining percentage among the applicable windows.
+
+| Provider | Windows Petal checks |
+| --- | --- |
+| Claude Code | The `get_usage` response includes shared `five_hour` and `seven_day` windows when available. If the requested model name contains `fable`, `opus`, `sonnet`, or `haiku`, Petal also checks the matching weekly window, such as `seven_day_fable`. The `claude/default` route uses only the shared windows. |
+| Codex | Petal checks the primary and secondary windows from `account/rateLimits/read` in `codex app-server`. Other model-specific limits fall outside this calculation. If Codex disallows ordinary usage, Petal counts the account as exhausted. |
+
+Suppose a Claude account has 80% left for five hours, 60% for the week, and 5% for Fable. Petal uses **5% for Fable** and **60% for Sonnet**, unless Sonnet has a tighter weekly limit of its own. Missing windows and reset times do not affect the score.
+
+Petal ranks accounts by **capacity × remaining fraction**. A 5× subscription at 30% scores 1.5 and beats a 1× subscription at 90%, which scores 0.9. Petal breaks ties randomly. Resuming a conversation keeps its original account.
+
+Both probes run in the account's environment. To supply your own percentage, set `usage` to a command array that prints one number from 0 to 100. Auto prefers an account with measured quota over one with unknown quota. If every matching account is exhausted, on cooldown, or has a failed probe, Petal still opens the thread on the first matching account alphabetically. The provider enforces quota when you send a prompt.
+
+A prompt rate-limit error puts the whole account on a five-minute cooldown for automatic selection. A Fable limit can therefore affect where new Sonnet sessions start. Use `petal --account work` to pin an account and bypass probing.
 
 ## Run a custom ACP server
 
