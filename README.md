@@ -7,6 +7,8 @@ Petal is a meta-harness that load balances new coding sessions across your Claud
 
 Run `petal` for the terminal UI or `petal acp` to use the same load balancer from Zed or another Agent Client Protocol (ACP) client.
 
+![Petal control center showing a thread, its subagents, and the selected subagent's activity](docs/screenshots/control-center.png)
+
 ## Start a session
 
 1. Install the Claude Code or Codex CLI. Sign in with `claude` or `codex login`.
@@ -18,6 +20,8 @@ Petal discovers the default profiles. If you have separate work and personal log
 To build without Nix, run `go build -o petal .` with Go 1.27.3 or later. Install `claude-agent-acp` or `codex-acp` on your path alongside the corresponding CLI.
 
 ## Use Petal
+
+![Example Petal session showing a tool call and a Markdown table comparing two subscriptions](docs/screenshots/transcript.png)
 
 - [Navigate conversations, search transcripts, and send images](docs/terminal.md)
 - [Connect Zed or another ACP client](docs/editors.md)
