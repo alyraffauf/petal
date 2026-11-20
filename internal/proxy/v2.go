@@ -345,13 +345,12 @@ func validateV2SessionSetup(params, caps Object) error {
 	if !filepath.IsAbs(stringField(params, "cwd")) {
 		return acp.NewInvalidParams("cwd must be an absolute path")
 	}
-	if data := params["additionalDirectories"]; data != nil {
+	if caps.member("additionalDirectories") == nil {
+		delete(params, "additionalDirectories")
+	} else if data := params["additionalDirectories"]; data != nil {
 		var dirs []string
 		if json.Unmarshal(data, &dirs) != nil {
 			return acp.NewInvalidParams("additionalDirectories must be an array")
-		}
-		if len(dirs) > 0 && caps.member("additionalDirectories") == nil {
-			return acp.NewInvalidParams("additionalDirectories is unsupported")
 		}
 		for _, dir := range dirs {
 			if !filepath.IsAbs(dir) {
