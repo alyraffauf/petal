@@ -104,15 +104,11 @@ func (p *proxy) initialize(ctx context.Context, raw json.RawMessage) (any, error
 		}
 		bmeta := map[string]any{}
 		_ = json.Unmarshal(b.raw["_meta"], &bmeta)
-		if meta == nil {
-			meta = bmeta
-		} else {
-			intersect(meta, bmeta)
-		}
-		if caps == nil {
-			caps = c
+		if len(available) == 1 {
+			caps, meta = c, bmeta
 		} else {
 			intersect(caps, c)
+			intersect(meta, bmeta)
 		}
 		for _, method := range b.hello.AuthMethods {
 			data, _ := json.Marshal(method)

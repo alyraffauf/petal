@@ -40,6 +40,9 @@ func TestAccountAdapter(t *testing.T) {
 				{"id": "login", "name": "Sign in"},
 				{"type": "terminal", "id": "interactive", "name": "Interactive", "args": []string{"auth"}},
 			}}
+			if profile := os.Getenv("PETAL_NEGOTIATE_CAPABILITIES"); profile != "" {
+				r = json.RawMessage(profile)
+			}
 		case "session/options":
 			r = map[string]any{"configOptions": []map[string]string{{"id": "mode", "currentValue": "shared"}, {"id": "model", "currentValue": name}}}
 		case "session/new":
@@ -281,5 +284,44 @@ func TestPlanNotificationsRespectEditorCapability(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+func connectTestEditor(t *testing.T, cfg routing.Config, handler acp.MethodHandler) (*acp.Connection, context.Context) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	read, input := io.Pipe()
+	out, write := io.Pipe()
+	t.Cleanup(func() { input.Close(); write.Close() })
+	ConnectEmbedded(ctx, cfg, write, read, nil)
+	return acp.NewConnection(handler, input, out), ctx
+}
+
+func fixtureAccount(t *testing.T, env map[string]string) routing.Account {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env["PETAL_NEGOTIATE_FIXTURE"] = "b"
+	return routing.Account{
+		Models: map[string][]string{"m": {exe, "-test.run=^TestAccountAdapter$"}},
+		Env:    env,
+	}
+}
+
+func TestNullCapabilitiesDoNotAdvertiseAnotherAccountsFeatures(t *testing.T) {
+	cfg := routing.Config{Model: "m", Accounts: map[string]routing.Account{
+		"a": fixtureAccount(t, map[string]string{"PETAL_NEGOTIATE_CAPABILITIES": `{"protocolVersion":1,"agentCapabilities":null,"_meta":null}`}),
+		"b": fixtureAccount(t, map[string]string{"PETAL_NEGOTIATE_CAPABILITIES": `{"protocolVersion":1,"agentCapabilities":{"loadSession":true},"_meta":{"steering":{"supported":true}}}`}),
+	}}
+	client, ctx := connectTestEditor(t, cfg, nil)
+	hello, err := acp.SendRequest[acp.InitializeResponse](client, ctx, "initialize", map[string]int{"protocolVersion": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hello.AgentCapabilities.LoadSession || hello.Meta["steering"] != nil {
+		t.Fatalf("advertised features available on only one account: %+v", hello)
 	}
 }
