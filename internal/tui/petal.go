@@ -42,6 +42,15 @@ var ribbonPalette = func() [256]string {
 }()
 var selectionBand = ribbonPalette[40]
 
+var wordmark = func() string {
+	var mark strings.Builder
+	for i, letter := range "petal" {
+		fmt.Fprintf(&mark, "\x1b[38;2;%sm%c", ribbonPalette[132+i*28], letter)
+	}
+	mark.WriteString("\x1b[39m")
+	return mark.String()
+}()
+
 func canvasBackground(transparent bool) string {
 	if transparent {
 		return terminalBackground
@@ -49,31 +58,21 @@ func canvasBackground(transparent bool) string {
 	return petalInk
 }
 
-func mastheadHeight(w, h int) int {
-	if h >= 32 && w >= 60 {
-		return 2
-	}
-	return 1
-}
-
-func petalMasthead(w, h, frame int, title, status string, working bool, background string) []string {
-	label := "  ✿ Petal   " + title
+func petalMasthead(w, frame int, title, status string, working bool, background string) string {
+	label := "  " + wordmark + "  " + title
 	lw := w * 31 / 100
 	rw := w - lw - w*53/100
 	if w < 80 {
 		lw = w * 40 / 100
 		rw = w / 4
-		if ansi.StringWidth(label) >= lw {
-			label = "  ✿ " + title
-		}
+		lw = max(lw, min(w/2, ansi.StringWidth(label)+1))
 	}
 	left := ansi.Truncate(label, max(0, lw-1), "…")
 	right := ansi.Truncate(status, max(0, rw-2), "…")
 	right = strings.Repeat(" ", max(0, rw-ansi.StringWidth(right)-1)) + right
-	rows := make([]string, h)
 	phase := float64(frame) * .07
 	statusColor := petalRose
-	if status == "Needs input" {
+	if status == "needs input" {
 		statusColor = petalAmber
 	} else if working {
 		statusColor = ribbonPalette[195+int(26*math.Sin(phase*2))]
@@ -87,24 +86,12 @@ func petalMasthead(w, h, frame int, title, status string, working bool, backgrou
 		violet := envelope * math.Exp(-math.Pow(edge-.45, 2)*4)
 		return ribbonPalette[min(255, int(190*pearl+53*blush+40*violet))]
 	}
-	for y := range h {
-		var band strings.Builder
-		for x := lw; x < w-rw; x++ {
-			t := float64(x) / float64(max(1, w-1))
-			if h == 1 {
-				// The two shades share a terminal cell and its column boundaries.
-				fmt.Fprintf(&band, "\x1b[38;2;%s;48;2;%sm▄", sample(t, .75), sample(t, .25))
-				continue
-			}
-			color := sample(t, (float64(y)+0.5)/float64(h))
-			fmt.Fprintf(&band, "\x1b[48;2;%sm ", color)
-		}
-		if y > 0 {
-			left, right = "", ""
-		}
-		rows[y] = richBand(left, lw, petalText, background, y == 0) + band.String() + "\x1b[0m" + richBand(right, rw, statusColor, background, false)
+	var band strings.Builder
+	for x := lw; x < w-rw; x++ {
+		t := float64(x) / float64(max(1, w-1))
+		fmt.Fprintf(&band, "\x1b[38;2;%s;48;2;%sm▄", sample(t, .75), sample(t, .25))
 	}
-	return rows
+	return richBand(left, lw, petalText, background, true) + band.String() + "\x1b[0m" + richBand(right, rw, statusColor, background, false)
 }
 
 func petalLabel(s string) string {
@@ -125,14 +112,14 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	if h >= 8 {
 		footer = 2
 	}
-	header := min(mastheadHeight(w, h), h-footer)
+	header := min(1, h-footer)
 	route := strings.Trim(petalLabel(v.Model)+" / "+petalLabel(v.Account), " /")
 	status := petalLabel(v.Status)
 	switch v.connection {
 	case connecting:
-		status = "Connecting"
+		status = "connecting"
 	case connectionFailed:
-		status = "Connection failed"
+		status = "connection failed"
 	}
 	if v.usage != nil && v.usage.Size > 0 && w >= 78 {
 		status += fmt.Sprintf(" · %.0f%% ctx", float64(v.usage.Used)*100/float64(v.usage.Size))
@@ -140,9 +127,12 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	primary, extra, _ := strings.Cut(status, " · ")
 	state := primary
 	if v.question != nil {
-		state = "Needs input"
+		state = "needs input"
 	}
-	rows := petalMasthead(w, header, v.Frame, "Session", state, v.Busy, v.background)
+	var rows []string
+	if header > 0 {
+		rows = append(rows, petalMasthead(w, v.Frame, "session", state, v.Busy, v.background))
+	}
 	if h >= 8 {
 		context := route
 		if extra != "" {

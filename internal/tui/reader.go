@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func readerBodyHeight(w, h int) int {
-	rows := h - mastheadHeight(w, h) - navFooterHeight(h)
+func readerBodyHeight(h int) int {
+	rows := h - 1 - navFooterHeight(h)
 	if h >= 12 {
 		rows--
 	}
@@ -22,13 +22,13 @@ func (m *terminal) scene(v screen) bloom.Child {
 	w, h := max(1, v.Width), max(1, v.Height)
 	v.backlog = &m.readerBacklog
 	v.markdown = &m.readerMarkdown
-	rows := petalMasthead(w, mastheadHeight(w, h), 0, "Conversation", "Reader", false, v.background)
+	rows := []string{petalMasthead(w, 0, "conversation", "reader", false, v.background)}
 	if h >= 12 {
 		rows = append(rows, richBand("", w, petalText, v.background, false))
 	}
 	gutter := min(w-1, min(12, max(2, w/4)))
 	last := ""
-	for _, r := range transcript(v, max(1, w-gutter), readerBodyHeight(w, h)) {
+	for _, r := range transcript(v, max(1, w-gutter), readerBodyHeight(h)) {
 		label := ""
 		if r.Role != last {
 			label = " " + sentenceLabel(r.Role)

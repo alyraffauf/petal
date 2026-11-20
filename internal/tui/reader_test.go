@@ -36,7 +36,7 @@ func TestReaderPageKeepsOneLineOfContext(t *testing.T) {
 		body := func() []string {
 			view := ansi.Strip(bloom.Render(m.Width, m.Height, m.scene(m.screen)))
 			rows := strings.Split(view, "\n")
-			start := mastheadHeight(m.Width, m.Height)
+			start := 1
 			if m.Height >= 12 {
 				start++
 			}

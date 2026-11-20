@@ -182,11 +182,11 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	await("Control center")
+	await("control center")
 	write("\r")
-	await("Choose a model")
+	await("choose a model")
 	write("\r")
-	await("Ready")
+	await("ready")
 	write("/stat")
 	await("Inspect status")
 	write("\r")
@@ -217,22 +217,22 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	write("revised\r")
 	await("steering-confirmed")
 	write("\x1bOR") // xterm F3
-	await("Conversation")
+	await("conversation")
 	write("\x1bOR")
 	write("/sessions\r")
-	await("Conversation turns")
+	await("conversation turns")
 	write("\x1b")
 	await("alternate…")
 	write("/new\r")
-	await("Choose a model")
+	await("choose a model")
 	write("\x1bOQ") // F2 opens the control center from the model picker.
-	await("New session")
+	await("new session")
 	write("/status-report")
 	await("status-report")
 	write("\r")
 	await("Restore alternate")
 	write("1\r")
-	await("Ready")
+	await("ready")
 	write("\x1b[5~") // Page up past the settings confirmation in the short viewport.
 	await("restored transcript")
 }

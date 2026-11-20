@@ -130,7 +130,7 @@ func settingLabel(name, detail string) string {
 }
 
 func (m *terminal) openSettings(category string) {
-	menu := settingMenu{title: "Choose an agent setting"}
+	menu := settingMenu{title: "choose an agent setting"}
 	var current string
 	switch {
 	case category == "":
@@ -142,7 +142,7 @@ func (m *terminal) openSettings(category string) {
 			menu.options = append(menu.options, option{s.ID, settingLabel(label, s.Description)})
 		}
 	case category == "mode" && m.agentSettings.byCategory(category).ID == "":
-		menu.title = "Choose agent mode"
+		menu.title = "choose agent mode"
 		menu.target.Type = "mode"
 		current = m.agentSettings.CurrentModeID
 		for _, mode := range m.agentSettings.Modes {
@@ -207,7 +207,7 @@ func (m *terminal) selectSetting(picker *picker) tea.Cmd {
 		return nil
 	}
 	m.changingSetting = true
-	m.Status = "Applying setting"
+	m.Status = "applying setting"
 	h, ctx, target := m.h, m.ctx, menu.target
 	return func() tea.Msg { return h.changeSetting(ctx, target, value) }
 }

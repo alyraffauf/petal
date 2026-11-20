@@ -8,6 +8,7 @@
         root = ../..;
         fileset = pkgs.lib.fileset.unions [
           ../../internal/tui/testdata
+          ../../internal/tui/orchid.png
           ../../internal/sessions/migrations
           (pkgs.lib.fileset.fileFilter (file:
             file.hasExt "go" || builtins.elem file.name [ "go.mod" "go.sum" "LICENSE" ]

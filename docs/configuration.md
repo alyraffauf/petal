@@ -29,13 +29,13 @@ Auto uses an unmetered account when no measured account has quota. Failed probes
 
 ## Terminal background
 
-Petal uses your terminal’s background by default. To use Petal’s solid dark background, put this before the account tables in `config.toml` and restart Petal.
+Petal uses a solid dark background by default. To use your terminal’s background, put this before the account tables in `config.toml` and restart Petal.
 
 ```toml
-transparent_background = false
+transparent_background = true
 ```
 
-With Home Manager, set `programs.petal.settings.transparent_background = false;`.
+With Home Manager, set `programs.petal.settings.transparent_background = true;`.
 
 ## Queue follow-ups
 

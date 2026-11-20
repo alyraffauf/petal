@@ -22,14 +22,14 @@ func snippetText(s string) string {
 func (p *picker) transcriptView() tea.View {
 	s := p.transcripts
 	w, h := max(1, p.width), max(1, p.height)
-	rows := petalMasthead(w, mastheadHeight(w, h), 0, "Transcripts", p.center.project, false, p.background)
+	rows := []string{petalMasthead(w, 0, "transcripts", p.center.project, false, p.background)}
 	bodyEnd := h - navFooterHeight(h)
 	row := func(text, fg, bg string, bold bool) {
 		if len(rows) < bodyEnd {
 			rows = append(rows, richBand(text, w, fg, bg, bold))
 		}
 	}
-	hint := "↑↓ Select  Enter Read  Esc Threads"
+	hint := "↑↓ Select  Enter Read  Esc threads"
 	if s.reader != nil {
 		hit := s.hits[s.index]
 		row(" "+petalLabel(hit.Title+" · "+hit.Model+" / "+hit.Account), petalRose, p.background, true)
@@ -65,9 +65,9 @@ func (p *picker) transcriptView() tea.View {
 			row("  "+petalLabel(s.status), petalMuted, p.background, false)
 		}
 		if len(s.hits) > 0 {
-			status := fmt.Sprintf("  Matches %d–%d", s.offset+1, s.offset+len(s.hits))
+			status := fmt.Sprintf("  matches %d–%d", s.offset+1, s.offset+len(s.hits))
 			if s.more || s.offset > 0 {
-				hint = "↑↓ Select  Enter Read  Pg↑ Pg↓ Results  Esc Threads"
+				hint = "↑↓ Select  Enter Read  Pg↑ Pg↓ Results  Esc threads"
 			}
 			row(status, petalMuted, p.background, false)
 		}

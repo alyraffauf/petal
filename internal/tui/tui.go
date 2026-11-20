@@ -15,6 +15,7 @@ import (
 	"bloomfx.dev/bloom"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 	acp "github.com/coder/acp-go-sdk"
 
@@ -74,6 +75,7 @@ func nextFrame() tea.Cmd {
 }
 
 type terminal struct {
+	monochrome            bool
 	agents                agentBrowser
 	forking               bool
 	pendingInfo           acp.SessionSessionInfoUpdate
@@ -204,10 +206,10 @@ func (m *terminal) View() tea.View {
 	v.Account = clean(v.Account)
 	v.Model = clean(v.Model)
 	v.activeModel = m.agentSettings.byCategory("model").current()
-	if v.Status == "Ready" {
+	if v.Status == "ready" {
 		v.Status = settingLabel(v.Status, m.agentSettings.byCategory("mode").currentLabel())
 		if m.h != nil && m.h.record.Parent != "" {
-			v.Status += " · Fork"
+			v.Status += " · fork"
 		}
 	}
 	view := m.root.View(v.Width, v.Height, m.scene(v))
@@ -221,7 +223,7 @@ func (m *terminal) submit() tea.Cmd {
 		if m.ask.form != nil {
 			var fields map[string]any
 			if err := json.Unmarshal([]byte(text), &fields); err != nil || fields == nil {
-				m.Status = "Enter a JSON object"
+				m.Status = "enter a JSON object"
 				return nil
 			}
 			if err := m.ask.form.Validate(fields); err != nil {
@@ -232,7 +234,7 @@ func (m *terminal) submit() tea.Cmd {
 		} else {
 			i, err := strconv.Atoi(text)
 			if err != nil || i < 1 || i > len(m.ask.options) {
-				m.Status = "Enter an option number"
+				m.Status = "enter an option number"
 				return nil
 			}
 			m.recordNote("Selected · " + m.ask.options[i-1].Name)
@@ -283,15 +285,21 @@ func (m *terminal) submit() tea.Cmd {
 
 func (m *terminal) restorePermissionDraft() {
 	if m.connection == connected {
-		m.Status = "Ready"
+		m.Status = "ready"
 		if m.Busy {
-			m.Status = "Working"
+			m.Status = "working"
 		}
 	}
 	m.editor, m.permissionDraft = m.permissionDraft, nil
 }
 
 func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if profile, ok := msg.(tea.ColorProfileMsg); ok {
+		m.monochrome = profile.Profile <= colorprofile.ASCII
+		if m.launch != nil {
+			m.launch.monochrome = m.monochrome
+		}
+	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "ctrl+n" {
 		if m.ask == nil && !m.Busy && !m.forking && !m.changingSetting && m.connection != connecting {
 			c := m.cfg
@@ -364,7 +372,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.listen
 	case forkResult:
 		m.forking = false
-		m.Status = "Ready"
+		m.Status = "ready"
 		if t.err != nil {
 			m.recordNote(terminalError(t.err))
 			break
@@ -406,7 +414,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case settingResult:
 		m.changingSetting = false
-		m.Status = "Ready"
+		m.Status = "ready"
 		if t.options.CurrentModeID != "" {
 			m.agentSettings.CurrentModeID = t.options.CurrentModeID
 		}
@@ -450,7 +458,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.saveSessionInfo()
 			}
 			m.Account = t.account
-			m.Status = "Ready"
+			m.Status = "ready"
 		}
 	case steerResult:
 		m.steering = false
@@ -490,7 +498,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		clear(m.tools)
 		cmd = m.listen
 		m.Busy = false
-		m.Status = "Ready"
+		m.Status = "ready"
 		if t.err == nil && (t.reason == "end_turn" || t.reason == "" || t.reason == "max_tokens") {
 			m.Messages = m.pending.commit(m.Messages[:m.turnStart])
 		} else {
@@ -542,7 +550,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.listen
 	case cancelFailed:
 		m.cancelling = false
-		m.Status = "Cancellation failed"
+		m.Status = "cancellation failed"
 		m.recordNote(terminalError(t.err))
 	case planUpdate:
 		switch {
@@ -580,7 +588,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reading = false
 			m.permissionDraft, m.editor = m.editor, newComposer()
 			m.ask = t.ask
-			m.Status = "Permission required"
+			m.Status = "permission required"
 		}
 		m.pending.push(t)
 		if !t.chunk {

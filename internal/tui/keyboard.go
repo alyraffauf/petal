@@ -11,7 +11,7 @@ func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	if m.reading {
-		step := max(1, readerBodyHeight(m.Width, m.Height)-1)
+		step := max(1, readerBodyHeight(m.Height)-1)
 		switch {
 		case key.Matches(t, closeReader):
 			m.reading = false
@@ -86,7 +86,7 @@ func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
 			cmd = m.deliver()
 		} else if m.Busy {
 			m.cancelling = true
-			m.Status = "Cancelling"
+			m.Status = "cancelling"
 			cmd = func() tea.Msg {
 				err := m.h.conn.SendNotification(m.ctx, "session/cancel", map[string]string{"sessionId": m.h.id})
 				if err != nil {

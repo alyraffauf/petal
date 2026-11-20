@@ -33,7 +33,7 @@ func TestControlCenterFollowsAgentLinksAndJumpsToATurn(t *testing.T) {
 	before := p.View().Content
 
 	p.centerKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
-	if frame := ansi.Strip(p.View().Content); !strings.Contains(frame, "Agent graph") || !strings.Contains(frame, "Sent to") || !strings.Contains(frame, "r Reveal in Threads") {
+	if frame := ansi.Strip(p.View().Content); !strings.Contains(frame, "agent graph") || !strings.Contains(frame, "Sent to") || !strings.Contains(frame, "r Reveal in threads") {
 		t.Fatal(frame)
 	}
 	p.centerKey(tea.KeyPressMsg{Code: tea.KeyDown})
@@ -57,10 +57,10 @@ func TestControlCenterFollowsAgentLinksAndJumpsToATurn(t *testing.T) {
 	p.centerKey(tea.KeyPressMsg{Code: 'r'})
 	rows := p.nodes()
 	if p.center.graphID != "" || len(rows) == 0 || rows[p.selectedNode(rows)].id != "b" || p.center.inspect || p.center.finding {
-		t.Fatal("Reveal in Threads did not show the focused graph node")
+		t.Fatal("Reveal in threads did not show the focused graph node")
 	}
 	if !p.center.folded["unrelated"] || !p.center.folded["turns"] {
-		t.Fatal("Reveal in Threads unfolded an unrelated branch")
+		t.Fatal("Reveal in threads unfolded an unrelated branch")
 	}
 
 	p.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})

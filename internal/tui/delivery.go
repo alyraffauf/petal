@@ -39,7 +39,7 @@ func (m *terminal) deliver() tea.Cmd {
 	m.turnStart = len(m.Messages)
 	m.chatBacklog.browsing = false
 	m.Busy = true
-	m.Status = "Working"
+	m.Status = "working"
 	return func() tea.Msg {
 		result, err := acp.SendRequest[acp.PromptResponse](m.h.conn, m.ctx, "session/prompt", params)
 		select {

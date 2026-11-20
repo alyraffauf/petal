@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/sahilm/fuzzy"
 
@@ -25,6 +26,7 @@ import (
 
 type balances []routing.Quota
 type picker struct {
+	monochrome                              bool
 	transcripts                             *transcriptSearch
 	pointerPane, pointerRows, pointerDetail image.Rectangle
 	pointerFirst                            int
@@ -153,6 +155,9 @@ type routeBalances struct {
 }
 
 func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if profile, ok := msg.(tea.ColorProfileMsg); ok {
+		m.monochrome = profile.Profile <= colorprofile.ASCII
+	}
 	if m.transcripts != nil {
 		switch msg.(type) {
 		case tea.KeyPressMsg, tea.PasteMsg, tea.MouseWheelMsg, tea.MouseClickMsg, transcriptResults:
@@ -326,26 +331,26 @@ func (m *picker) View() tea.View {
 	if m.history {
 		return m.centerView()
 	}
-	title := "Choose a model"
+	title := "choose a model"
 	w, h := max(1, m.width), max(1, m.height)
 	m.search.SetWidth(max(1, w-ansi.StringWidth(m.search.Prompt)-1))
 	sub := m.search.View()
 	if m.choosingRoute {
-		title = "Route " + m.cfg.Model
-		sub = "  Choose a subscription"
+		title = "route " + m.cfg.Model
+		sub = "  choose a subscription"
 	}
 	blank := func() string { return richBand("", w, petalText, m.background, false) }
 	row := func(s, fg string, bold bool) string { return richBand(petalLabel(s), w, fg, m.background, bold) }
 	var rows []string
-	status := "New session"
+	status := "new session"
 	if m.setting != nil {
-		title, status = m.setting.title, "Settings"
+		title, status = m.setting.title, "settings"
 	}
 	if m.resume {
-		status = "Resume"
+		status = "resume"
 	}
 	if h >= 5 {
-		rows = petalMasthead(w, mastheadHeight(w, h), 0, "Control center", status, false, m.background)
+		rows = []string{petalMasthead(w, 0, "control center", status, false, m.background)}
 	}
 	if h >= 8 {
 		rows = append(rows, blank())

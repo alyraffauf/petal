@@ -95,7 +95,7 @@ type Config struct {
 }
 
 func Load(path, model, accountName string) (Config, error) {
-	c := Config{TransparentBackground: true, Model: model, PinnedAccount: accountName}
+	c := Config{Model: model, PinnedAccount: accountName}
 	optional := path == ""
 	if optional {
 		defaultPath, err := paths.XDG("CONFIG", "config.toml")

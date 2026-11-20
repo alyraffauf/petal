@@ -14,7 +14,7 @@ func TestConfiguredCanvasBackground(t *testing.T) {
 		name, config string
 		transparent  bool
 	}{
-		{"default", "", true},
+		{"default", "", false},
 		{"transparent", "transparent_background = true", true},
 		{"opaque", "transparent_background = false", false},
 	} {
@@ -32,7 +32,7 @@ func TestConfiguredCanvasBackground(t *testing.T) {
 			chat := petal(screen{Width: 80, Height: 20, background: canvasBackground(c.TransparentBackground)})
 			for name, frame := range map[string]string{"chat": chat, "picker": m.View().Content} {
 				rows := strings.Split(frame, "\n")
-				opaque := strings.Contains(rows[0], "48;2;"+petalInk+"m  ✿")
+				opaque := strings.Contains(rows[0], "48;2;"+petalInk+"m ")
 				if opaque == tc.transparent {
 					t.Fatalf("%s header has incorrect background: %q", name, rows[0])
 				}

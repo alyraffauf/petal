@@ -20,7 +20,7 @@ type forkResult struct {
 
 func (m *terminal) fork() tea.Cmd {
 	m.forking = true
-	m.Status = "Forking"
+	m.Status = "forking"
 	h, parent, cwd := m.h, m.ctx, m.Cwd
 	record := h.record
 	return func() tea.Msg {

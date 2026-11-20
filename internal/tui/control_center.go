@@ -11,18 +11,18 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var centerFilters = [...]string{"All", "Needs input", "Working", "Ready", "Saved"}
+var centerFilters = [...]string{"all", "needs input", "working", "ready", "saved"}
 
 func nodeStatus(n controlNode) string {
 	switch strings.ToLower(n.state) {
 	case "permission required", "requires action", "needs input":
-		return "Needs input"
+		return "needs input"
 	case "working", "running", "cancelling", "forking":
-		return "Working"
+		return "working"
 	case "idle", "ready":
-		return "Ready"
+		return "ready"
 	case "saved":
-		return "Saved"
+		return "saved"
 	}
 	return ""
 }
@@ -49,7 +49,7 @@ type controlNode struct {
 
 func (p *picker) nodes() []controlNode {
 	var all []controlNode
-	newSession := controlNode{id: "new", title: "New session", kind: "New"}
+	newSession := controlNode{id: "new", title: "new session", kind: "New"}
 	if len(p.models) > 0 && p.center.owner == nil {
 		all = append(all, newSession)
 	}
@@ -66,26 +66,26 @@ func (p *picker) nodes() []controlNode {
 			}
 		}
 		for _, model := range quick {
-			all = append(all, controlNode{id: "model/" + model, parent: "new", title: model, kind: "Model", state: "Start"})
+			all = append(all, controlNode{id: "model/" + model, parent: "new", title: model, kind: "Model", state: "start"})
 		}
 	}
 	for i, r := range p.saved {
-		kind, state := "Session", "Saved"
+		kind, state := "Session", "saved"
 		if r.Parent != "" {
 			kind = "Fork"
 		}
 		if r.ID == current {
 			state = m.Status
 			if m.ask != nil {
-				state = "Needs input"
+				state = "needs input"
 				if m.ask.sessionID != "" && m.ask.sessionID != current && m.Busy {
-					state = "Working"
+					state = "working"
 				}
 			}
 		}
 		title := r.Title
 		if title == "" {
-			title = "Untitled conversation"
+			title = "untitled conversation"
 		}
 		all = append(all, controlNode{id: r.ID, parent: r.Parent, title: petalLabel(title), kind: kind, state: petalLabel(state), route: petalLabel(r.Model + " / " + r.Account), index: i})
 	}
@@ -93,11 +93,11 @@ func (p *picker) nodes() []controlNode {
 		for i, c := range m.agents.children {
 			title := c.title
 			if title == "" {
-				title = fmt.Sprintf("Agent %d", i+1)
+				title = fmt.Sprintf("agent %d", i+1)
 			}
-			state := sentenceLabel(petalLabel(c.state))
+			state := petalLabel(c.state)
 			if m.ask != nil && m.ask.sessionID == c.id {
-				state = "Needs input"
+				state = "needs input"
 			}
 			all = append(all, controlNode{id: c.id, parent: c.parent, title: petalLabel(title), kind: "Subagent", state: state, index: i})
 		}
@@ -108,7 +108,7 @@ func (p *picker) nodes() []controlNode {
 				continue
 			}
 			if !added {
-				all = append(all, controlNode{id: group, parent: current, title: "Conversation turns", kind: "Turns"})
+				all = append(all, controlNode{id: group, parent: current, title: "conversation turns", kind: "Turns"})
 				added = true
 			}
 			if p.center.folded[group] && p.search.Value() == "" {
@@ -379,7 +379,7 @@ func (p *picker) centerView() tea.View {
 	}
 	w, h := max(1, p.width), max(1, p.height)
 	project := p.center.project
-	rows := petalMasthead(w, mastheadHeight(w, h), 0, "Control center", petalLabel(project), false, p.background)
+	rows := []string{petalMasthead(w, 0, "control center", petalLabel(project), false, p.background)}
 	p.search.SetWidth(max(1, w-12))
 	if h >= 5 && (p.center.finding || p.search.Value() != "") {
 		rows = append(rows, richBand(p.search.View(), w, petalMuted, p.background, false))
@@ -393,11 +393,11 @@ func (p *picker) centerView() tea.View {
 		left = w * 60 / 100
 	}
 	if h >= 6 {
-		title := "Threads"
+		title := "threads"
 		if p.center.filter != 0 {
 			title += " · " + centerFilters[p.center.filter]
 		}
-		name := "Details"
+		name := "details"
 		if len(nodes) > 0 {
 			name = nodes[index].title
 		}
@@ -441,6 +441,12 @@ func (p *picker) centerView() tea.View {
 	p.pointerRows = image.Rect(0, len(rows)+headerGap, left, len(rows)+headerGap+min(len(nodes)-first, max(0, height-headerGap)))
 	p.pointerFirst = first
 	p.pointerDetail = image.Rect(left, len(rows), w, len(rows)+height)
+	const orchidWidth = 24
+	detailWidth := max(0, w-left-3)
+	treeRows := headerGap + max(1, len(nodes)-first)
+	spaceBelow := height - treeRows
+	showOrchid := !p.monochrome && left < w && left >= orchidWidth+4 && spaceBelow >= len(orchidRows)+2 && !p.center.finding
+	orchidTop := treeRows + (spaceBelow-len(orchidRows))/2
 	for y := range height {
 		row := richBand("", left, petalText, p.background, false)
 		i := first + y - headerGap
@@ -454,13 +460,16 @@ func (p *picker) centerView() tea.View {
 				line = " Install a Claude or Codex ACP adapter to start."
 			}
 			row = richBand(line, left, petalMuted, p.background, false)
+		} else if showOrchid && y >= orchidTop && y < orchidTop+len(orchidRows) {
+			art := strings.Repeat(" ", (left-orchidWidth)/2) + orchidRows[y-orchidTop]
+			row = richBand(art, left, petalText, p.background, false)
 		}
 		if left < w {
 			text := ""
 			if y < len(detail) {
 				text = detail[y].Text
 			}
-			row += richBand(" │ ", min(3, w-left), petalMuted, p.background, false) + richBand(text, max(0, w-left-3), petalText, p.background, false)
+			row += richBand(" │ ", min(3, w-left), petalMuted, p.background, false) + richBand(text, detailWidth, petalText, p.background, false)
 		}
 		rows = append(rows, row)
 	}
@@ -514,18 +523,18 @@ func (p *picker) nodeLine(n controlNode, width int, selected bool) string {
 	fg := petalMuted
 	dot := "○"
 	switch nodeStatus(n) {
-	case "Working":
+	case "working":
 		fg = petalRose
 		dot = "●"
-	case "Ready":
+	case "ready":
 		if n.kind != "Subagent" {
 			fg = petalRose
 			dot = "●"
 		}
-	case "Needs input":
+	case "needs input":
 		fg = petalAmber
 		dot = "●"
-		state = "Needs input"
+		state = "needs input"
 	}
 	labelWidth := width - indent
 	stateWidth := 0

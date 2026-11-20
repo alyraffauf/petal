@@ -22,17 +22,17 @@ func (m *terminal) graphName(id string) string {
 		if m.h.record.Title != "" {
 			return petalLabel(m.h.record.Title)
 		}
-		return "Current session"
+		return "current session"
 	}
 	for i, c := range m.agents.children {
 		if c.id == id {
 			if c.title != "" {
 				return petalLabel(c.title)
 			}
-			return fmt.Sprintf("Agent %d", i+1)
+			return fmt.Sprintf("agent %d", i+1)
 		}
 	}
-	return "Related session"
+	return "related session"
 }
 func (m *terminal) graphLinks(id string) []graphLink {
 	var links []graphLink
@@ -145,13 +145,13 @@ func (p *picker) graphView() tea.View {
 	m := p.center.owner
 	focus := m.graphName(p.center.graphID)
 	links := m.graphLinks(p.center.graphID)
-	rows := petalMasthead(w, mastheadHeight(w, h), 0, "Agent graph", fmt.Sprintf("%d agents", len(m.agents.children)), false, p.background)
+	rows := []string{petalMasthead(w, 0, "agent graph", fmt.Sprintf("%d agents", len(m.agents.children)), false, p.background)}
 	if h >= 6 {
 		rows = append(rows, richBand("", w, petalText, p.background, false))
 	}
 	col := min(w/3, 34)
 	if h >= 4 {
-		rows = append(rows, richBand("  Focus", col, petalRose, p.background, true)+richBand("   Connections", w-col, petalRose, p.background, true))
+		rows = append(rows, richBand("  focus", col, petalRose, p.background, true)+richBand("   connections", w-col, petalRose, p.background, true))
 	}
 	if h >= 12 {
 		rows = append(rows, richBand("", w, petalText, p.background, false))
@@ -215,7 +215,7 @@ func (p *picker) graphView() tea.View {
 		rows = append(rows, row)
 	}
 	if len(rows) < h {
-		hint := "Esc Back  r Reveal in Threads  ↑↓ Select link  Enter Follow  ← Parent"
+		hint := "Esc Back  r Reveal in threads  ↑↓ Select link  Enter Follow  ← Parent"
 		rows = appendNavFooter(rows, w, h, styledHint(hint, p.background), p.background)
 	}
 	v := tea.NewView(strings.Join(rows, "\n"))
