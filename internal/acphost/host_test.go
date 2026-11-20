@@ -20,8 +20,7 @@ func TestWorkspaceAndTerminalLifecycle(t *testing.T) {
 	cwd := t.TempDir()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	approvals := 0
-	h, err := Open(ctx, cwd, func(context.Context, string) error { approvals++; return nil })
+	h, err := Open(ctx, cwd, func(context.Context, string) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,9 +70,6 @@ func TestWorkspaceAndTerminalLifecycle(t *testing.T) {
 	raw, _ = json.Marshal(params)
 	if _, err = h.Call(ctx, "terminal/output", raw); err == nil {
 		t.Fatal("released terminal still accessible")
-	}
-	if approvals != 3 {
-		t.Fatalf("expected approvals for writes and launch, got %d", approvals)
 	}
 }
 

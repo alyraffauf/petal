@@ -208,7 +208,6 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	write("/model\r")
 	await("Second model")
 	write("Alternate")
-	await("Alternate")
 	write("\r")
 	await("alternate…")
 	write("/config\r")

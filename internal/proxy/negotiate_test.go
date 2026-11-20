@@ -185,7 +185,11 @@ func TestWirePreservesExtensionNotificationsAndElicitationScope(t *testing.T) {
 	if json.Unmarshal(transport.Bytes(), &upstream) != nil || string(upstream["method"]) != `"session/prompt"` {
 		t.Fatalf("invalid upstream request %s", transport.Bytes())
 	}
-	wire := incoming(strings.NewReader("{\"method\":\"_auth/status_update\",\"params\":{}}\n{\"method\":\"elicitation/create\",\"id\":22,\"params\":{\"requestId\":7}}\n{\"id\":7,\"result\":{}}\n"), w)
+	wire := incoming(strings.NewReader(`{"method":"_auth/status_update","params":{}}
+{"method":"elicitation/create","id":22,"params":{"requestId":7}}
+{"id":7,"result":{}}
+{"method":"elicitation/create","id":23,"params":{"requestId":7}}
+`), w)
 	dec := json.NewDecoder(wire)
 	var notification struct{ Method string }
 	if dec.Decode(&notification) != nil || notification.Method != notificationPrefix+"_auth/status_update" {
@@ -199,8 +203,8 @@ func TestWirePreservesExtensionNotificationsAndElicitationScope(t *testing.T) {
 	if dec.Decode(&reply) != nil {
 		t.Fatal("missing final reply")
 	}
-	if _, ok := w.ids.Load("7"); ok {
-		t.Fatal("completed parent request retained")
+	if dec.Decode(&elicitation) != nil || string(elicitation.Params["requestId"]) == string(editorID) {
+		t.Fatalf("callback after completion reused the completed editor request: %s", elicitation.Params["requestId"])
 	}
 }
 
