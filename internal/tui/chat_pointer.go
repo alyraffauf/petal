@@ -6,11 +6,24 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+type chatAction string
+
+const (
+	chatSend     chatAction = "Send"
+	chatConfirm  chatAction = "Confirm"
+	chatRun      chatAction = "Run"
+	chatSteer    chatAction = "Steer"
+	chatFollowUp chatAction = "Follow up"
+)
+
 type chatHitTargets struct {
 	commands        image.Rectangle
 	firstCommand    int
 	visibleCommands []chatCommand
 	action          image.Rectangle
+	actionKind      chatAction
+	actionInput     string
+	actionCommand   chatCommand
 	question        *permission
 }
 
@@ -32,8 +45,39 @@ func (m *terminal) handleChatClick(click tea.MouseClickMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if point.In(hits.action) {
-		return m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !point.In(hits.action) || m.editor == nil || m.editor.Value() != hits.actionInput {
+		return nil
 	}
-	return nil
+	matches := m.commandMatches()
+	switch hits.actionKind {
+	case chatConfirm:
+		if m.ask == nil {
+			return nil
+		}
+	case chatRun:
+		if m.Busy || m.connection != connected || len(matches) == 0 ||
+			matches[min(m.commandIndex, len(matches)-1)] != hits.actionCommand {
+			return nil
+		}
+	case chatSend, chatFollowUp, chatSteer:
+		if m.connection != connected || len(matches) != 0 || m.currentSubmitAction() != hits.actionKind {
+			return nil
+		}
+	default:
+		return nil
+	}
+	return m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+}
+
+func (m *terminal) currentSubmitAction() chatAction {
+	if m.ask != nil {
+		return chatConfirm
+	}
+	if !m.Busy {
+		return chatSend
+	}
+	if m.canSteer() {
+		return chatSteer
+	}
+	return chatFollowUp
 }

@@ -219,28 +219,34 @@ func renderChat(v screen, hits *chatHitTargets) string {
 		model = v.activeModel
 	}
 	input := "Ask " + petalLabel(model) + "…"
-	action := " ↵ Send "
+	action := chatSend
 	switch {
 	case v.question != nil:
 		input = fmt.Sprintf("Type an option number (1–%d)", len(v.question.options))
 		if v.question.form != nil {
 			input = "Enter a JSON object"
 		}
-		action = " ↵ Confirm "
+		action = chatConfirm
 	case v.connection == connectionFailed:
 		input, action = "Enter retry   Tab subscription", ""
 	case v.busyAction != "" && len(v.commands) == 0:
-		action = " ↵ " + v.busyAction + " "
+		action = v.busyAction
 	case v.connection == connecting || v.Busy:
 		action = ""
 	case len(v.commands) > 0:
-		action = " ↵ Run "
+		action = chatRun
 	}
 	aw := 0
-	if w >= 38 {
-		aw = ansi.StringWidth(action)
+	actionLabel := ""
+	if w >= 38 && action != "" {
+		actionLabel = " ↵ " + string(action) + " "
+		aw = ansi.StringWidth(actionLabel)
 	}
 	hits.action = image.Rect(w-aw, len(rows), w, len(rows)+1)
+	hits.actionKind = action
+	if action == chatRun {
+		hits.actionCommand = v.commands[v.commandIndex]
+	}
 	hits.question = v.question
 	room := max(1, w-aw-4)
 	if v.editor != nil && v.connection != connectionFailed {
@@ -248,11 +254,12 @@ func renderChat(v screen, hits *chatHitTargets) string {
 			v.editor.SetWidth(room)
 			*v.editor, _ = v.editor.Update(nil) // Reflow content before scrolling to the cursor.
 		}
-		if v.editor.Value() != "" {
+		hits.actionInput = v.editor.Value()
+		if hits.actionInput != "" {
 			input = v.editor.View()
 		}
 	}
-	rows = append(rows, richBand("  › "+input, w-aw, petalText, petalSurface, false)+richBand(action, aw, petalInk, petalRose, true))
+	rows = append(rows, richBand("  › "+input, w-aw, petalText, petalSurface, false)+richBand(actionLabel, aw, petalInk, petalRose, true))
 	if footer == 2 {
 		hint := " " + chatHelp(v) + " "
 		if v.queued > 0 {

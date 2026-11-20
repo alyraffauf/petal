@@ -41,7 +41,8 @@ type screen struct {
 	notice                      *acp.SessionUpdateNotice
 	planRows                    []entry
 	connection                  connectionState
-	busyAction, activeModel     string
+	busyAction                  chatAction
+	activeModel                 string
 	queued                      int
 	backlog                     *backlogViewport
 	markdown                    *markdownCache
@@ -193,13 +194,7 @@ func (m *terminal) View() tea.View {
 	v.question = m.ask
 	v.hasAgents = len(m.agents.children) > 0 && m.ask == nil
 	if m.Busy && m.connection == connected && m.h != nil {
-		v.busyAction = "Follow up"
-		if m.canSteer() {
-			v.busyAction = "Steer"
-		}
-		if m.ask != nil {
-			v.busyAction = "Choose"
-		}
+		v.busyAction = m.currentSubmitAction()
 		v.queued = len(m.outbox)
 	}
 	v.commands = m.commandMatches()

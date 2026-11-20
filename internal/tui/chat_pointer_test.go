@@ -12,14 +12,19 @@ import (
 
 func clickChatLabel(t *testing.T, m *terminal, label string) tea.Cmd {
 	t.Helper()
+	_, cmd := m.Update(chatLabelClick(t, m, label))
+	return cmd
+}
+
+func chatLabelClick(t *testing.T, m *terminal, label string) tea.MouseClickMsg {
+	t.Helper()
 	for y, row := range strings.Split(ansi.Strip(m.View().Content), "\n") {
 		if before, _, found := strings.Cut(row, label); found {
-			_, cmd := m.Update(tea.MouseClickMsg{X: ansi.StringWidth(before), Y: y, Button: tea.MouseLeft})
-			return cmd
+			return tea.MouseClickMsg{X: ansi.StringWidth(before), Y: y, Button: tea.MouseLeft}
 		}
 	}
 	t.Fatalf("label %q is missing from the chat", label)
-	return nil
+	return tea.MouseClickMsg{}
 }
 
 func TestClickSelectsCommandInScrolledMenu(t *testing.T) {
@@ -91,5 +96,41 @@ func TestHiddenSendButtonDoesNotSubmitDraft(t *testing.T) {
 	m.Update(tea.MouseClickMsg{X: 35, Y: 0, Button: tea.MouseLeft})
 	if m.editor.Value() != "hello" || len(m.Messages) != 0 {
 		t.Fatal("the hidden Send button submitted the draft")
+	}
+}
+
+func TestStaleFooterClickDoesNotDispatchNewAction(t *testing.T) {
+	for _, test := range []struct {
+		name, input, label string
+		change             func(*terminal)
+	}{
+		{
+			name: "Send became Run", input: "hello", label: "↵ Send",
+			change: func(m *terminal) { m.editor.SetValue("/quit") },
+		},
+		{
+			name: "Run became Send", input: "/history", label: "↵ Run",
+			change: func(m *terminal) { m.editor.SetValue("hello") },
+		},
+		{
+			name: "Run selection changed", input: "/", label: "↵ Run",
+			change: func(m *terminal) { m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown}) },
+		},
+		{
+			name: "Send draft changed", input: "hello", label: "↵ Send",
+			change: func(m *terminal) { m.editor.SetValue("different prompt") },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := &terminal{root: bloom.New(), h: &harness{}, screen: screen{
+				Width: 80, Height: 12, editor: testComposer(test.input, len(test.input)), connection: connected,
+			}}
+			click := chatLabelClick(t, m, test.label)
+			test.change(m)
+			current := m.editor.Value()
+			if cmd := m.handleChatClick(click); cmd != nil || m.editor.Value() != current || len(m.Messages) != 0 {
+				t.Fatal("stale footer click dispatched the action from the new state")
+			}
+		})
 	}
 }
