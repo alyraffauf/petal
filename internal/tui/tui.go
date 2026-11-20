@@ -34,6 +34,7 @@ const (
 )
 
 type screen struct {
+	transcriptRevision          uint64
 	images                      map[string]inlinePreview
 	question                    *permission
 	background                  string
@@ -76,6 +77,7 @@ func nextFrame() tea.Cmd {
 }
 
 type terminal struct {
+	openingPreview        []entry
 	inputTTY              *os.File
 	clipboard             clipboardRead
 	limitedColor          bool
@@ -145,7 +147,7 @@ func runSession(parent context.Context, start sessionStart, drafts sessionDrafts
 	if err != nil {
 		return nil, err
 	}
-	m.screen = screen{background: canvasBackground(c.TransparentBackground), Cwd: cwd, Model: c.Model, Account: c.PinnedAccount, connection: connecting}
+	m.screen = screen{transcriptRevision: 1, background: canvasBackground(c.TransparentBackground), Cwd: cwd, Model: c.Model, Account: c.PinnedAccount, connection: connecting}
 	m.h = startHarness(ctx, c)
 	m.h.id = start.id
 	defer m.h.close()
@@ -177,20 +179,69 @@ type finished struct {
 }
 type cancelFailed struct{ err error }
 
+type outputBatch struct {
+	events []event
+	next   tea.Msg
+}
+
+func (e event) batchable() bool { return e.ask == nil && e.picture == nil }
+
 func (m *terminal) listen() tea.Msg {
 	select {
 	case e := <-m.h.events:
-		return e
+		first, ok := e.(event)
+		if !ok || !first.batchable() {
+			return e
+		}
+		// Drain only already queued output. A permission or lifecycle notification
+		// after it must be processed before reading any more notifications.
+		batch := outputBatch{events: []event{first}}
+		for len(batch.events) < 128 {
+			select {
+			case next := <-m.h.events:
+				if chunk, ok := next.(event); ok && chunk.batchable() {
+					batch.events = append(batch.events, chunk)
+				} else {
+					batch.next = next
+					return batch
+				}
+			default:
+				return batch
+			}
+		}
+		return batch
 	case <-m.ctx.Done():
 		return nil
 	}
 }
+
+type cachedPreview []entry
+
+func (m *terminal) openingTranscript() tea.Cmd {
+	if !m.resume || m.resumeID == "" {
+		return nil
+	}
+	ctx, cwd, id := m.ctx, m.Cwd, m.resumeID
+	return func() tea.Msg {
+		rows, err := sessions.RecentTranscript(ctx, cwd, id, 64)
+		if err != nil {
+			// The provider replay is authoritative if the local index is unavailable.
+			return nil
+		}
+		entries := make(cachedPreview, len(rows))
+		for i, row := range rows {
+			entries[i] = entry{row.Role, row.Body}
+		}
+		return entries
+	}
+}
+
 func (m *terminal) Init() tea.Cmd {
 	var pasteMode tea.Cmd
 	if directGraphicsTerminal() {
 		pasteMode = tea.Raw("\x1b[?5522h")
 	}
-	return tea.Batch(pasteMode, m.root.Init(), m.listen, func() tea.Msg {
+	return tea.Batch(m.openingTranscript(), pasteMode, m.root.Init(), m.listen, func() tea.Msg {
 		a, e := m.h.open(m.ctx, m.cfg, m.Cwd, m.resume)
 		select {
 		case m.h.events <- opened{a, e}:
@@ -205,6 +256,9 @@ func (m *terminal) View() tea.View {
 		return m.launch.View()
 	}
 	v := m.screen
+	if m.connection == connecting && len(v.Messages) == 0 {
+		v.Messages = m.openingPreview
+	}
 	v.question = m.ask
 	v.hasAgents = len(m.agents.children) > 0 && m.ask == nil
 	if m.Busy && m.connection == connected && m.h != nil {
@@ -226,7 +280,7 @@ func (m *terminal) View() tea.View {
 	}
 	var view tea.View
 	if m.reading {
-		view = m.root.View(v.Width, v.Height, m.scene(v))
+		view = tea.NewView(m.renderReader(v))
 	} else {
 		// Chat already produces the complete styled terminal frame.
 		view = tea.NewView(renderChat(v, &m.chatHits))
@@ -330,6 +384,29 @@ func (m *terminal) restorePermissionDraft() {
 }
 
 func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if batch, ok := msg.(outputBatch); ok {
+		for _, e := range batch.events {
+			m.recordOutput(e)
+		}
+		m.transcriptRevision++
+		if batch.next == nil {
+			return m, m.listen
+		}
+		msg = batch.next
+	}
+	// Between navigation inputs both the transcript and its wrapped row counts
+	// are unchanged. Other updates can replace plans, compactions or past turns.
+	switch key := msg.(type) {
+	case tea.MouseWheelMsg, tea.KeyReleaseMsg, animationFrame:
+	case tea.KeyPressMsg:
+		switch key.String() {
+		case "pgup", "pgdown", "ctrl+end", "up", "down":
+		default:
+			m.transcriptRevision++
+		}
+	default:
+		m.transcriptRevision++
+	}
 	if handled, cmd := m.clipboardEvent(msg); handled {
 		return m, cmd
 	}
@@ -471,7 +548,12 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		cmd = m.deliver()
+	case cachedPreview:
+		if m.connection == connecting {
+			m.openingPreview = t
+		}
 	case opened:
+		m.openingPreview = nil
 		m.agents.publish()
 		if m.h != nil && (m.resume || t.err == nil) {
 			m.draftSessionID = m.h.id
@@ -495,6 +577,10 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.h != nil {
 				replay := m.agents.completedEntries(slices.Clip(m.Messages[m.turnStart:]))
 				m.indexMessages(replay, m.h.replayed && len(m.Messages) > m.turnStart)
+				if len(m.h.resumedHistory) > 0 {
+					m.Messages = append(m.h.resumedHistory, m.Messages...)
+					m.h.resumedHistory = nil
+				}
 				m.agentSettings = m.h.initialSettings
 				m.saveSessionInfo()
 			}
@@ -616,13 +702,6 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.listen
 	case event:
 		cmd = m.listen
-		if t.tool != nil {
-			var complete bool
-			t, complete = m.toolResult(*t.tool)
-			if !complete {
-				break
-			}
-		}
 		if t.ask != nil {
 			m.launch = nil
 			m.chatBacklog.browsing = false
@@ -635,10 +714,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t.picture != nil {
 			t.text, upload = m.registerPreview(t.text, t.picture)
 		}
-		m.pending.push(t)
-		if !t.chunk {
-			m.Messages = append(m.Messages, entry{t.role, t.text})
-		}
+		m.recordOutput(t)
 		cmd = tea.Batch(upload, m.listen)
 	case tea.MouseClickMsg:
 		cmd = m.handleChatClick(t)
@@ -684,4 +760,18 @@ func (m *terminal) recordNote(text string) {
 		m.pending.push(event{role: "system", text: text})
 	}
 	m.Messages = append(m.Messages, entry{"system", text})
+}
+
+func (m *terminal) recordOutput(e event) {
+	if e.tool != nil {
+		var done bool
+		e, done = m.toolResult(*e.tool)
+		if !done {
+			return
+		}
+	}
+	m.pending.push(e)
+	if !e.chunk {
+		m.Messages = append(m.Messages, entry{e.role, e.text})
+	}
 }

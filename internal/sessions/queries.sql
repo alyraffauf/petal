@@ -28,3 +28,9 @@ DELETE FROM messages WHERE session_id = ?;
 
 -- name: ReadTranscript :many
 SELECT rowid, role, body FROM messages WHERE session_id = ? ORDER BY rowid;
+
+-- name: TranscriptTail :many
+SELECT role, body FROM (
+    SELECT rowid, role, body FROM messages WHERE session_id = ?
+    AND role IN ('user', 'assistant', 'tool', 'system') ORDER BY rowid DESC LIMIT ?
+) ORDER BY rowid;

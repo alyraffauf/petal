@@ -23,6 +23,24 @@ func SaveTranscript(cwd, id string, messages []Message, replace bool) error {
 	defer tx.Rollback()
 	q := sessiondb.New(tx)
 	if replace {
+		// A load commonly replays exactly what was indexed at turn completion.
+		// Keep the FTS rows (and search result row IDs) for an identical replay.
+		rows, err := q.ReadTranscript(ctx, id)
+		if err != nil {
+			return err
+		}
+		equal := len(rows) == len(messages)
+		if equal {
+			for i, row := range rows {
+				if row.Role != messages[i].Role || row.Body != messages[i].Body {
+					equal = false
+					break
+				}
+			}
+		}
+		if equal {
+			return nil
+		}
 		if err := q.ClearTranscript(ctx, id); err != nil {
 			return err
 		}
@@ -92,4 +110,13 @@ func Search(cwd, account, query string, offset, limit int) ([]Hit, error) {
 		hits = append(hits, h)
 	}
 	return hits, rows.Err()
+}
+
+func RecentTranscript(ctx context.Context, cwd, id string, limit int64) ([]sessiondb.TranscriptTailRow, error) {
+	db, err := openStore(cwd)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return sessiondb.New(db).TranscriptTail(ctx, sessiondb.TranscriptTailParams{SessionID: id, Limit: limit})
 }

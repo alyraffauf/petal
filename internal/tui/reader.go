@@ -2,8 +2,6 @@ package tui
 
 import (
 	"strings"
-
-	"bloomfx.dev/bloom"
 )
 
 func readerBodyHeight(h int) int {
@@ -14,10 +12,7 @@ func readerBodyHeight(h int) int {
 	return max(0, rows)
 }
 
-func (m *terminal) scene(v screen) bloom.Child {
-	if !m.reading {
-		return bloom.Text(renderChat(v, &m.chatHits))
-	}
+func (m *terminal) renderReader(v screen) string {
 	w, h := max(1, v.Width), max(1, v.Height)
 	v.backlog = &m.readerBacklog
 	v.markdown = &m.readerMarkdown
@@ -37,5 +32,5 @@ func (m *terminal) scene(v screen) bloom.Child {
 	if len(rows) < h {
 		rows = appendNavFooter(rows, w, h, shortHelp(w, closeReader, pageEarlier, pageLater, jumpLatest), v.background)
 	}
-	return bloom.Text(strings.Join(rows, "\n"))
+	return strings.Join(rows, "\n")
 }

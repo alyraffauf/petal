@@ -4,6 +4,8 @@ package tui
 // viewport. Following the tail never requires formatting the unseen prefix.
 type backlogViewport struct {
 	first, width int
+	revision     uint64
+	count, rows  int
 	top, limit   int
 	browsing     bool
 }
@@ -64,8 +66,12 @@ func transcript(v screen, width, height int) []entry {
 			}
 			b.first = 0
 		}
-		for i := b.first; i < n; i++ {
-			total += rowsAt(i, width)
+		if b.width == width && v.transcriptRevision != 0 && b.revision == v.transcriptRevision && b.count == n {
+			total = b.rows
+		} else {
+			for i := b.first; i < n; i++ {
+				total += rowsAt(i, width)
+			}
 		}
 	} else {
 		b.first = n
@@ -107,5 +113,18 @@ func transcript(v screen, width, height int) []entry {
 			}
 		}
 	}
+	// Drop fully skipped messages from the measured suffix. Scrolling back
+	// towards the tail should start the next frame close to its first row.
+	for b.browsing && b.top > 0 && b.first < n {
+		rows := rowsAt(b.first, width)
+		if rows > b.top {
+			break
+		}
+		b.first++
+		b.top -= rows
+		b.limit -= rows
+		total -= rows
+	}
+	b.revision, b.count, b.rows = v.transcriptRevision, n, total
 	return visible
 }

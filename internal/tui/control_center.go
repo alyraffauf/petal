@@ -304,7 +304,7 @@ func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
 			}
 			p.center.inspect = !p.center.inspect
 		case "Turn":
-			m.chatBacklog = backlogViewport{first: n.index, width: max(1, m.Width-min(3, m.Width/4)-2), browsing: true}
+			m.chatBacklog = backlogViewport{first: n.index, width: max(1, m.Width-roleGutter(m.Width)-2), browsing: true}
 			m.launch = nil
 		default:
 			if m != nil && m.connection == connected && n.id == m.h.record.ID {

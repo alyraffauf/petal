@@ -109,7 +109,7 @@ func TestNegotiatedAccountsAndPaging(t *testing.T) {
 	out, write := io.Pipe()
 	defer input.Close()
 	defer write.Close()
-	ConnectEmbedded(ctx, cfg, write, read)
+	ConnectEmbedded(ctx, cfg, write, read, nil)
 	client := acp.NewConnection(nil, input, out)
 	call := func(method string, params any) Object {
 		t.Helper()
@@ -214,7 +214,7 @@ func TestPlanNotificationsRespectEditorCapability(t *testing.T) {
 			out, write := io.Pipe()
 			defer input.Close()
 			defer write.Close()
-			ConnectEmbedded(ctx, cfg, write, read)
+			ConnectEmbedded(ctx, cfg, write, read, nil)
 			type notice struct {
 				method string
 				params json.RawMessage

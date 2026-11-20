@@ -197,3 +197,43 @@ func (q *Queries) ReadTranscript(ctx context.Context, sessionID string) ([]ReadT
 	}
 	return items, nil
 }
+
+const transcriptTail = `-- name: TranscriptTail :many
+SELECT role, body FROM (
+    SELECT rowid, role, body FROM messages WHERE session_id = ?
+    AND role IN ('user', 'assistant', 'tool', 'system') ORDER BY rowid DESC LIMIT ?
+) ORDER BY rowid
+`
+
+type TranscriptTailParams struct {
+	SessionID string
+	Limit     int64
+}
+
+type TranscriptTailRow struct {
+	Role string
+	Body string
+}
+
+func (q *Queries) TranscriptTail(ctx context.Context, arg TranscriptTailParams) ([]TranscriptTailRow, error) {
+	rows, err := q.db.QueryContext(ctx, transcriptTail, arg.SessionID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TranscriptTailRow
+	for rows.Next() {
+		var i TranscriptTailRow
+		if err := rows.Scan(&i.Role, &i.Body); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

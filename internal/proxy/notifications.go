@@ -48,6 +48,8 @@ func forward[T any](conn *acp.Connection, ctx context.Context, method string, pa
 }
 
 type adapterWire struct {
+	updates  chan struct{}
+	lifetime context.Context
 	io.Writer
 	ids sync.Map // adapter request ID -> originating editor request ID
 }
@@ -114,6 +116,16 @@ func (r *wireReader) Read(dst []byte) (int, error) {
 					return 0, fmt.Errorf("invalid ACP method name")
 				}
 				if head.ID == nil {
+					// Bound incoming replay updates before the SDK's notification
+					// queue, which disconnects on overflow. The proxy forwards
+					// these notifications without awaiting a backend response.
+					if method == "session/update" && r.adapter != nil && r.adapter.updates != nil {
+						select {
+						case r.adapter.updates <- struct{}{}:
+						case <-r.adapter.lifetime.Done():
+							return 0, r.adapter.lifetime.Err()
+						}
+					}
 					method = notificationPrefix + method
 				}
 				if head.ID != nil && r.adapter == nil {

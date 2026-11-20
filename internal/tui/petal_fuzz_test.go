@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"bloomfx.dev/bloom"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -55,10 +54,13 @@ func FuzzPetalBacklog(f *testing.F) {
 			return
 		}
 		var viewport backlogViewport
-		v := screen{connection: connected, backlog: &viewport, markdown: &markdownCache{}}
+		v := screen{transcriptRevision: 1, connection: connected, backlog: &viewport, markdown: &markdownCache{}}
 		var messages []entry
 		width, height, end, pause := 24, 3, 0, false
 		for i, op := range ops {
+			if op%9 == 0 || op%9 == 1 || op%9 == 5 || op%9 == 8 {
+				v.transcriptRevision++
+			}
 			rowCount := len(plainTranscript(messages, width))
 			switch op % 9 {
 			case 0, 1:
@@ -168,9 +170,9 @@ func FuzzPetalReader(f *testing.F) {
 		for i := range int(count % 20) {
 			v.Messages = append(v.Messages, entry{"assistant", fmt.Sprintf("Q%02dZ", i)})
 		}
-		m.scene(v)
+		m.renderReader(v)
 		m.readerBacklog.move(-int(scroll % 30))
-		frame := bloom.Render(width, height, m.scene(v))
+		frame := m.renderReader(v)
 		checkFrame(t, frame, width, height)
 		if len(v.Messages) == 0 || width < 25 || height < 12 {
 			return

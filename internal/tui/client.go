@@ -35,6 +35,8 @@ type event struct {
 	chunk          bool
 }
 type harness struct {
+	updateSlots          chan struct{}
+	resumedHistory       []entry
 	graphics             bool
 	replayed             bool
 	activeID             atomic.Pointer[string]
@@ -78,6 +80,9 @@ func (h *harness) callback(ctx context.Context, method string, raw json.RawMessa
 	}
 	switch method {
 	case "session/update":
+		if h.updateSlots != nil {
+			defer func() { <-h.updateSlots }()
+		}
 		var p struct {
 			SessionID string
 			Update    struct {
@@ -312,8 +317,9 @@ var signedIn = errors.New("terminal sign-in finished")
 func startHarness(ctx context.Context, c routing.Config) *harness {
 	toProxy, clientOut := io.Pipe()
 	toClient, proxyOut := io.Pipe()
-	proxy.ConnectEmbedded(ctx, c, proxyOut, toProxy)
-	h := &harness{graphics: directGraphicsTerminal(), lifetime: ctx, events: make(chan tea.Msg, 128), permissions: make(chan struct{}, 1), close: func() { clientOut.Close(); proxyOut.Close() }}
+	updateSlots := make(chan struct{}, 128)
+	proxy.ConnectEmbedded(ctx, c, proxyOut, toProxy, updateSlots)
+	h := &harness{updateSlots: updateSlots, graphics: directGraphicsTerminal(), lifetime: ctx, events: make(chan tea.Msg, 128), permissions: make(chan struct{}, 1), close: func() { clientOut.Close(); proxyOut.Close() }}
 	h.conn = acp.NewConnection(h.callback, clientOut, toClient)
 	h.conn.SetLogger(slog.New(slog.DiscardHandler))
 	return h
@@ -436,6 +442,15 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	}
 	if err != nil {
 		return "", err
+	}
+	if method == "session/resume" {
+		// This ACP method reconnects without replaying the transcript.
+		rows, err := sessions.RecentTranscript(ctx, cwd, h.id, -1)
+		if err == nil {
+			for _, row := range rows {
+				h.resumedHistory = append(h.resumedHistory, entry{row.Role, row.Body})
+			}
+		}
 	}
 	h.initialSettings = settingsFrom(r)
 	var steering struct{ Supported bool }

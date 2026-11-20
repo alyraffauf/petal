@@ -89,6 +89,11 @@ func runPTYAdapter(t *testing.T) {
 			if request.Params.SessionID != "pty-thread" {
 				t.Fatalf("wrong resume ID %q", request.Params.SessionID)
 			}
+			// Real adapters replay saved turns in bursts larger than the SDK's
+			// notification queue. The final message must still be reachable.
+			for range 2048 {
+				send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "earlier", "content": map[string]string{"type": "text", "text": "."}}}})
+			}
 			send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "restored transcript"}}}})
 		case "session/prompt":
 			if request.Params.Prompt[0].Text == "/status-report build" {

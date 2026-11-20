@@ -36,7 +36,8 @@ type backend struct {
 	hello acp.InitializeResponse
 }
 type proxy struct {
-	embedded bool
+	embedded      bool
+	editorUpdates chan struct{}
 	routing.Config
 	lifetime     context.Context
 	editor       *acp.Connection
@@ -302,9 +303,12 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 	}
 	childOutput.Close()
 	context.AfterFunc(lifetime, func() { out.Close(); in.Close() })
-	wire := &adapterWire{Writer: in}
+	wire := &adapterWire{Writer: in, lifetime: lifetime, updates: make(chan struct{}, 128)}
 	conn := acp.NewConnection(func(ctx context.Context, method string, raw json.RawMessage) (any, *acp.RequestError) {
 		native, notification := strings.CutPrefix(method, notificationPrefix)
+		if notification && native == "session/update" {
+			defer func() { <-wire.updates }()
+		}
 		if notification {
 			switch native {
 			case "session/update", "elicitation/complete", "mcp/message", "auth/status_update":
@@ -390,6 +394,19 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 				}
 			}
 		}
+		if notification && native == "session/update" && p.editorUpdates != nil {
+			// The embedded client releases this slot after consuming the update.
+			select {
+			case p.editorUpdates <- struct{}{}:
+			case <-lifetime.Done():
+				return nil, rpcError(lifetime.Err())
+			}
+			err := p.editor.SendNotification(ctx, native, args)
+			if err != nil {
+				<-p.editorUpdates
+			}
+			return nil, rpcError(err)
+		}
 		result, err := relay(ctx, p.editor, method, args)
 		return result, rpcError(err)
 	}, wire, incoming(out, wire))
@@ -427,17 +444,17 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 func Serve(c routing.Config) {
 	lifetime, stop := context.WithCancel(context.Background())
 	defer stop()
-	conn := connect(lifetime, c, os.Stdout, os.Stdin, false)
+	conn := connect(lifetime, c, os.Stdout, os.Stdin, false, nil)
 	<-conn.Done()
 }
 
 // ConnectEmbedded serves Petal's terminal client over its in-process pipes.
-func ConnectEmbedded(ctx context.Context, c routing.Config, out io.Writer, in io.Reader) {
-	connect(ctx, c, out, in, true)
+func ConnectEmbedded(ctx context.Context, c routing.Config, out io.Writer, in io.Reader, updates chan struct{}) {
+	connect(ctx, c, out, in, true, updates)
 }
 
-func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Reader, embedded bool) *acp.Connection {
-	p := proxy{embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
+func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Reader, embedded bool, updates chan struct{}) *acp.Connection {
+	p := proxy{editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
 	ready := make(chan struct{})
 	p.editor = acp.NewConnection(func(ctx context.Context, method string, params json.RawMessage) (any, *acp.RequestError) {
 		<-ready

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"bloomfx.dev/bloom"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -14,7 +13,7 @@ import (
 func TestReaderSeparatesRoleFromMessage(t *testing.T) {
 	m := terminal{reading: true}
 	v := screen{Width: 38, Height: 16, Messages: []entry{{"assistant", "answer"}}}
-	frame := ansi.Strip(bloom.Render(v.Width, v.Height, m.scene(v)))
+	frame := ansi.Strip(m.renderReader(v))
 	for _, row := range strings.Split(frame, "\n") {
 		if !strings.Contains(row, "answer") {
 			continue
@@ -34,7 +33,7 @@ func TestReaderPageKeepsOneLineOfContext(t *testing.T) {
 			m.Messages = append(m.Messages, entry{"assistant", fmt.Sprintf("message-%02d", i)})
 		}
 		body := func() []string {
-			view := ansi.Strip(bloom.Render(m.Width, m.Height, m.scene(m.screen)))
+			view := ansi.Strip(m.renderReader(m.screen))
 			rows := strings.Split(view, "\n")
 			start := 1
 			if m.Height >= 12 {

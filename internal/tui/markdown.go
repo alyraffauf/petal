@@ -102,7 +102,15 @@ func richBand(s string, width int, fg, bg string, bold bool) string {
 		background = "48;2;" + bg
 	}
 	base := "\x1b[" + weight + ";38;2;" + fg + ";" + background + "m"
-	s = ansi.Truncate(s, width, "")
+	cells := ansi.StringWidth(s)
+	if cells > width {
+		s = ansi.Truncate(s, width, "")
+		cells = ansi.StringWidth(s)
+	}
+	padding := strings.Repeat(" ", width-cells)
+	if !strings.Contains(s, "\x1b") {
+		return base + s + padding + "\x1b[0m"
+	}
 	s = strings.NewReplacer("\x1b[0m", "\x1b[0m"+base, "\x1b[m", "\x1b[m"+base, "\x1b[39m", "\x1b[38;2;"+fg+"m", "\x1b[49m", "\x1b["+background+"m").Replace(s)
-	return base + s + base + strings.Repeat(" ", max(0, width-ansi.StringWidth(s))) + "\x1b[0m"
+	return base + s + base + padding + "\x1b[0m"
 }
