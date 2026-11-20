@@ -357,8 +357,10 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 					return nil, nil
 				}
 				subagents := clientCaps.member("subagents") != nil
-				switch string(item["sessionUpdate"]) {
-				case `"subagent_update"`, `"session_message"`:
+				var updateKind string
+				_ = json.Unmarshal(item["sessionUpdate"], &updateKind)
+				switch updateKind {
+				case "subagent_update", "session_message":
 					for _, key := range []string{"sessionId", "senderSessionId", "recipientSessionId"} {
 						var id string
 						if json.Unmarshal(item[key], &id) == nil && id != "" {
@@ -367,12 +369,14 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 						}
 					}
 				}
-				if field == "toolCall" || string(item["sessionUpdate"]) == `"tool_call"` || string(item["sessionUpdate"]) == `"tool_call_update"` {
+				if field == "toolCall" || updateKind == "tool_call" || updateKind == "tool_call_update" {
 					var parts []Object
 					if json.Unmarshal(item["content"], &parts) == nil {
 						visible := parts[:0]
 						for _, part := range parts {
-							if string(part["type"]) == `"session"` {
+							var contentType string
+							_ = json.Unmarshal(part["type"], &contentType)
+							if contentType == "session" {
 								changed = true
 								if !subagents {
 									continue

@@ -70,6 +70,11 @@ func TestAccountAdapter(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if update := os.Getenv("PETAL_NEGOTIATE_UPDATE"); update != "" {
+				if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "same", "update": json.RawMessage(update)}}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "method": "unknown/notice"}); err != nil {
 				t.Fatal(err)
 			}
@@ -323,5 +328,39 @@ func TestNullCapabilitiesDoNotAdvertiseAnotherAccountsFeatures(t *testing.T) {
 	}
 	if hello.AgentCapabilities.LoadSession || hello.Meta["steering"] != nil {
 		t.Fatalf("advertised features available on only one account: %+v", hello)
+	}
+}
+
+func TestEscapedToolUpdateRoutesSessionContent(t *testing.T) {
+	cfg := routing.Config{Model: "m", Accounts: map[string]routing.Account{
+		"a": fixtureAccount(t, map[string]string{"PETAL_NEGOTIATE_UPDATE": `{"sessionUpdate":"tool_\u0063all","toolCallId":"tool","title":"child","content":[{"type":"sess\u0069on","sessionId":"child"}]}`}),
+	}}
+	type toolUpdate struct {
+		SessionID string
+		Update    struct{ Content []struct{ SessionID string } }
+	}
+	updates := make(chan toolUpdate, 1)
+	client, ctx := connectTestEditor(t, cfg, func(_ context.Context, method string, raw json.RawMessage) (any, *acp.RequestError) {
+		var update toolUpdate
+		if method == "session/update" && json.Unmarshal(raw, &update) == nil && len(update.Update.Content) > 0 {
+			updates <- update
+		}
+		return nil, nil
+	})
+	_, err := acp.SendRequest[acp.InitializeResponse](client, ctx, "initialize", json.RawMessage(`{"protocolVersion":1,"clientCapabilities":{"subagents":{}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = acp.SendRequest[Object](client, ctx, "session/prompt", map[string]string{"sessionId": `["a","m","same"]`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-updates:
+		if got.SessionID != `["a","m","same"]` || got.Update.Content[0].SessionID != `["a","m","child"]` {
+			t.Fatalf("wrong session routing in tool update: %+v", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("missing tool update")
 	}
 }
