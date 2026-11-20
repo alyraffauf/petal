@@ -216,7 +216,7 @@ func (p *picker) graphView() tea.View {
 	}
 	if len(rows) < h {
 		hint := "Esc Back  r Reveal in threads  ↑↓ Select link  Enter Follow  ← Parent"
-		rows = appendNavFooter(rows, w, h, styledHint(hint, p.background), p.background)
+		rows = appendNavFooter(rows, w, h, styledHint(hint, p.background, w), p.background)
 	}
 	v := tea.NewView(strings.Join(rows, "\n"))
 	v.AltScreen = true

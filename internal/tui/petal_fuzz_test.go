@@ -178,8 +178,8 @@ func FuzzPetalReader(f *testing.F) {
 		// A short message occupies one row, with one separator between messages.
 		// At these heights the header has a spacer and the footer has a divider.
 		page := height - 4
-		if height >= 32 && width >= 60 {
-			page-- // Tall, wide terminals use a second masthead row.
+		if height >= 24 {
+			page-- // Roomy terminals leave a row beneath the shortcuts.
 		}
 		total := 2*len(v.Messages) - 1
 		top := max(0, total-page-int(scroll%30))

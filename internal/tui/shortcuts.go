@@ -76,16 +76,29 @@ func chatHelp(v screen) string {
 	}
 }
 
-func styledHint(hint, background string) string {
+func styledHint(hint, background string, width int) string {
+	items := strings.Split(strings.TrimSpace(hint), "  ")
+	gap := "  "
+	if ansi.StringWidth(strings.Join(items, "   "))+4 <= width {
+		gap = "   "
+	}
+	available := width - 2
 	var parts []string
-	for _, item := range strings.Split(strings.TrimSpace(hint), "  ") {
+	for _, item := range items {
+		if ansi.StringWidth(item) > available {
+			continue
+		}
+		available -= ansi.StringWidth(item) + len(gap)
 		key, label, _ := strings.Cut(item, " ")
 		parts = append(parts, richBand(key, ansi.StringWidth(key), petalRose, background, true)+" "+label)
 	}
-	return strings.Join(parts, "  ")
+	return strings.Join(parts, gap)
 }
 
 func navFooterHeight(h int) int {
+	if h >= 24 {
+		return 3
+	}
 	if h >= 12 {
 		return 2
 	}
@@ -96,8 +109,12 @@ func appendNavFooter(rows []string, w, h int, hint, background string) []string 
 	if len(rows) >= h {
 		return rows[:h]
 	}
-	if navFooterHeight(h) == 2 && len(rows) < h-1 {
+	if navFooterHeight(h) >= 2 && len(rows) < h-1 {
 		rows = append(rows, richBand(strings.Repeat("─", w), w, selectionBand, background, false))
 	}
-	return append(rows, richBand(" "+hint, w, petalText, background, false))
+	rows = append(rows, richBand("  "+strings.TrimSpace(hint), w, petalText, background, false))
+	if len(rows) < h && navFooterHeight(h) == 3 {
+		rows = append(rows, richBand("", w, petalText, background, false))
+	}
+	return rows
 }

@@ -46,6 +46,9 @@ func (m *terminal) indexMessages(entries []entry, replace bool) {
 			}
 			e = entry{"system", c.display}
 		}
+		if preview, ok := m.images[e.Text]; ok {
+			e.Text = preview.caption
+		}
 		messages = append(messages, sessions.Message{Role: e.Role, Body: e.Text})
 	}
 	if err := sessions.SaveTranscript(m.Cwd, m.h.record.ID, messages, replace); err != nil {

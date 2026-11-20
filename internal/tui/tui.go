@@ -34,6 +34,7 @@ const (
 )
 
 type screen struct {
+	images                      map[string]inlinePreview
 	question                    *permission
 	background                  string
 	hasAgents                   bool
@@ -75,6 +76,8 @@ func nextFrame() tea.Cmd {
 }
 
 type terminal struct {
+	limitedColor          bool
+	imageBase             int
 	monochrome            bool
 	agents                agentBrowser
 	forking               bool
@@ -279,8 +282,13 @@ func (m *terminal) submit() tea.Cmd {
 			m.recordNote("Could not save conversation title: " + err.Error())
 		}
 	}
+	var upload tea.Cmd
+	if m.h.graphics && !m.monochrome && len(message.content) == 1 && message.content[0]["type"] == "image" {
+		data, _ := message.content[0]["data"].(string)
+		message.text, upload = m.registerPreview(message.text, decodePreview(data))
+	}
 	m.outbox = append(m.outbox, message)
-	return m.deliver()
+	return tea.Batch(upload, m.deliver())
 }
 
 func (m *terminal) restorePermissionDraft() {
@@ -296,6 +304,7 @@ func (m *terminal) restorePermissionDraft() {
 func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if profile, ok := msg.(tea.ColorProfileMsg); ok {
 		m.monochrome = profile.Profile <= colorprofile.ASCII
+		m.limitedColor = profile.Profile < colorprofile.TrueColor
 		if m.launch != nil {
 			m.launch.monochrome = m.monochrome
 		}
@@ -590,11 +599,15 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ask = t.ask
 			m.Status = "permission required"
 		}
+		var upload tea.Cmd
+		if t.picture != nil {
+			t.text, upload = m.registerPreview(t.text, t.picture)
+		}
 		m.pending.push(t)
 		if !t.chunk {
 			m.Messages = append(m.Messages, entry{t.role, t.text})
 		}
-		cmd = m.listen
+		cmd = tea.Batch(upload, m.listen)
 	case tea.MouseClickMsg:
 		cmd = m.handleChatClick(t)
 	case tea.MouseWheelMsg:

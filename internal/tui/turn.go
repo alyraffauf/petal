@@ -19,6 +19,11 @@ type turnLog struct {
 }
 
 func (t *turnLog) push(e event) {
+	if e.picture != nil {
+		// A following text chunk with the same ACP ID starts after the image.
+		delete(t.ids, [2]string{e.role, e.id})
+		e.chunk = false
+	}
 	var b *turnBlock
 	if e.chunk {
 		if e.id != "" {

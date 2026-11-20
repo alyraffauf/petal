@@ -55,6 +55,10 @@ func (v screen) messageLines(index int, e entry, width int) []string {
 		c.width = width
 	}
 	source := clean(e.Text)
+	preview, hasImage := v.images[e.Text]
+	if hasImage {
+		source = clean(preview.caption)
+	}
 	rendered := renderMarkdown(c.renderer, source)
 	lines := strings.Split(strings.Trim(rendered, "\n"), "\n")
 	for len(lines) > 1 && strings.TrimSpace(ansi.Strip(lines[0])) == "" {
@@ -72,6 +76,9 @@ func (v screen) messageLines(index int, e entry, width int) []string {
 			parts = parts[:len(parts)-1]
 		}
 		wrapped = append(wrapped, parts...)
+	}
+	if hasImage && width >= preview.cols {
+		wrapped = append(wrapped, preview.lines...)
 	}
 	if c.layouts == nil {
 		c.layouts = make(map[int]messageLayout)

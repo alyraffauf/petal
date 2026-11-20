@@ -114,7 +114,11 @@ func (p *picker) nodes() []controlNode {
 			if p.center.folded[group] && p.search.Value() == "" {
 				break
 			}
-			line, _, _ := strings.Cut(msg.Text, "\n")
+			text := msg.Text
+			if preview, ok := m.images[text]; ok {
+				text = preview.caption
+			}
+			line, _, _ := strings.Cut(text, "\n")
 			all = append(all, controlNode{id: "turn/" + strconv.Itoa(i), parent: group, title: petalLabel(ansi.Truncate(line, 120, "…")), kind: "Turn", index: i})
 		}
 	}
@@ -329,7 +333,7 @@ func (p *picker) centerDetails(n controlNode) []entry {
 	m := p.center.owner
 	switch n.kind {
 	case "Model":
-		return []entry{{"system", "**" + n.title + "**"}, {"system", "Enter · Start session"}}
+		return []entry{{"system", "Enter · Start session"}}
 	case "New":
 		if m != nil && m.Busy {
 			return []entry{{"system", "Finish the active turn to start another session."}}
@@ -352,7 +356,11 @@ func (p *picker) centerDetails(n controlNode) []entry {
 	case "Turns":
 		return []entry{{"system", "Select a prompt to jump to that turn."}}
 	case "Turn":
-		return []entry{m.Messages[n.index]}
+		msg := m.Messages[n.index]
+		if preview, ok := m.images[msg.Text]; ok {
+			msg.Text = preview.caption
+		}
+		return []entry{msg}
 	default:
 		r := p.saved[n.index]
 		rows := []entry{{"system", n.kind + " · " + n.route}}
@@ -380,19 +388,16 @@ func (p *picker) centerView() tea.View {
 	w, h := max(1, p.width), max(1, p.height)
 	project := p.center.project
 	rows := []string{petalMasthead(w, 0, "control center", petalLabel(project), false, p.background)}
-	p.search.SetWidth(max(1, w-12))
-	if h >= 5 && (p.center.finding || p.search.Value() != "") {
-		rows = append(rows, richBand(p.search.View(), w, petalMuted, p.background, false))
-	}
+	filtering := !p.center.inspect && (p.center.finding || p.search.Value() != "")
 	nodes := p.nodes()
 	index := p.selectedNode(nodes)
 	left := w
 	if p.center.inspect {
 		left = 0
-	} else if w >= 72 {
+	} else if w >= 72 && (!filtering || len(nodes) > 0) {
 		left = w * 60 / 100
 	}
-	if h >= 6 {
+	if h >= 6 || filtering && h >= 3 {
 		title := "threads"
 		if p.center.filter != 0 {
 			title += " · " + centerFilters[p.center.filter]
@@ -408,6 +413,19 @@ func (p *picker) centerView() tea.View {
 			title = name
 		}
 		line := richBand("  "+title, left, petalRose, p.background, true)
+		if filtering {
+			prefix := "  threads  / "
+			if left < 24 {
+				prefix = "  / "
+			}
+			labelWidth := ansi.StringWidth(prefix)
+			p.search.SetWidth(max(1, left-labelWidth-1))
+			input := p.search
+			input.Prompt = ""
+			input.Placeholder = "filter threads"
+			line = richBand(prefix, ansi.StringWidth(prefix), petalRose, p.background, true) + richBand(input.View(), max(0, left-ansi.StringWidth(prefix)), petalText, p.background, false)
+			line = ansi.Truncate(line, left, "")
+		}
 		if left < w {
 			line += richBand(" │ "+name, w-left, petalRose, p.background, true)
 		}
@@ -445,7 +463,7 @@ func (p *picker) centerView() tea.View {
 	detailWidth := max(0, w-left-3)
 	treeRows := headerGap + max(1, len(nodes)-first)
 	spaceBelow := height - treeRows
-	showOrchid := !p.monochrome && left < w && left >= orchidWidth+4 && spaceBelow >= len(orchidRows)+2 && !p.center.finding
+	showOrchid := !p.monochrome && left < w && left >= orchidWidth+4 && spaceBelow >= len(orchidRows)+2 && !filtering
 	orchidTop := treeRows + (spaceBelow-len(orchidRows))/2
 	for y := range height {
 		row := richBand("", left, petalText, p.background, false)
@@ -455,7 +473,7 @@ func (p *picker) centerView() tea.View {
 				row = p.nodeLine(nodes[i], left, i == index)
 			}
 		} else if left > 0 && y == headerGap && len(nodes) == 0 {
-			line := " No matching threads"
+			line := "  no matching threads"
 			if len(p.models) == 0 {
 				line = " Install a Claude or Codex ACP adapter to start."
 			}
@@ -484,6 +502,9 @@ func (p *picker) centerView() tea.View {
 	if !p.center.inspect {
 		if p.center.finding || p.search.Value() != "" {
 			hint = "←→ Cursor  ↑↓ Select  Enter Open  Esc Back"
+			if len(nodes) == 0 {
+				hint = "←→ Cursor  Esc Back"
+			}
 			escape = "Esc Clear"
 		} else if !p.embedded {
 			escape = "Esc Quit"
@@ -493,7 +514,7 @@ func (p *picker) centerView() tea.View {
 	if p.historyError != "" {
 		hint = petalLabel(p.historyError) + " · " + escape
 	} else {
-		hint = styledHint(hint, p.background)
+		hint = styledHint(hint, p.background, w)
 	}
 	rows = appendNavFooter(rows, w, h, hint, p.background)
 	view := tea.NewView(strings.Join(rows, "\n"))

@@ -16,6 +16,7 @@ petal
 
 Petal opens the project control center. Press **Ctrl+N** to start on the default model, or select **new session** to choose one. Returning to a session restores its unsent draft while Petal is running. To choose the account yourself, press **Tab** in the model picker. Petal shows completed replies in a continuous Markdown transcript. A message you send while the agent works steers the current turn when the adapter supports it. Otherwise it becomes a follow-up.
 
+- Use `/attach path/to/image.png` to send an image when the adapter accepts image prompts. In a direct Kitty or Ghostty session, Petal previews PNG, JPEG, and GIF (first frame) attachments and image replies inline. Other terminals and multiplexers show captions. The local transcript index stores captions.
 - Type `/` for Petal commands and commands supplied by the agent.
 - Use **Page Up** to scroll, **F3** to open the full-screen reader, and **Escape** to cancel a running turn.
 - Press **Ctrl+F** in the control center or type `/search` in chat to search this project’s saved messages. Use double quotes for an exact phrase. Press **Enter** to read a match in context and **Esc** to return to results.

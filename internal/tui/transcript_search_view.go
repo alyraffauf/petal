@@ -91,7 +91,7 @@ func (p *picker) transcriptView() tea.View {
 	for len(rows) < bodyEnd {
 		row("", petalText, p.background, false)
 	}
-	rows = appendNavFooter(rows, w, h, styledHint(hint, p.background), p.background)
+	rows = appendNavFooter(rows, w, h, styledHint(hint, p.background, w), p.background)
 	v := tea.NewView(strings.Join(rows, "\n"))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion

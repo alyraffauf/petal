@@ -28,12 +28,14 @@ type planUpdate struct {
 }
 
 type event struct {
+	picture        *previewImage
 	role, text, id string
 	tool           *toolEvent
 	ask            *permission
 	chunk          bool
 }
 type harness struct {
+	graphics             bool
 	replayed             bool
 	activeID             atomic.Pointer[string]
 	promptCaps           acp.PromptCapabilities
@@ -126,9 +128,10 @@ func (h *harness) callback(ctx context.Context, method string, raw json.RawMessa
 		}
 		switch u.SessionUpdate {
 		case "user_message_chunk", "agent_message_chunk", "agent_thought_chunk":
-			if text := contentText(u.Content); text != "" {
-				role := map[string]string{"user_message_chunk": "user", "agent_message_chunk": "assistant", "agent_thought_chunk": "system"}[u.SessionUpdate]
-				emit(event{role: role, text: text, chunk: true, id: u.MessageID})
+			role := map[string]string{"user_message_chunk": "user", "agent_message_chunk": "assistant", "agent_thought_chunk": "system"}[u.SessionUpdate]
+			e := messageEvent(role, u.MessageID, u.Content, h.graphics && role != "system")
+			if e.text != "" {
+				emit(e)
 			}
 		case "plan", "plan_update", "plan_removed":
 			update := planUpdate{}
@@ -310,7 +313,7 @@ func startHarness(ctx context.Context, c routing.Config) *harness {
 	toProxy, clientOut := io.Pipe()
 	toClient, proxyOut := io.Pipe()
 	proxy.ConnectEmbedded(ctx, c, proxyOut, toProxy)
-	h := &harness{lifetime: ctx, events: make(chan tea.Msg, 128), permissions: make(chan struct{}, 1), close: func() { clientOut.Close(); proxyOut.Close() }}
+	h := &harness{graphics: directGraphicsTerminal(), lifetime: ctx, events: make(chan tea.Msg, 128), permissions: make(chan struct{}, 1), close: func() { clientOut.Close(); proxyOut.Close() }}
 	h.conn = acp.NewConnection(h.callback, clientOut, toClient)
 	h.conn.SetLogger(slog.New(slog.DiscardHandler))
 	return h
