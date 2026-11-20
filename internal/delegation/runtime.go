@@ -187,11 +187,16 @@ func (r *Runtime) Wait(ctx context.Context, parentID, cwd, childID string, after
 	// Check durable state even if a different connection owns the running child.
 	poll := time.NewTicker(100 * time.Millisecond)
 	defer poll.Stop()
+	var last *Page
 	for {
 		page, err := r.Read(bounded, parentID, cwd, childID, after)
+		if last != nil && errors.Is(err, context.DeadlineExceeded) && bounded.Err() != nil && ctx.Err() == nil {
+			return *last, nil
+		}
 		if err != nil || len(page.Activities) > 0 || page.Result != nil {
 			return page, err
 		}
+		last = &page
 		select {
 		case <-ctx.Done():
 			return Page{}, ctx.Err()
