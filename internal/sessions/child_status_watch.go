@@ -41,7 +41,7 @@ func (w *ChildStatusWatch) Close() {
 
 // Next takes an initial snapshot after registration, then waits for writes.
 // Only one caller may wait at a time.
-func (w *ChildStatusWatch) Next() (map[ChildBinding]string, error) {
+func (w *ChildStatusWatch) Next() (map[ChildBinding]ChildStatus, error) {
 	if !w.first {
 		if err := w.waitForCommit(); err != nil {
 			return nil, err

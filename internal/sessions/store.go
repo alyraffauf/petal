@@ -21,16 +21,17 @@ type Selection struct {
 }
 
 type Record struct {
-	DelegatedParent  string      `json:"-"`
-	DelegationStatus string      `json:"-"`
-	Parent           string      `json:",omitempty"`
-	Selections       []Selection `json:",omitempty"`
-	ID               string
-	Title            string
-	Model            string
-	Account          string
-	Opened           time.Time
-	Updated          time.Time `json:",omitzero"`
+	DelegatedParent   string      `json:"-"`
+	DelegationStatus  string      `json:"-"`
+	UnreadChildResult bool        `json:"-"`
+	Parent            string      `json:",omitempty"`
+	Selections        []Selection `json:",omitempty"`
+	ID                string
+	Title             string
+	Model             string
+	Account           string
+	Opened            time.Time
+	Updated           time.Time `json:",omitzero"`
 }
 
 func (r Record) LastActivity() time.Time {

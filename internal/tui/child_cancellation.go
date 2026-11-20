@@ -78,7 +78,7 @@ func (p *picker) childCancellationFinished(msg childCancellationResult) {
 
 type childStatusesChanged struct {
 	watch    *sessions.ChildStatusWatch
-	statuses map[sessions.ChildBinding]string
+	statuses map[sessions.ChildBinding]sessions.ChildStatus
 	err      error
 }
 
@@ -86,9 +86,9 @@ func childIsRunning(status string) bool {
 	return status == "running" || status == "cancelling"
 }
 
-func (p *picker) hasRunningChild() bool {
+func (p *picker) hasChangingChildStatus() bool {
 	for _, record := range p.saved {
-		if childIsRunning(record.DelegationStatus) {
+		if childIsRunning(record.DelegationStatus) || record.UnreadChildResult {
 			return true
 		}
 	}
@@ -96,7 +96,7 @@ func (p *picker) hasRunningChild() bool {
 }
 
 func (p *picker) watchChildStatuses() tea.Cmd {
-	if p.center.cwd == "" || !p.hasRunningChild() {
+	if p.center.cwd == "" || !p.hasChangingChildStatus() {
 		return nil
 	}
 	watch, err := sessions.WatchChildStatuses(p.center.cwd)
@@ -134,12 +134,13 @@ func (p *picker) refreshChildStatuses(msg childStatusesChanged) tea.Cmd {
 	for i := range p.saved {
 		record := &p.saved[i]
 		// A cancellation response may already have applied a newer result.
-		if childIsRunning(record.DelegationStatus) {
-			binding := sessions.ChildBinding{ParentID: record.DelegatedParent, ChildID: record.ID}
-			record.DelegationStatus = msg.statuses[binding]
+		binding := sessions.ChildBinding{ParentID: record.DelegatedParent, ChildID: record.ID}
+		if status, ok := msg.statuses[binding]; ok && (childIsRunning(record.DelegationStatus) || status.State == record.DelegationStatus) {
+			record.DelegationStatus = status.State
+			record.UnreadChildResult = status.Unread
 		}
 	}
-	if !p.hasRunningChild() {
+	if !p.hasChangingChildStatus() {
 		p.stopWatchingChildStatuses()
 		return nil
 	}

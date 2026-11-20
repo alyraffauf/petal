@@ -208,6 +208,23 @@ func FinishChild(ctx context.Context, cwd string, binding ChildBinding, result C
 	})
 }
 
+// ConsumeChildResult records delivery of an immutable terminal result to its parent.
+func ConsumeChildResult(ctx context.Context, cwd string, binding ChildBinding) error {
+	return childTransaction(ctx, cwd, func(tx *sql.Tx) error {
+		update, err := tx.ExecContext(ctx, `
+			UPDATE child_bindings SET result_consumed = 1
+			WHERE parent_id = ? AND child_id = ? AND result_status IS NOT NULL`, binding.ParentID, binding.ChildID)
+		if err != nil {
+			return err
+		}
+		count, err := update.RowsAffected()
+		if err == nil && count == 0 {
+			return ErrChildNotFound
+		}
+		return err
+	})
+}
+
 // ReadChildActivity returns activity strictly after the cursor in sequence order.
 // The result and page come from the same snapshot. A zero limit defaults to 100.
 func ReadChildActivity(ctx context.Context, cwd string, binding ChildBinding, after int64, limit int) (ChildActivityPage, error) {
@@ -312,26 +329,32 @@ func loadChildBindings(db *sql.DB, records []Record) error {
 	for binding, status := range statuses {
 		if record := byID[binding.ChildID]; record != nil {
 			record.DelegatedParent = binding.ParentID
-			record.DelegationStatus = status
+			record.DelegationStatus = status.State
+			record.UnreadChildResult = status.Unread
 		}
 	}
 	return err
 }
 
-func childStatuses(ctx context.Context, db *sql.DB) (map[ChildBinding]string, error) {
+type ChildStatus struct {
+	State  string
+	Unread bool
+}
+
+func childStatuses(ctx context.Context, db *sql.DB) (map[ChildBinding]ChildStatus, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT child_id, parent_id, COALESCE(result_status,
-			CASE WHEN cancel_requested = 1 THEN 'cancelling' WHEN lease IS NOT NULL THEN 'running' ELSE '' END)
+			CASE WHEN cancel_requested = 1 THEN 'cancelling' WHEN lease IS NOT NULL THEN 'running' ELSE '' END), result_status IS NOT NULL AND result_consumed = 0
 		FROM child_bindings`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	statuses := make(map[ChildBinding]string)
+	statuses := make(map[ChildBinding]ChildStatus)
 	for rows.Next() {
 		var binding ChildBinding
-		var status string
-		if err := rows.Scan(&binding.ChildID, &binding.ParentID, &status); err != nil {
+		var status ChildStatus
+		if err := rows.Scan(&binding.ChildID, &binding.ParentID, &status.State, &status.Unread); err != nil {
 			return nil, err
 		}
 		statuses[binding] = status
