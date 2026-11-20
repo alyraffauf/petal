@@ -90,6 +90,8 @@ func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
 			m.ask = nil
 			m.restorePermissionDraft()
 			cmd = m.deliver()
+		} else if m.Busy && m.v2 != nil {
+			cmd = m.cancelForegroundV2()
 		} else if m.Busy {
 			m.cancelling = true
 			m.Status = "cancelling"

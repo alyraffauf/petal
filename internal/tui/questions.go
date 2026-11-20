@@ -18,6 +18,7 @@ type permission struct {
 	reply            chan int
 	form             *jsonschema.Schema
 	answer           chan map[string]any
+	v2Update         json.RawMessage
 }
 
 func (q *permission) cancel() {

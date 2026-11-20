@@ -22,6 +22,9 @@ func (m *terminal) deliver() tea.Cmd {
 	}
 	message := m.outbox[0]
 	params := map[string]any{"sessionId": m.h.id, "prompt": message.content}
+	if m.h.v2.Load() {
+		return m.deliverV2(params)
+	}
 	if m.Busy {
 		if !m.canSteer() {
 			return nil

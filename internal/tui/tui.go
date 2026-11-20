@@ -120,6 +120,7 @@ type terminal struct {
 	chatBacklog        backlogViewport
 	chatHits           chatHitTargets
 	pending            turnLog
+	v2                 *conversationV2
 	turnStart          int
 }
 
@@ -164,6 +165,9 @@ func runSession(parent context.Context, start sessionStart, drafts sessionDrafts
 		defer os.Stdout.WriteString("\x1b[?5522l")
 	}
 	err = runChat(m)
+	if m.v2 != nil && m.connection == connected {
+		m.publishV2Transcript(true)
+	}
 	if m.next != nil {
 		drafts.remember(m)
 	}
@@ -193,32 +197,50 @@ type outputBatch struct {
 func (e event) batchable() bool { return e.ask == nil && e.picture == nil }
 
 func (m *terminal) listen() tea.Msg {
+	var disconnected <-chan struct{}
+	if m.h.conn != nil {
+		disconnected = m.h.conn.Done()
+	}
+	var e tea.Msg
 	select {
-	case e := <-m.h.events:
-		first, ok := e.(event)
-		if !ok || !first.batchable() {
-			return e
+	case e = <-m.h.events:
+	default:
+		select {
+		case e = <-m.h.events:
+		case <-disconnected:
+			if m.h.v2.Load() {
+				return disconnectedV2{}
+			}
+			return nil
+		case <-m.ctx.Done():
+			return nil
 		}
-		// Drain only already queued output. A permission or lifecycle notification
-		// after it must be processed before reading any more notifications.
-		batch := outputBatch{events: []event{first}}
-		for len(batch.events) < 128 {
-			select {
-			case next := <-m.h.events:
-				if chunk, ok := next.(event); ok && chunk.batchable() {
-					batch.events = append(batch.events, chunk)
-				} else {
-					batch.next = next
-					return batch
-				}
-			default:
+	}
+	return m.batchOutput(e)
+}
+
+func (m *terminal) batchOutput(e tea.Msg) tea.Msg {
+	first, ok := e.(event)
+	if !ok || !first.batchable() {
+		return e
+	}
+	// Drain only already queued output. A permission or lifecycle notification
+	// after it must be processed before reading any more notifications.
+	batch := outputBatch{events: []event{first}}
+	for len(batch.events) < 128 {
+		select {
+		case next := <-m.h.events:
+			if chunk, ok := next.(event); ok && chunk.batchable() {
+				batch.events = append(batch.events, chunk)
+			} else {
+				batch.next = next
 				return batch
 			}
+		default:
+			return batch
 		}
-		return batch
-	case <-m.ctx.Done():
-		return nil
 	}
+	return batch
 }
 
 type cachedPreview []entry
@@ -389,7 +411,9 @@ func (m *terminal) submit() tea.Cmd {
 }
 
 func (m *terminal) restorePermissionDraft() {
-	if m.connection == connected {
+	if m.v2 != nil && m.connection == connected {
+		m.refreshForegroundV2()
+	} else if m.connection == connected {
 		m.Status = "ready"
 		if m.Busy {
 			m.Status = "working"
@@ -403,6 +427,9 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		visibleBefore := len(m.Messages)
 		for _, e := range batch.events {
 			m.recordOutput(e)
+		}
+		if m.v2 != nil {
+			m.publishV2Transcript(false)
 		}
 		if len(m.Messages) != visibleBefore {
 			m.transcriptRevision++
@@ -531,6 +558,9 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.restorePermissionDraft()
 		}
 		cmd = m.listen
+		if m.v2 != nil {
+			cmd = tea.Batch(cmd, m.deliver())
+		}
 	case settingsUpdate:
 		if t.CurrentModeID != "" {
 			m.agentSettings.CurrentModeID = t.CurrentModeID
@@ -623,8 +653,19 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.connection = connectionFailed
 			m.Messages = append(m.Messages, entry{"system", terminalError(t.err)})
 		} else {
-			m.Messages = m.pending.commit(m.Messages[:m.turnStart])
 			m.connection = connected
+			if m.h != nil && m.h.v2.Load() {
+				m.refreshForegroundV2()
+				m.publishV2Transcript(m.h.replayed)
+				if m.agentCommands == nil {
+					m.agentCommands = m.h.initialCommands
+				}
+				m.agentSettings = m.h.initialSettings
+				m.saveSessionInfo()
+				m.Account = t.account
+				break
+			}
+			m.Messages = m.pending.commit(m.Messages[:m.turnStart])
 			if m.h != nil {
 				replay := m.agents.completedEntries(slices.Clip(m.Messages[m.turnStart:]))
 				m.indexMessages(replay, m.h.replayed && len(m.Messages) > m.turnStart)
@@ -665,6 +706,59 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.Update(done)
 		}
 		cmd = m.deliver()
+	case updateV2:
+		cmd = m.listen
+		conversation := m.conversationV2()
+		if t.SessionUpdate == "state_update" {
+			completed := conversation.foreground.report(t.State)
+			if t.State == "idle" && !conversation.foreground.awaitingStart {
+				m.cancelling = false
+			}
+			if completed && m.connection == connected && t.StopReason != "" && t.StopReason != "end_turn" {
+				m.recordNote("Turn stopped · " + strings.ReplaceAll(t.StopReason, "_", " "))
+			}
+			m.refreshForegroundV2()
+			m.publishV2Transcript(false)
+			if m.connection == connected {
+				cmd = tea.Batch(cmd, m.deliver())
+			}
+		}
+	case promptV2Result:
+		foreground := &m.conversationV2().foreground
+		m.v2.promptWritten = nil
+		foreground.settlePrompt(t.err)
+		if t.err != nil {
+			if foreground.state == "" || foreground.state == "idle" {
+				m.cancelling = false
+			}
+			if !promptCancelledV2(t.err) {
+				m.recordNote(terminalError(t.err))
+			}
+		}
+		m.refreshForegroundV2()
+		m.publishV2Transcript(false)
+		cmd = tea.Batch(m.listen, m.deliver())
+	case cancelV2Result:
+		if m.connection != connected {
+			break
+		}
+		m.v2.cancelSending = false
+		if t.err != nil {
+			m.cancelling = false
+			m.recordNote(terminalError(t.err))
+		}
+		m.refreshForegroundV2()
+		cmd = m.deliver()
+	case disconnectedV2:
+		m.publishV2Transcript(true)
+		m.connection = connectionFailed
+		m.Busy, m.cancelling = false, false
+		m.Status = "disconnected"
+		if m.ask != nil {
+			m.ask = nil
+			m.restorePermissionDraft()
+		}
+		m.recordNote("Agent connection closed.")
 	case finished:
 		if m.steering {
 			m.lateFinish = &t
@@ -756,6 +850,10 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case event:
 		cmd = m.listen
 		if t.ask != nil {
+			if t.ask.v2Update != nil {
+				m.recordV2Update(t.ask.v2Update)
+				m.publishV2Transcript(false)
+			}
 			m.launch = nil
 			m.chatBacklog.browsing = false
 			m.reading = false
@@ -809,13 +907,23 @@ func terminalError(err error) string {
 }
 
 func (m *terminal) recordNote(text string) {
-	if m.connection != connected || m.Busy {
+	if (m.h == nil || !m.h.v2.Load()) && (m.connection != connected || m.Busy) {
 		m.pending.push(event{role: "system", text: text})
 	}
 	m.Messages = append(m.Messages, entry{"system", text})
 }
 
 func (m *terminal) recordOutput(e event) {
+	if e.v2Update != nil {
+		m.recordV2Update(e.v2Update)
+		return
+	}
+	if m.h != nil && m.h.v2.Load() {
+		if e.text != "" {
+			m.Messages = append(m.Messages, entry{e.role, e.text})
+		}
+		return
+	}
 	if e.tool != nil {
 		var done bool
 		e, done = m.toolResult(*e.tool)

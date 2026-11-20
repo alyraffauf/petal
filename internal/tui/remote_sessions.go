@@ -77,6 +77,10 @@ func (h *harness) endSession(ctx context.Context, command, cwd, model string) te
 	if command == "/logout" {
 		method, title = "logout", "Sign out of every connected subscription for "+model+"?"
 		params = nil
+		if h.v2.Load() {
+			method = "auth/logout"
+			params = map[string]string{}
+		}
 	}
 	id, err := h.choose(ctx, title, []option{{"cancel", "Keep session"}, {"confirm", "Confirm"}})
 	if err != nil || id != "confirm" {

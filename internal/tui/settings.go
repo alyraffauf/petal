@@ -220,6 +220,9 @@ func (h *harness) changeSetting(ctx context.Context, target setting, value strin
 		params["modeId"] = value
 	} else {
 		params["configId"], params["value"] = target.ID, value
+		if h.v2.Load() {
+			params["type"] = "id"
+		}
 		if target.Type == "boolean" {
 			params["type"] = "boolean"
 			params["value"] = value == "true"

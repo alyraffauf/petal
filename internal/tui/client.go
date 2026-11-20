@@ -28,6 +28,7 @@ type planUpdate struct {
 }
 
 type event struct {
+	v2Update       json.RawMessage
 	picture        *previewImage
 	role, text, id string
 	tool           *toolEvent
@@ -39,6 +40,11 @@ type harness struct {
 	resumedHistory       []entry
 	graphics             bool
 	replayed             bool
+	v2                   atomic.Bool
+	v2ReplayComplete     atomic.Bool
+	v2ResumeState        atomic.Bool
+	promptWrite          atomic.Pointer[promptWriteV2]
+	initialCommands      agentCommandUpdate
 	activeID             atomic.Pointer[string]
 	promptCaps           acp.PromptCapabilities
 	canDelete, canLogout bool
@@ -62,6 +68,17 @@ func (h *harness) callback(ctx context.Context, method string, raw json.RawMessa
 		select {
 		case h.events <- e:
 		case <-ctx.Done():
+		}
+	}
+	if h.v2.Load() {
+		switch method {
+		case "session/request_permission":
+			return h.permissionV2(ctx, raw)
+		case "session/update":
+			handled, err := h.updateV2(ctx, raw)
+			if handled || err != nil {
+				return nil, err
+			}
 		}
 	}
 	if strings.HasPrefix(method, "fs/") || strings.HasPrefix(method, "terminal/") {
@@ -320,7 +337,7 @@ func startHarness(ctx context.Context, c routing.Config) *harness {
 	updateSlots := make(chan struct{}, 128)
 	proxy.ConnectEmbedded(ctx, c, proxyOut, toProxy, updateSlots)
 	h := &harness{updateSlots: updateSlots, graphics: directGraphicsTerminal(), lifetime: ctx, events: make(chan tea.Msg, 128), permissions: make(chan struct{}, 1), close: func() { clientOut.Close(); proxyOut.Close() }}
-	h.conn = acp.NewConnection(h.callback, clientOut, toClient)
+	h.conn = acp.NewConnection(h.callback, promptWriterV2{clientOut, h}, toClient)
 	h.conn.SetLogger(slog.New(slog.DiscardHandler))
 	return h
 }
@@ -350,15 +367,9 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 			ConfigOptions: &acp.SessionConfigOptionsCapabilities{Boolean: &acp.BooleanConfigOptionCapabilities{}},
 		},
 	}
-	hello, err := acp.SendRequest[acp.InitializeResponse](h.conn, ctx, "initialize", map[string]any{
-		"protocolVersion": 1, "clientInfo": map[string]string{"name": "petal", "version": "0-unstable"},
-		"clientCapabilities": caps,
-	})
+	hello, err := h.initialize(ctx, c.ACPv2, caps)
 	if err != nil {
 		return "", err
-	}
-	if hello.ProtocolVersion != 1 {
-		return "", fmt.Errorf("unsupported ACP protocol version %d", hello.ProtocolVersion)
 	}
 	h.promptCaps = hello.AgentCapabilities.PromptCapabilities
 	h.canDelete = hello.AgentCapabilities.SessionCapabilities.Delete != nil
@@ -366,6 +377,12 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	h.canFork = hello.AgentCapabilities.SessionCapabilities.Fork != nil && (hello.AgentCapabilities.LoadSession || hello.AgentCapabilities.SessionCapabilities.Resume != nil)
 	h.canList = hello.AgentCapabilities.SessionCapabilities.List != nil
 	h.canClose = hello.AgentCapabilities.SessionCapabilities.Close != nil
+	authenticate := "authenticate"
+	if h.v2.Load() {
+		authenticate = "auth/login"
+		h.canLogout = len(hello.AuthMethods) != 0
+	}
+	// The embedded proxy resolves configured MCP credentials and transport capabilities.
 	p := map[string]any{"cwd": cwd, "mcpServers": []any{}}
 	method := "session/new"
 	if resume {
@@ -380,11 +397,14 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 		h.activeID.Store(&root)
 		p["sessionId"] = h.id
 		method = "session/load"
-		if !hello.AgentCapabilities.LoadSession && hello.AgentCapabilities.SessionCapabilities.Resume != nil {
+		if h.v2.Load() {
+			method = "session/resume"
+			p["replayFrom"] = map[string]string{"type": "start"}
+		} else if !hello.AgentCapabilities.LoadSession && hello.AgentCapabilities.SessionCapabilities.Resume != nil {
 			method = "session/resume"
 		}
 	}
-	h.replayed = method == "session/load"
+	h.replayed = method == "session/load" || (resume && h.v2.Load())
 	r, err := acp.SendRequest[proxy.Object](h.conn, ctx, method, p)
 	var authErr *acp.RequestError
 	if errors.As(err, &authErr) && authErr.Code == -32000 {
@@ -434,7 +454,7 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 						return "", ctx.Err()
 					}
 				}
-				if _, err = acp.SendRequest[proxy.Object](h.conn, ctx, "authenticate", map[string]string{"methodId": id}); err == nil {
+				if _, err = acp.SendRequest[proxy.Object](h.conn, ctx, authenticate, map[string]string{"methodId": id}); err == nil {
 					r, err = acp.SendRequest[proxy.Object](h.conn, ctx, method, p)
 				}
 			}
@@ -443,7 +463,12 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	if err != nil {
 		return "", err
 	}
-	if method == "session/resume" {
+	if h.v2.Load() {
+		if resume && (!h.v2ReplayComplete.Load() || !h.v2ResumeState.Load()) {
+			return "", fmt.Errorf("ACP v2 resume ended without replay completion and current state")
+		}
+		_ = json.Unmarshal(r["availableCommands"], &h.initialCommands)
+	} else if method == "session/resume" {
 		// This ACP method reconnects without replaying the transcript.
 		rows, err := sessions.RecentTranscript(ctx, cwd, h.id, -1)
 		if err == nil {
@@ -455,7 +480,7 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	h.initialSettings = settingsFrom(r)
 	var steering struct{ Supported bool }
 	_ = json.Unmarshal(r["petalSteering"], &steering)
-	h.supportsSteering = steering.Supported
+	h.supportsSteering = steering.Supported && !h.v2.Load()
 	if !resume {
 		h.id, err = proxy.SessionID(r)
 		if err != nil {
