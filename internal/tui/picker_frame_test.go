@@ -24,7 +24,7 @@ func TestPickerEditsFuzzyQueryAndRoutesSelectedModel(t *testing.T) {
 	for i := range 25 {
 		models[fmt.Sprintf("model-%02d", i)] = []string{"agent"}
 	}
-	m := newPicker(routing.Config{Accounts: map[string]routing.Account{"work": {Models: models}}})
+	m := newPicker(routing.Config{Accounts: map[string]routing.Account{"work": {Models: models, ModelLabels: map[string]string{"gpt-6.2-sol": "Solar"}}}})
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 7})
 	for range len(models) {
 		m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
@@ -33,6 +33,12 @@ func TestPickerEditsFuzzyQueryAndRoutesSelectedModel(t *testing.T) {
 	if !strings.Contains(frame, "› model-24") || !strings.Contains(frame, "┃") {
 		t.Fatalf("selected row or scrollbar missing:\n%s", frame)
 	}
+	m.Update(tea.PasteMsg{Content: "Solar"})
+	if m.count() != 1 || m.option(0) != "gpt-6.2-sol" || !strings.Contains(ansi.Strip(m.View().Content), "Solar") {
+		t.Fatal("display-name search lost its route")
+	}
+	m.search.Reset()
+	m.filter()
 	m.Update(tea.PasteMsg{Content: "g6s"})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})

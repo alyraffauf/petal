@@ -242,7 +242,7 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	if v.editor != nil && v.connection != connectionFailed {
 		if v.editor.Width() != room {
 			v.editor.SetWidth(room)
-			*v.editor, _ = v.editor.Update(nil) // Reflow content before scrolling to the cursor.
+			v.editor.Model, _ = v.editor.Update(nil) // Reflow content before scrolling to the cursor.
 		}
 		hits.actionInput = v.editor.Value()
 		if hits.actionInput != "" {

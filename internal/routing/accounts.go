@@ -24,7 +24,8 @@ type Account struct {
 	Provider    string
 	Home        string
 	Capacity    *float64
-	SelectModel map[string]bool `toml:"-" json:"-"`
+	ModelLabels map[string]string `toml:"-" json:"-"`
+	SelectModel map[string]bool   `toml:"-" json:"-"`
 	Env         map[string]string
 	Models      map[string][]string
 	Usage       []string

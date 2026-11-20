@@ -43,6 +43,9 @@ func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 	}
+	if t.String() == "ctrl+v" && m.ask == nil {
+		return m.readClipboardImage()
+	}
 	if matches := m.commandMatches(); len(matches) > 0 {
 		index := min(m.commandIndex, len(matches)-1)
 		switch {

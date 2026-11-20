@@ -93,7 +93,18 @@ func (m *picker) filter() {
 	names := m.models
 
 	if query := m.search.Value(); query != "" {
-		m.matches = fuzzy.Find(query, names)
+		keys := slices.Clone(names)
+		if m.setting == nil {
+			for i, id := range names {
+				if label := m.cfg.ModelLabel(id); label != id {
+					keys[i] = label + " " + id
+				}
+			}
+		}
+		m.matches = fuzzy.Find(query, keys)
+		for i := range m.matches {
+			m.matches[i].Str = names[m.matches[i].Index]
+		}
 	} else {
 		m.matches = make(fuzzy.Matches, len(names))
 		for i, name := range names {
@@ -336,7 +347,7 @@ func (m *picker) View() tea.View {
 	m.search.SetWidth(max(1, w-ansi.StringWidth(m.search.Prompt)-1))
 	sub := m.search.View()
 	if m.choosingRoute {
-		title = "route " + m.cfg.Model
+		title = "route " + m.cfg.ModelLabel(m.cfg.Model)
 		sub = "  choose a subscription"
 	}
 	blank := func() string { return richBand("", w, petalText, m.background, false) }
@@ -457,8 +468,11 @@ func (m *picker) resultRow(i, w int) string {
 		}
 	}
 	raw := label
+	if !m.choosingRoute && m.setting == nil {
+		label = m.cfg.ModelLabel(raw)
+	}
 	label = petalLabel(label)
-	if !m.choosingRoute && len(m.matches[i].MatchedIndexes) > 0 && raw == label {
+	if !m.choosingRoute && len(m.matches[i].MatchedIndexes) > 0 {
 		label = highlightMatch(label, m.matches[i].MatchedIndexes)
 	}
 	if m.setting == nil && !m.history && !m.choosingRoute && w >= 48 {

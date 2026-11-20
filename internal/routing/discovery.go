@@ -95,6 +95,7 @@ func discoverAccount(provider, cli, adapter string, a Account) Account {
 	if a.Env == nil {
 		a.Env = map[string]string{}
 	}
+	a.ModelLabels = map[string]string{}
 	a.SelectModel = map[string]bool{}
 	argv := []string{adapter}
 	var ids []string
@@ -103,6 +104,7 @@ func discoverAccount(provider, cli, adapter string, a Account) Account {
 		if cli != "" && a.Env["CLAUDE_CODE_EXECUTABLE"] == "" {
 			a.Env["CLAUDE_CODE_EXECUTABLE"] = cli
 		}
+		a.ModelLabels = claudeLabels(a.Env)
 		ids = []string{"sonnet", "opus", "haiku", "fable"}
 	case "codex":
 		if cli != "" && a.Env["CODEX_PATH"] == "" {
@@ -117,12 +119,16 @@ func discoverAccount(provider, cli, adapter string, a Account) Account {
 			dir = filepath.Join(home, ".codex")
 		}
 		var cache struct {
-			Models []struct{ Slug, Visibility string }
+			Models []struct {
+				Slug, Visibility string
+				DisplayName      string `json:"display_name"`
+			}
 		}
 		if data, err := os.ReadFile(filepath.Join(dir, "models_cache.json")); err == nil && json.Unmarshal(data, &cache) == nil {
 			for _, m := range cache.Models {
 				if m.Visibility == "list" {
 					ids = append(ids, m.Slug)
+					a.ModelLabels[m.Slug] = m.DisplayName
 				}
 			}
 		}

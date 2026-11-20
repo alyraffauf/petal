@@ -30,6 +30,9 @@ func (m *terminal) commandMatches() []chatCommand {
 	if m.h != nil && m.connection == connected {
 		add("/agents", "Find a subagent in the control center")
 		add("/sessions", "Browse sessions, forks, agents, and turns")
+		if m.h.promptCaps.Image {
+			add("/paste-image", "Paste a clipboard image · Ctrl+V")
+		}
 		add("/attach", "Send a file from disk")
 	}
 	if m.h != nil && m.connection == connected && !m.Busy && !m.changingSetting && !m.forking {
@@ -122,6 +125,8 @@ func (m *terminal) runCommand(command chatCommand) tea.Cmd {
 		return m.submit()
 	}
 	switch command.name {
+	case "/paste-image":
+		return m.readClipboardImage()
 	case "/attach":
 		m.editor.SetValue("/attach ")
 		return nil

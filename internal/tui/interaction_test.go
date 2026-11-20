@@ -6,7 +6,7 @@ import (
 
 	"bloomfx.dev/bloom"
 	"bloomfx.dev/bloom/canvas"
-	"charm.land/bubbles/v2/textarea"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -14,7 +14,7 @@ import (
 	"petal/internal/sessions"
 )
 
-func testComposer(text string, column int) *textarea.Model {
+func testComposer(text string, column int) *composer {
 	editor := newComposer()
 	editor.SetValue(text)
 	editor.SetCursorColumn(column)

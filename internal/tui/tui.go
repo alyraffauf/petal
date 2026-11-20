@@ -13,7 +13,7 @@ import (
 	"unicode"
 
 	"bloomfx.dev/bloom"
-	"charm.land/bubbles/v2/textarea"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
@@ -49,7 +49,7 @@ type screen struct {
 	backlog                     *backlogViewport
 	markdown                    *markdownCache
 	Width, Height, Frame        int
-	editor                      *textarea.Model
+	editor                      *composer
 	Model, Account, Cwd, Status string
 	Messages                    []entry
 	Busy                        bool
@@ -76,6 +76,7 @@ func nextFrame() tea.Cmd {
 }
 
 type terminal struct {
+	clipboard             clipboardRead
 	limitedColor          bool
 	imageBase             int
 	monochrome            bool
@@ -88,7 +89,7 @@ type terminal struct {
 	outbox                []promptMessage
 	steering, waitForTurn bool
 	lateFinish            *finished
-	permissionDraft       *textarea.Model
+	permissionDraft       *composer
 	launch                *picker
 	next                  *sessionStart
 	tools                 map[string]toolEvent
@@ -117,7 +118,7 @@ type sessionStart struct {
 	id     string
 	cfg    routing.Config
 	resume bool
-	editor *textarea.Model
+	editor *composer
 }
 
 func Run(parent context.Context, c routing.Config, resume bool) error {
@@ -150,6 +151,9 @@ func runSession(parent context.Context, start sessionStart, drafts sessionDrafts
 	m.draftSessionID = start.id
 	m.editor = drafts.take(cwd, start)
 	m.markdown = &markdownCache{}
+	if directGraphicsTerminal() {
+		defer os.Stdout.WriteString("\x1b[?5522l")
+	}
 	_, err = tea.NewProgram(m).Run()
 	if m.next != nil {
 		drafts.remember(m)
@@ -181,7 +185,11 @@ func (m *terminal) listen() tea.Msg {
 	}
 }
 func (m *terminal) Init() tea.Cmd {
-	return tea.Batch(m.root.Init(), m.listen, func() tea.Msg {
+	var pasteMode tea.Cmd
+	if directGraphicsTerminal() {
+		pasteMode = tea.Raw("\x1b[?5522h")
+	}
+	return tea.Batch(pasteMode, m.root.Init(), m.listen, func() tea.Msg {
 		a, e := m.h.open(m.ctx, m.cfg, m.Cwd, m.resume)
 		select {
 		case m.h.events <- opened{a, e}:
@@ -250,6 +258,10 @@ func (m *terminal) submit() tea.Cmd {
 	if text == "" || m.connection != connected || m.forking {
 		return nil
 	}
+	if m.clipboard.id != "" && m.clipboard.editor == m.editor {
+		m.recordNote("Waiting for clipboard data. Press Enter again after the paste finishes.")
+		return nil
+	}
 	input := text
 	if escaped, ok := strings.CutPrefix(text, "/agent:"); ok {
 		name, _, _ := strings.Cut(escaped, " ")
@@ -261,7 +273,9 @@ func (m *terminal) submit() tea.Cmd {
 		}
 	}
 	message := promptMessage{text: input, content: []map[string]any{{"type": "text", "text": input}}}
-	if path, ok := strings.CutPrefix(text, "/attach "); ok && m.h != nil {
+	if m.editor.image != nil && strings.Contains(input, imageMarker) {
+		message = m.editor.imageMessage(input)
+	} else if path, ok := strings.CutPrefix(text, "/attach "); ok && m.h != nil {
 		loaded, err := attachment(m.Cwd, strings.TrimSpace(path), m.h.promptCaps)
 		if err != nil {
 			m.recordNote(terminalError(err))
@@ -283,9 +297,15 @@ func (m *terminal) submit() tea.Cmd {
 		}
 	}
 	var upload tea.Cmd
-	if m.h.graphics && !m.monochrome && len(message.content) == 1 && message.content[0]["type"] == "image" {
-		data, _ := message.content[0]["data"].(string)
-		message.text, upload = m.registerPreview(message.text, decodePreview(data))
+	if m.h.graphics && !m.monochrome {
+		for _, block := range message.content {
+			if block["type"] != "image" {
+				continue
+			}
+			data, _ := block["data"].(string)
+			message.text, upload = m.registerPreview(message.text, decodePreview(data))
+			break
+		}
 	}
 	m.outbox = append(m.outbox, message)
 	return tea.Batch(upload, m.deliver())
@@ -302,6 +322,9 @@ func (m *terminal) restorePermissionDraft() {
 }
 
 func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if handled, cmd := m.clipboardEvent(msg); handled {
+		return m, cmd
+	}
 	if profile, ok := msg.(tea.ColorProfileMsg); ok {
 		m.monochrome = profile.Profile <= colorprofile.ASCII
 		m.limitedColor = profile.Profile < colorprofile.TrueColor

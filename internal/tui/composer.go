@@ -9,13 +9,22 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+type composer struct {
+	textarea.Model
+	image map[string]any
+}
+
+const imageMarker = "[pasted image]"
+
+func (c *composer) Reset() { c.Model.Reset(); c.image = nil }
+
 type sessionDraftKey struct {
 	cwd, id string // The public session ID includes the account and model.
 }
 
-type sessionDrafts map[sessionDraftKey]*textarea.Model
+type sessionDrafts map[sessionDraftKey]*composer
 
-func (drafts sessionDrafts) take(cwd string, start sessionStart) *textarea.Model {
+func (drafts sessionDrafts) take(cwd string, start sessionStart) *composer {
 	if start.resume && start.id != "" {
 		key := sessionDraftKey{cwd, start.id}
 		editor := drafts[key]
@@ -43,7 +52,7 @@ func (drafts sessionDrafts) remember(m *terminal) {
 	}
 }
 
-func newComposer() *textarea.Model {
+func newComposer() *composer {
 	editor := textarea.New()
 	editor.Prompt = ""
 	editor.ShowLineNumbers = false
@@ -59,12 +68,15 @@ func newComposer() *textarea.Model {
 	editor.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter"))
 	editor.KeyMap.Paste.SetEnabled(false) // Terminal bracketed pastes arrive as tea.PasteMsg.
 	editor.Focus()
-	return &editor
+	return &composer{Model: editor}
 }
 
 func (m *terminal) edit(msg tea.Msg) tea.Cmd {
 	updated, cmd := m.editor.Update(msg)
-	*m.editor = updated
+	m.editor.Model = updated
+	if !strings.Contains(m.editor.Value(), imageMarker) {
+		m.editor.image = nil
+	}
 	return cmd
 }
 

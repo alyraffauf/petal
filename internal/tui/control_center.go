@@ -66,7 +66,7 @@ func (p *picker) nodes() []controlNode {
 			}
 		}
 		for _, model := range quick {
-			all = append(all, controlNode{id: "model/" + model, parent: "new", title: model, kind: "Model", state: "start"})
+			all = append(all, controlNode{id: "model/" + model, parent: "new", title: petalLabel(p.cfg.ModelLabel(model)), kind: "Model", state: "start"})
 		}
 	}
 	for i, r := range p.saved {
@@ -148,7 +148,7 @@ func (p *picker) nodes() []controlNode {
 		}
 		seen[n.id] = true
 		n.depth, n.branch = depth, len(kids[n.id]) > 0 || n.kind == "Turns"
-		if (p.center.filter == 0 || nodeStatus(n) == centerFilters[p.center.filter]) && (query == "" || strings.Contains(strings.ToLower(n.title+" "+n.kind+" "+n.state+" "+n.route), query)) {
+		if (p.center.filter == 0 || nodeStatus(n) == centerFilters[p.center.filter]) && (query == "" || (n.kind == "Model" && strings.Contains(strings.ToLower(strings.TrimPrefix(n.id, "model/")), query)) || strings.Contains(strings.ToLower(n.title+" "+n.kind+" "+n.state+" "+n.route), query)) {
 			result = append(result, n)
 		}
 		if p.center.filter == 0 && query == "" && p.center.folded[n.id] {
@@ -281,7 +281,7 @@ func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 		switch n.kind {
 		case "Model":
-			p.cfg.Model = n.title
+			p.cfg.Model = strings.TrimPrefix(n.id, "model/")
 			p.id = ""
 			p.resume = false
 			p.chosen = true
@@ -338,7 +338,7 @@ func (p *picker) centerDetails(n controlNode) []entry {
 		if m != nil && m.Busy {
 			return []entry{{"system", "Finish the active turn to start another session."}}
 		}
-		return []entry{{"system", "Enter · Choose a model"}, {"system", "Ctrl+N · Start with `" + p.cfg.DefaultModel() + "`"}}
+		return []entry{{"system", "Enter · Choose a model"}, {"system", "Ctrl+N · Start with `" + p.cfg.ModelLabel(p.cfg.DefaultModel()) + "`"}}
 	case "Subagent":
 		rows := []entry{{"system", "Subagent · " + m.Model + " / " + m.Account}}
 		c := m.agents.children[n.index]
