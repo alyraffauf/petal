@@ -63,8 +63,18 @@ func (c *clipboardInput) Read(out []byte) (int, error) {
 	// Keeping it here until then also lets a split OSC introducer stay intact.
 	if c.prefix == 1 && !c.sentEscape {
 		fd := []unix.PollFd{{Fd: int32(c.Fd()), Events: unix.POLLIN}}
-		ready, pollErr := unix.Poll(fd, int(uv.DefaultEscTimeout/time.Millisecond))
-		if ready == 0 || (pollErr != nil && pollErr != unix.EINTR) {
+		// A signal can interrupt poll while no further key is coming.
+		// Retry until the original Escape deadline to avoid blocking in Read.
+		deadline := time.Now().Add(uv.DefaultEscTimeout)
+		var ready int
+		var pollErr error
+		for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
+			ready, pollErr = unix.Poll(fd, int((remaining+time.Millisecond-1)/time.Millisecond))
+			if pollErr != unix.EINTR {
+				break
+			}
+		}
+		if ready <= 0 || pollErr != nil {
 			framed = c.mark(framed, tea.KeyPressMsg{Code: tea.KeyEscape})
 			c.sentEscape = true
 		}
