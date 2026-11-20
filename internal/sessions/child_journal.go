@@ -320,12 +320,12 @@ func childTransaction(ctx context.Context, cwd string, run func(*sql.Tx) error) 
 
 // loadChildBindings projects ownership and status for the session picker without
 // reading the activity or result payloads.
-func loadChildBindings(db *sql.DB, records []Record) error {
+func loadChildBindings(db *sql.DB, cwd string, records []Record) error {
 	byID := make(map[string]*Record, len(records))
 	for i := range records {
 		byID[records[i].ID] = &records[i]
 	}
-	statuses, err := childStatuses(context.Background(), db)
+	statuses, err := childStatuses(context.Background(), db, cwd)
 	for binding, status := range statuses {
 		if record := byID[binding.ChildID]; record != nil {
 			record.DelegatedParent = binding.ParentID
@@ -341,8 +341,35 @@ type ChildStatus struct {
 	Unread bool
 }
 
-func childStatuses(ctx context.Context, db *sql.DB) (map[ChildBinding]ChildStatus, error) {
-	rows, err := db.QueryContext(ctx, `
+func childStatuses(ctx context.Context, db *sql.DB, cwd string) (map[ChildBinding]ChildStatus, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	leases, err := tx.QueryContext(ctx, "SELECT parent_id, child_id FROM child_bindings WHERE lease IS NOT NULL AND result_status IS NULL")
+	if err != nil {
+		return nil, err
+	}
+	var active []ChildBinding
+	for leases.Next() {
+		var binding ChildBinding
+		if err := leases.Scan(&binding.ParentID, &binding.ChildID); err != nil {
+			leases.Close()
+			return nil, err
+		}
+		active = append(active, binding)
+	}
+	leases.Close()
+	if err := leases.Err(); err != nil {
+		return nil, err
+	}
+	for _, binding := range active {
+		if err := recoverInterruptedChild(ctx, tx, cwd, binding); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `
 		SELECT child_id, parent_id, COALESCE(result_status,
 			CASE WHEN cancel_requested = 1 THEN 'cancelling' WHEN lease IS NOT NULL THEN 'running' ELSE '' END), result_status IS NOT NULL AND result_consumed = 0
 		FROM child_bindings`)
@@ -359,5 +386,8 @@ func childStatuses(ctx context.Context, db *sql.DB) (map[ChildBinding]ChildStatu
 		}
 		statuses[binding] = status
 	}
-	return statuses, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return statuses, tx.Commit()
 }

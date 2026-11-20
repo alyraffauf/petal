@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -15,6 +16,7 @@ type ChildStatusWatch struct {
 	files  *fsnotify.Watcher
 	cwd    string
 	first  bool
+	active bool
 }
 
 func WatchChildStatuses(cwd string) (*ChildStatusWatch, error) {
@@ -31,7 +33,7 @@ func WatchChildStatuses(cwd string) (*ChildStatusWatch, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &ChildStatusWatch{ctx, cancel, files, cwd, true}, nil
+	return &ChildStatusWatch{ctx: ctx, cancel: cancel, files: files, cwd: cwd, first: true}, nil
 }
 
 func (w *ChildStatusWatch) Close() {
@@ -53,12 +55,29 @@ func (w *ChildStatusWatch) Next() (map[ChildBinding]ChildStatus, error) {
 		return nil, err
 	}
 	defer db.Close()
-	return childStatuses(w.ctx, db)
+	statuses, err := childStatuses(w.ctx, db, w.cwd)
+	w.active = false
+	for _, status := range statuses {
+		if status.State == "running" || status.State == "cancelling" {
+			w.active = true
+			break
+		}
+	}
+	return statuses, err
 }
 
 func (w *ChildStatusWatch) waitForCommit() error {
+	// A process exit releases its file lock without writing to SQLite.
+	var leaseCheck <-chan time.Time
+	if w.active {
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		leaseCheck = timer.C
+	}
 	for {
 		select {
+		case <-leaseCheck:
+			return nil
 		case <-w.ctx.Done():
 			return w.ctx.Err()
 		case err, ok := <-w.files.Errors:
