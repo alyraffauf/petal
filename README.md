@@ -3,9 +3,13 @@
 	<h1>Petal</h1>
 </div>
 
-Petal is a meta-harness that load balances new coding sessions across your Claude Code and Codex subscriptions. Pick a model. Petal checks the accounts that offer it and chooses the one with the most estimated quota left, weighted by subscription size. Each conversation stays on its account when you resume it. You can also pick the account yourself.
+Petal is a meta-harness that implements both the client and server sides of the Agent Client Protocol. Petal provides a beautiful TUI client, an agent server that can be integrated into your preferred Agent Development Environments, and a load balancer capable of maximizing usage across multiple Claude or Codex subscriptions.
 
-Run `petal` for the terminal UI or `petal acp` to use the same load balancer from Zed or another Agent Client Protocol (ACP) client.
+Open Petal, pick a model. Petal checks the accounts that offer it and chooses the one with the most estimated quota left, weighted by subscription size. Each conversation stays on its account when you resume it. You can also pick the account yourself.
+
+Petal is not a harness. Models run in their native, first-pary harnesses and are controlled via standard, supported APIs, so there's no ToS violation for using it.
+
+Run `petal` for the terminal UI or `petal acp` to use the same load balancer from Zed or any other Agent Client Protocol (ACP) client.
 
 ![Petal control center showing a thread, its subagents, and the selected subagent's activity](docs/screenshots/control-center.png)
 
