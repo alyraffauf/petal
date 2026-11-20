@@ -1,30 +1,28 @@
-<img src="docs/petal.svg" width="96" height="96" alt="Petal’s pixel orchid">
+<div align="center">
+	<img src="docs/petal.svg" width="128" height="128" alt="Petal's pixel orchid">
+	<h1>Petal</h1>
+</div>
 
-# Petal
+Petal is a meta-harness that load balances new coding sessions across your Claude Code and Codex subscriptions. Pick a model. Petal checks the accounts that offer it and chooses the one with the most estimated quota left, weighted by subscription size. Each conversation stays on its account when you resume it. You can also pick the account yourself.
 
-Petal is a terminal client for Claude Code and Codex. Pick a model and Petal starts the conversation on the subscription with the most estimated quota left. The thread stays on that account when you resume it. Zed can use the same router through the Agent Client Protocol (ACP).
+Run `petal` for the terminal UI or `petal acp` to use the same load balancer from Zed or another Agent Client Protocol (ACP) client.
 
-## Start a conversation
+## Start a session
 
-Sign in with `claude` or `codex login`. From the Petal checkout, run:
+1. Install the Claude Code or Codex CLI. Sign in with `claude` or `codex login`.
+2. From the Petal checkout, run `nix profile install .#petal`. The package includes both ACP adapters.
+3. Run `petal` in your project directory. Select **new session**, choose a model, and send a prompt.
 
-```sh
-nix profile install .#petal
-cd /path/to/your/project
-petal
-```
+Petal discovers the default profiles. If you have separate work and personal logins, [configure your subscriptions](docs/configuration.md#route-across-subscriptions).
 
-Petal opens the project control center. Press **Ctrl+N** to start on the default model, or select **new session** to choose one. Returning to a session restores its unsent draft while Petal is running. To choose the account yourself, press **Tab** in the model picker. Petal shows completed replies in a continuous Markdown transcript. A message you send while the agent works steers the current turn when the adapter supports it. Otherwise it becomes a follow-up.
+To build without Nix, run `go build -o petal .` with Go 1.27.3 or later. Install `claude-agent-acp` or `codex-acp` on your path alongside the corresponding CLI.
 
-- Paste a copied image into the composer in a terminal that supports clipboard paste events, including over SSH. Add a caption beside `[pasted image]` and press **Enter** to send. **Ctrl+V** or `/paste-image` explicitly requests an image from the terminal clipboard. Petal accepts one image up to 7 MiB per draft.
-- Use `/attach path/to/image.png` to send an image when the adapter accepts image prompts. In a direct Kitty or Ghostty session, Petal previews PNG, JPEG, and GIF (first frame) attachments and image replies inline. Other terminals and multiplexers show captions. The local transcript index stores captions.
-- Type `/` for Petal commands and commands supplied by the agent.
-- Use **Page Up** to scroll, **F3** to open the full-screen reader, and **Escape** to cancel a running turn.
-- Press **Ctrl+F** in the control center or type `/search` in chat to search this project’s saved messages. Use double quotes for an exact phrase. Press **Enter** to read a match in context and **Esc** to return to results.
-- Press **F2** or type `/sessions` for the control center. Type to search by title, model or account. **Shift+Tab** filters by status. Open **conversation turns** to jump to a prompt in the active thread. Start with `petal --resume` to select the most recent saved thread.
-- Use `/fork` to branch on adapters that can reopen forks, and `/parent` to return.
-- Press **F4** or type `/agents` to focus a subagent in the same tree. Use **Left/Right** to fold branches and **Tab** for full-screen details. **Ctrl+G** opens the agent graph. Select a connection and press **Enter** to follow it. **Escape** restores the tree as you left it. Press **r** to reveal the focused agent in Threads.
+## Use Petal
 
-The Nix package includes the ACP adapters. For a standalone build, use Go 1.27.3 or later, run `go build -o petal .`, and put `claude-agent-acp` or `codex-acp` on your path alongside its provider CLI.
+- [Navigate conversations, search transcripts, and send images](docs/terminal.md)
+- [Connect Zed or another ACP client](docs/editors.md)
+- [Run a custom ACP server, including OpenCode](docs/configuration.md#run-a-custom-acp-server)
+- [Configure Petal with Home Manager](docs/configuration.md#install-with-home-manager)
+- [Check ACP capabilities and test coverage](docs/acp.md)
 
-[Configure subscriptions and Zed](docs/configuration.md) · [ACP support and verification](docs/acp.md) · [MIT license](LICENSE)
+[MIT license](LICENSE)
