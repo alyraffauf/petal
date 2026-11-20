@@ -362,7 +362,17 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 		if json.Unmarshal(result, &fork) != nil || !hasString(fork, "sessionId") {
 			return nil, fmt.Errorf("adapter did not return forked sessionId")
 		}
-		fork["sessionId"] = encoded(p.publicID(name, stringField(fork, "sessionId")))
+		id := stringField(fork, "sessionId")
+		if id == "" {
+			return nil, fmt.Errorf("empty forked sessionId")
+		}
+		routed := p.publicID(name, id)
+		if endpoint != nil {
+			if err := p.bindDelegation(endpoint, name, routed); err != nil {
+				return nil, err
+			}
+		}
+		fork["sessionId"] = encoded(routed)
 		return fork, nil
 	}
 	if method != "session/new" {

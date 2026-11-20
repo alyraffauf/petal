@@ -10,7 +10,7 @@ Set the top-level option in the Petal configuration used by the ACP proxy.
 delegation = true
 ```
 
-Delegation defaults to off. The parent adapter must support stdio MCP servers. Petal reserves the server name `petal-delegation` while delegation is enabled. Petal sets the parent session and working directory when it binds the MCP server. The tools accept neither a parent session ID nor a working directory.
+Delegation defaults to off. The parent adapter must support stdio MCP servers. Petal reserves the server name `petal-delegation` while delegation is enabled. Petal sets the parent session and working directory when it binds the MCP server. The relay authenticates to a private socket with a per-session credential. Treat adapters running under your OS account as trusted processes. The tools accept neither a parent session ID nor a working directory.
 
 ## Tool calls
 

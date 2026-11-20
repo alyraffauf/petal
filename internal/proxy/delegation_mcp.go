@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,8 @@ import (
 	"petal/internal/routing"
 	"petal/internal/sessions"
 )
+
+const delegationTokenEnv = "PETAL_DELEGATION_TOKEN"
 
 const delegationServerName = routing.DelegationMCPServerName
 
@@ -54,9 +58,10 @@ func newDelegationEndpoint(lifetime context.Context, cwd string, tools delegatio
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(lifetime)
+	token := rand.Text()
 	endpoint := &delegationEndpoint{
 		cancel: cancel, ready: make(chan struct{}), cwd: cwd,
-		server: routing.MCPServer{Name: delegationServerName, Command: command, Args: []string{"delegation-mcp", socket}},
+		server: routing.MCPServer{Name: delegationServerName, Command: command, Args: []string{"delegation-mcp", socket}, Env: []routing.MCPEnvVariable{{Name: delegationTokenEnv, Value: token}}},
 	}
 	context.AfterFunc(ctx, func() {
 		_ = listener.Close()
@@ -68,7 +73,16 @@ func newDelegationEndpoint(lifetime context.Context, cwd string, tools delegatio
 			if err != nil {
 				return
 			}
-			go endpoint.serve(ctx, conn, tools)
+			go func() {
+				defer conn.Close()
+				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+				proof := make([]byte, len(token))
+				if _, err := io.ReadFull(conn, proof); err != nil || subtle.ConstantTimeCompare(proof, []byte(token)) != 1 {
+					return
+				}
+				_ = conn.SetReadDeadline(time.Time{})
+				endpoint.serve(ctx, conn, tools)
+			}()
 		}
 	}()
 	return endpoint, nil
@@ -77,6 +91,13 @@ func newDelegationEndpoint(lifetime context.Context, cwd string, tools delegatio
 // RelayDelegationMCP is the stdio subprocess entry point. All authority stays
 // with the proxy listening on the private socket.
 func RelayDelegationMCP(ctx context.Context, socket string, in io.Reader, out io.Writer) error {
+	return relayDelegationMCP(ctx, socket, os.Getenv(delegationTokenEnv), in, out)
+}
+
+func relayDelegationMCP(ctx context.Context, socket, token string, in io.Reader, out io.Writer) error {
+	if token == "" {
+		return errors.New("missing delegation credential")
+	}
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	if err != nil {
 		return err
@@ -84,6 +105,9 @@ func RelayDelegationMCP(ctx context.Context, socket string, in io.Reader, out io
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
+	if _, err := io.WriteString(conn, token); err != nil {
+		return err
+	}
 	go func() {
 		_, _ = io.Copy(conn, in)
 		_ = conn.(*net.UnixConn).CloseWrite()
@@ -93,7 +117,7 @@ func RelayDelegationMCP(ctx context.Context, socket string, in io.Reader, out io
 }
 
 func (p *proxy) prepareDelegation(lifetime context.Context, params Object, method, parent string, supportsStdio bool) (*delegationEndpoint, []routing.MCPServer, error) {
-	if p.delegation == nil || (method != "session/new" && method != "session/load" && method != "session/resume") {
+	if p.delegation == nil || (method != "session/new" && method != "session/load" && method != "session/resume" && method != "session/fork") {
 		return nil, p.MCPServers, nil
 	}
 	if !supportsStdio {

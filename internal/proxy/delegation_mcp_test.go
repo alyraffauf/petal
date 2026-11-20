@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -49,11 +50,11 @@ func TestDelegationAdapterFixture(t *testing.T) {
 				t.Fatal(err)
 			}
 			if version == 2 {
-				reply(json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"mcp":{"stdio":{}}}}}`))
+				reply(json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"fork":{},"mcp":{"stdio":{}}}}}`))
 			} else {
-				reply(json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":false},"sessionCapabilities":{"close":{}}}}`))
+				reply(json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":false},"sessionCapabilities":{"close":{},"fork":{}}}}`))
 			}
-		case "session/new", "session/load", "session/resume":
+		case "session/new", "session/load", "session/resume", "session/fork":
 			if role == "child" && method == "session/new" {
 				if string(params["mcpServers"]) != "[]" || !filepath.IsAbs(stringField(params, "cwd")) {
 					t.Fatalf("child inherited MCP servers or lost its cwd: %s", jsonValue(params))
@@ -61,7 +62,7 @@ func TestDelegationAdapterFixture(t *testing.T) {
 				reply(Object{"sessionId": encoded("child")})
 				continue
 			}
-			if method == "session/new" {
+			if method == "session/new" || method == "session/fork" {
 				nextID++
 				reply(Object{"sessionId": encoded("parent-" + strconv.Itoa(nextID)), "fixtureMCP": params["mcpServers"]})
 			} else {
@@ -133,16 +134,17 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			editor.send(init)
 			editor.read()
 			first := request(editor, "session/new", "")
-			second := request(editor, "session/new", "")
 			parent := stringField(first, "sessionId")
+			second := request(editor, "session/fork", parent)
 			open := func(result Object) proxyWireTest {
 				t.Helper()
 				var servers []Object
 				if err := json.Unmarshal(result["fixtureMCP"], &servers); err != nil || len(servers) != 1 {
 					t.Fatalf("expected just the Petal MCP server: %s", result["fixtureMCP"])
 				}
-				if version == 1 && string(servers[0]["env"]) != "[]" {
-					t.Fatalf("stdio MCP requires an env array: %s", servers[0]["env"])
+				var env []routing.MCPEnvVariable
+				if json.Unmarshal(servers[0]["env"], &env) != nil || len(env) != 1 || env[0].Name != delegationTokenEnv || env[0].Value == "" {
+					t.Fatal("missing bridge credential")
 				}
 				server := servers[0]
 				if stringField(server, "name") != delegationServerName || !filepath.IsAbs(stringField(server, "command")) || (version == 2 && stringField(server, "type") != "stdio") {
@@ -159,7 +161,7 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				}
 				go func() {
 					defer relay.Close()
-					_ = RelayDelegationMCP(t.Context(), args[1], relay, relay)
+					_ = relayDelegationMCP(t.Context(), args[1], env[0].Value, relay, relay)
 				}()
 				wire := proxyWireTest{t, bufio.NewScanner(client), json.NewEncoder(client)}
 				wire.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
@@ -213,5 +215,26 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				t.Fatalf("resumed child received delegation tools: %s", result["fixtureMCP"])
 			}
 		})
+	}
+}
+
+func TestDelegationSocketRejectsMissingCredential(t *testing.T) {
+	endpoint, err := newDelegationEndpoint(t.Context(), t.TempDir(), delegationTools{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer endpoint.cancel()
+	conn, err := net.Dial("unix", endpoint.server.Args[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	if _, err := io.WriteString(conn, strings.Repeat("x", len(endpoint.server.Env[0].Value))); err != nil {
+		t.Fatal(err)
+	}
+	var buf [1]byte
+	if _, err := conn.Read(buf[:]); err != io.EOF {
+		t.Fatalf("unauthorized socket read: %v", err)
 	}
 }

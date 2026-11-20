@@ -300,7 +300,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	if session == nil {
 		session = Object{}
 	}
-	if method == "session/new" || session["sessionId"] != nil {
+	if method == "session/new" || method == "session/fork" || session["sessionId"] != nil {
 		native, err = SessionID(session)
 		if err != nil {
 			return nil, err

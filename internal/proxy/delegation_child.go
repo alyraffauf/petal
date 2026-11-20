@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	"time"
 
@@ -54,9 +56,12 @@ func (p *proxy) openDelegatedChild(ctx context.Context, model string, receive de
 	if len(config.Accounts) == 0 {
 		return nil, fmt.Errorf("no configured account offers model %q", model)
 	}
-	name, err := config.Choose(ctx)
-	if err != nil {
-		return nil, err
+	names := slices.Sorted(maps.Keys(config.Accounts))
+	name := names[0]
+	if len(names) > 1 {
+		if chosen, err := config.Choose(ctx); err == nil {
+			name = chosen
+		}
 	}
 	host := &proxy{Config: config, lifetime: ctx, embedded: p.embedded}
 
