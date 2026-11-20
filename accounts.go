@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/pelletier/go-toml/v2"
 	"math"
@@ -90,22 +91,32 @@ type config struct {
 	hints         []string
 }
 
-func readConfig(args []string) (config, error) {
-	var c config
-	if len(args) < 2 || len(args) > 3 {
-		return c, fmt.Errorf("usage: petal CONFIG.toml MODEL [ACCOUNT]")
+func loadConfig(path, model, accountName string) (config, error) {
+	c := config{model: model, forced: accountName}
+	optional := path == ""
+	if optional {
+		defaultPath, err := xdg("CONFIG", "config.toml")
+		if err != nil {
+			return c, err
+		}
+		path = defaultPath
 	}
-	data, err := os.ReadFile(args[0])
-	if err != nil {
+	data, err := os.ReadFile(path)
+	switch {
+	case optional && errors.Is(err, os.ErrNotExist):
+		// Discovery also runs without a configuration file.
+	case err != nil:
 		return c, err
-	}
-	if filepath.Ext(args[0]) == ".json" {
-		err = json.Unmarshal(data, &c)
-	} else {
-		err = toml.Unmarshal(data, &c)
-	}
-	if err != nil {
-		return c, err
+	default:
+		// Decode provider model IDs and environment keys with their original case.
+		if filepath.Ext(path) == ".json" {
+			err = json.Unmarshal(data, &c)
+		} else {
+			err = toml.Unmarshal(data, &c)
+		}
+		if err != nil {
+			return c, fmt.Errorf("%s: %w", path, err)
+		}
 	}
 	if c.BusyInput != "" && c.BusyInput != "steer" && c.BusyInput != "follow_up" {
 		return c, fmt.Errorf("busy_input must be steer or follow_up")
@@ -118,17 +129,13 @@ func readConfig(args []string) (config, error) {
 		}
 	}
 	for name, a := range c.Accounts {
-		if err := a.configureHome(filepath.Dir(args[0])); err != nil {
+		if err := a.configureHome(filepath.Dir(path)); err != nil {
 			return c, fmt.Errorf("accounts.%s: %w", name, err)
 		}
 		c.Accounts[name] = a
 		if size := a.capacity(); size <= 0 || math.IsNaN(size) || math.IsInf(size, 0) {
 			return c, fmt.Errorf("accounts.%s.capacity must be a positive finite number", name)
 		}
-	}
-	c.model = args[1]
-	if len(args) == 3 {
-		c.forced = args[2]
 	}
 	c.discover()
 	if c.model == "" {

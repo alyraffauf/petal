@@ -75,7 +75,14 @@ func petal(v screen) string {
 		header = 2
 	}
 	route := strings.Trim(petalLabel(v.Model)+" / "+petalLabel(v.Account), " /")
-	rows := petalMasthead(w, header, v.Frame, route, petalLabel(v.Status))
+	status := petalLabel(v.Status)
+	switch v.connection {
+	case connecting:
+		status = "Connecting"
+	case connectionFailed:
+		status = "Connection failed"
+	}
+	rows := petalMasthead(w, header, v.Frame, route, status)
 	gutter := min(3, w/4)
 	col := max(1, w-gutter-2)
 	menuHeight := min(len(v.commands), max(0, h-header-footer-1))
@@ -121,11 +128,11 @@ func petal(v screen) string {
 	fg := petalMuted
 	action := " ↵ Send "
 	switch {
-	case v.Status == "Connection failed":
+	case v.connection == connectionFailed:
 		input, action = "Enter retry   Tab subscription", ""
 	case v.busyAction != "" && len(v.commands) == 0:
 		action = " ↵ " + v.busyAction + " "
-	case v.Status == "Connecting" || v.Busy:
+	case v.connection == connecting || v.Busy:
 		action = ""
 	case len(v.commands) > 0:
 		action = " ↵ Run "
@@ -135,7 +142,7 @@ func petal(v screen) string {
 		aw = ansi.StringWidth(action)
 	}
 	room := max(1, w-aw-4)
-	if v.editor != nil && v.Status != "Connection failed" {
+	if v.editor != nil && v.connection != connectionFailed {
 		if v.editor.Width() != room {
 			v.editor.SetWidth(room)
 			*v.editor, _ = v.editor.Update(nil) // Reflow content before scrolling to the cursor.

@@ -27,7 +27,7 @@ func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
 		}
 		return cmd
 	}
-	if m.Status == "Connection failed" {
+	if m.connection == connectionFailed {
 		switch t.String() {
 		case "enter", "r":
 			m.next = &sessionStart{cfg: m.cfg, resume: m.resume, editor: m.editor}
@@ -60,7 +60,7 @@ func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
 	m.commandIndex = 0
 	switch {
 	case key.Matches(t, newThread):
-		if m.h != nil && !m.Busy && m.Status != "Connecting" {
+		if m.h != nil && !m.Busy && m.connection != connecting {
 			cmd = m.openPicker(false)
 		}
 	case key.Matches(t, readHistory):
@@ -98,6 +98,7 @@ func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
 			m.Busy = false
 			m.Status = "Demo · ready"
 		} else if m.Busy {
+			m.cancelling = true
 			m.Status = "Cancelling"
 			cmd = func() tea.Msg {
 				err := m.h.conn.SendNotification(m.ctx, "session/cancel", map[string]string{"sessionId": m.h.id})

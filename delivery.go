@@ -11,7 +11,7 @@ type steerResult struct {
 }
 
 func (m *terminal) canSteer() bool {
-	return m.h != nil && m.h.supportsSteering && m.cfg.BusyInput != "follow_up" && !m.waitForTurn && m.Status != "Cancelling"
+	return m.h != nil && m.h.supportsSteering && m.cfg.BusyInput != "follow_up" && !m.waitForTurn && !m.cancelling
 }
 
 // One prompt owns the turn and at most one steering request can be outstanding.

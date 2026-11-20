@@ -108,7 +108,7 @@ home = "profiles/codex"
 	if err := os.WriteFile(path, []byte(profiles), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c, err := readConfig([]string{path, ""})
+	c, err := loadConfig(path, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,5 +137,26 @@ func TestAutoRoutingPreservesTinyQuotaOnLargeSubscription(t *testing.T) {
 	got, err := c.choose(context.Background())
 	if err != nil || got != "large" {
 		t.Fatalf("expected large subscription, got %q (%v)", got, err)
+	}
+}
+
+func TestConfigPreservesProviderKeys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	for ext, data := range map[string]string{
+		".toml": `[accounts.Work.env]
+MODE_SWITCH="enabled"
+[accounts.Work.models]
+"Vendor/Model-V2"=["agent"]`,
+		".json": `{"accounts":{"Work":{"env":{"MODE_SWITCH":"enabled"},"models":{"Vendor/Model-V2":["agent"]}}}}`,
+	} {
+		path := filepath.Join(dir, "profile"+ext)
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := loadConfig(path, "Vendor/Model-V2", "Work")
+		if err != nil || c.Accounts["Work"].Env["MODE_SWITCH"] != "enabled" {
+			t.Fatalf("%s profile did not preserve provider keys: %v", ext, err)
+		}
 	}
 }

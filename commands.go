@@ -9,7 +9,7 @@ import (
 type chatCommand struct{ name, description string }
 
 func (m *terminal) commandMatches() []chatCommand {
-	if m.ask != nil || m.editor == nil || m.Status == "Connection failed" {
+	if m.ask != nil || m.editor == nil || m.connection == connectionFailed {
 		return nil
 	}
 	query := m.editor.Value()
@@ -22,7 +22,7 @@ func (m *terminal) commandMatches() []chatCommand {
 			matches = append(matches, chatCommand{name, description})
 		}
 	}
-	if m.h != nil && m.ready && !m.Busy {
+	if m.h != nil && m.connection == connected && !m.Busy {
 		add("/model", "Start a thread with another model")
 		add("/subscription", "Start a thread on a chosen subscription")
 		add("/new", "Start a new thread")
@@ -37,7 +37,7 @@ func (m *terminal) openPicker(routeOnly bool) tea.Cmd {
 	c.forced = ""
 	m.launch = &picker{cfg: c, models: c.modelNames(), width: m.Width, height: m.Height, routeOnly: routeOnly}
 	if routeOnly {
-		m.launch.resume = m.Status == "Connection failed" && m.resume
+		m.launch.resume = m.connection == connectionFailed && m.resume
 		return m.launch.routeMenu(c.model)
 	}
 	return nil

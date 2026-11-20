@@ -8,7 +8,7 @@ import (
 )
 
 func TestPetalKeepsMultilineChromeOnItsOwnRows(t *testing.T) {
-	v := screen{
+	v := screen{connection: connected,
 		Width: 80, Height: 27, Model: "model\nvariant", Account: "account\nname",
 		Status: "status\nready", Cwd: "/tmp/line\nbreak", editor: testComposer("draft\ncontinued", 9),
 	}

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"log"
@@ -22,40 +22,16 @@ func xdg(kind, name string) (string, error) {
 	return filepath.Join(dir, "petal", name), nil
 }
 func main() {
-	var file, accountName string
 	var resume, demo bool
 	settings := viper.New()
 	root := &cobra.Command{Use: "petal", Short: "Route ACP sessions across model subscriptions", SilenceUsage: true, SilenceErrors: true}
-	root.PersistentFlags().StringVar(&file, "config", "", "TOML configuration (default: $XDG_CONFIG_HOME/petal/config.toml)")
-	root.PersistentFlags().StringVar(&accountName, "account", "", "pin to a configured account")
+	root.PersistentFlags().String("config", "", "TOML configuration (default: $XDG_CONFIG_HOME/petal/config.toml)")
+	root.PersistentFlags().String("account", "", "pin to a configured account")
+	if err := settings.BindPFlags(root.PersistentFlags()); err != nil {
+		log.Fatal(err)
+	}
 	load := func(model string) (config, error) {
-		explicit := file != ""
-		if file == "" {
-			var err error
-			file, err = xdg("CONFIG", "config.toml")
-			if err != nil {
-				return config{}, err
-			}
-		}
-		settings.SetConfigFile(file)
-		if err := settings.ReadInConfig(); err != nil {
-			if !explicit && errors.Is(err, os.ErrNotExist) {
-				c := config{model: model, forced: accountName}
-				c.discover()
-				if model != "" {
-					return c, c.validate()
-				}
-				return c, nil
-			}
-			return config{}, err
-		}
-		args := []string{file, model}
-		if accountName != "" {
-			args = append(args, accountName)
-		}
-		// Decode the adapter tables with their original case. Viper normalizes map keys,
-		// including environment variables and provider-specific model identifiers.
-		return readConfig(args)
+		return loadConfig(settings.GetString("config"), model, settings.GetString("account"))
 	}
 	server := &cobra.Command{Use: "serve MODEL", Short: "Serve ACP over stdin and stdout", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
 		c, err := load(args[0])
@@ -94,7 +70,14 @@ func main() {
 		if len(args) == 0 {
 			return tui.RunE(cmd, args)
 		}
-		c, err := readConfig(args)
+		if len(args) < 2 || len(args) > 3 {
+			return fmt.Errorf("usage: petal CONFIG.toml MODEL [ACCOUNT]")
+		}
+		account := ""
+		if len(args) == 3 {
+			account = args[2]
+		}
+		c, err := loadConfig(args[0], args[1], account)
 		if err == nil {
 			serve(c)
 		}

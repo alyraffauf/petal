@@ -20,7 +20,7 @@ func FuzzPetalFrame(f *testing.F) {
 		if len(message)+len(model)+len(account)+len(status)+len(cwd)+len(input) > 512 {
 			return
 		}
-		v := screen{
+		v := screen{connection: connected,
 			Width: int(columns % 101), Height: int(rows % 41), Model: model,
 			Account: account, Status: status, Cwd: cwd, editor: testComposer(clean(input), 0),
 			Messages: []entry{{"assistant", message}},
@@ -57,7 +57,7 @@ func FuzzPetalBacklog(f *testing.F) {
 			return
 		}
 		var viewport backlogViewport
-		v := screen{backlog: &viewport, markdown: &markdownCache{}}
+		v := screen{connection: connected, backlog: &viewport, markdown: &markdownCache{}}
 		var messages []entry
 		width, height, end, pause := 24, 3, 0, false
 		for i, op := range ops {
@@ -139,7 +139,7 @@ func FuzzPetalMarkdownCache(f *testing.F) {
 		if len(first)+len(second) > 384 || len(ops) > 200 {
 			return
 		}
-		v := screen{markdown: &markdownCache{}}
+		v := screen{connection: connected, markdown: &markdownCache{}}
 		for i, op := range ops {
 			source := first
 			if op&1 != 0 {
@@ -169,7 +169,7 @@ func FuzzPetalReader(f *testing.F) {
 		now := time.Unix(10, 0)
 		m.reader.ShowAt(now)
 		m.reader.Advance(now.Add(time.Hour))
-		v := screen{Width: width, Height: height, markdown: &markdownCache{}}
+		v := screen{connection: connected, Width: width, Height: height, markdown: &markdownCache{}}
 		for i := range int(count % 20) {
 			v.Messages = append(v.Messages, entry{"assistant", fmt.Sprintf("Q%02dZ", i)})
 		}

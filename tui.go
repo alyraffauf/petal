@@ -19,7 +19,16 @@ import (
 )
 
 type entry struct{ Role, Text string }
+type connectionState uint8
+
+const (
+	connecting connectionState = iota
+	connected
+	connectionFailed
+)
+
 type screen struct {
+	connection                  connectionState
 	busyAction                  string
 	queued                      int
 	backlog                     *backlogViewport
@@ -108,15 +117,15 @@ type terminal struct {
 	animating             bool
 	replay                bool
 	screen
-	root          *bloom.Root
-	h             *harness
-	ctx           context.Context
-	cfg           config
-	resume, ready bool
-	ask           *permission
-	chatBacklog   backlogViewport
-	pending       turnLog
-	turnStart     int
+	root               *bloom.Root
+	h                  *harness
+	ctx                context.Context
+	cfg                config
+	resume, cancelling bool
+	ask                *permission
+	chatBacklog        backlogViewport
+	pending            turnLog
+	turnStart          int
 }
 
 func demoScreen() screen {
@@ -153,13 +162,13 @@ func runSession(parent context.Context, start sessionStart, demo bool) (*session
 	m := &terminal{reader: anim.NewPresence(anim.Duration(160 * time.Millisecond)), root: bloom.New(), ctx: ctx, cfg: c, resume: start.resume}
 	if demo {
 		m.screen = demoScreen()
-		m.ready = true
+		m.connection = connected
 	} else {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return nil, err
 		}
-		m.screen = screen{Cwd: cwd, Model: c.model, Account: c.forced, Status: "Connecting"}
+		m.screen = screen{Cwd: cwd, Model: c.model, Account: c.forced, connection: connecting}
 		m.h = startHarness(ctx, c)
 		defer m.h.close()
 	}
@@ -208,7 +217,7 @@ func (m *terminal) View() tea.View {
 		return m.launch.View()
 	}
 	v := m.screen
-	if m.Busy && m.ready && m.h != nil {
+	if m.Busy && m.connection == connected && m.h != nil {
 		v.busyAction = "Follow up"
 		if m.canSteer() {
 			v.busyAction = "Steer"
@@ -247,7 +256,7 @@ func (m *terminal) submit() tea.Cmd {
 		m.restorePermissionDraft()
 		return m.deliver()
 	}
-	if !m.ready {
+	if m.connection != connected {
 		return nil
 	}
 	m.editor.Reset()
@@ -285,7 +294,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_, cmd := m.launch.Update(msg)
 			if m.launch.chosen {
 				m.next = &sessionStart{cfg: m.launch.cfg, resume: m.launch.resume}
-				if m.Status == "Connection failed" {
+				if m.connection == connectionFailed {
 					m.next.editor = m.editor
 				}
 				return m, tea.Quit
@@ -313,11 +322,11 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.listen
 		if t.err != nil {
 			m.pending = turnLog{}
-			m.Status = "Connection failed"
+			m.connection = connectionFailed
 			m.Messages = append(m.Messages, entry{"system", terminalError(t.err)})
 		} else {
 			m.Messages = m.pending.commit(m.Messages[:m.turnStart])
-			m.ready = true
+			m.connection = connected
 			m.Account = t.account
 			m.Status = "Ready"
 		}
@@ -353,6 +362,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lateFinish = &t
 			return m, ui
 		}
+		m.cancelling = false
 		m.waitForTurn = false
 		clear(m.tools)
 		cmd = m.listen
@@ -376,6 +386,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd = tea.Batch(cmd, m.deliver())
 	case cancelFailed:
+		m.cancelling = false
 		m.Status = "Cancellation failed"
 		m.recordNote(terminalError(t.err))
 	case event:
@@ -411,7 +422,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			target.move(3)
 		}
 	case tea.PasteMsg:
-		if !m.reader.Shown() && m.Status != "Connection failed" {
+		if !m.reader.Shown() && m.connection != connectionFailed {
 			cmd = m.paste(t.Content)
 		}
 	case tea.KeyPressMsg:

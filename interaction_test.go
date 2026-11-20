@@ -44,7 +44,7 @@ func TestLongDraftKeepsCaretVisible(t *testing.T) {
 func TestFailedResumeRecoveryKeepsSessionAndDraft(t *testing.T) {
 	keys := func(m *terminal, code rune) { m.Update(tea.KeyPressMsg{Code: code}) }
 	makeFailed := func() *terminal {
-		return &terminal{root: bloom.New(), screen: screen{Status: "Connection failed", editor: testComposer("draft", 3)},
+		return &terminal{root: bloom.New(), screen: screen{connection: connectionFailed, editor: testComposer("draft", 3)},
 			cfg:    config{model: "m", forced: "a", Accounts: map[string]account{"a": {Models: map[string][]string{"m": {"agent"}}}, "b": {Models: map[string][]string{"m": {"agent"}}}}},
 			resume: true}
 	}

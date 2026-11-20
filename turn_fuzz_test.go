@@ -140,7 +140,7 @@ func applyTranscriptUpdate(t *testing.T, m *terminal, h *harness, update map[str
 func FuzzACPTranscriptLifecycle(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte{173, 64, 10}) // Explicit null content after recorded output.
-	f.Add([]byte{5, 92, 10})  // Explicit empty title after a named call.
+	f.Add([]byte{5, 92, 10})   // Explicit empty title after a named call.
 	f.Add([]byte{0, 9, 4, 8, 6, 5, 9, 7, 10, 0, 6, 11, 0, 5, 12, 8, 4, 13})
 	f.Add([]byte{27, 215, 10, 132, 59, 10, 4, 60, 5, 6, 11, 7, 8, 9, 13})
 	f.Fuzz(func(t *testing.T, operations []byte) {
@@ -225,7 +225,7 @@ func FuzzACPTranscriptLifecycle(f *testing.F) {
 				if operation%14 <= 11 && m.Busy {
 					t.Fatalf("step %d: finished turn still busy", index)
 				}
-				if operation%14 == 12 && (!m.ready || m.Account != "account") {
+				if operation%14 == 12 && (m.connection != connected || m.Account != "account") {
 					t.Fatalf("step %d: successful replay left session unavailable", index)
 				}
 				// Start a new lifecycle with the same terminal and ID space.
