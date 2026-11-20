@@ -38,10 +38,17 @@ func TestLongDraftKeepsCaretVisible(t *testing.T) {
 	for _, pos := range []int{0, 24, 64} {
 		prefix := strings.Repeat("界", pos)
 		v := screen{Width: 45, Height: 10, editor: testComposer(prefix+"Z"+strings.Repeat("x", 64-pos), pos)}
-		row := strings.Split(ansi.Strip(petal(v)), "\n")[8]
-		if !strings.Contains(row, "Z") {
-			t.Fatalf("position %d lost caret: %q", pos, row)
+		m := terminal{screen: v, root: bloom.New()}
+		view := m.View()
+		if view.Cursor == nil {
+			t.Fatalf("position %d has no caret", pos)
 		}
+		grid := canvas.Parse(view.Content, ansi.GraphemeWidth)
+		cell := grid.CellAt(view.Cursor.X, view.Cursor.Y)
+		if cell == nil || cell.Content != "Z" {
+			t.Fatalf("position %d has caret at %v over %#v", pos, view.Cursor.Position, cell)
+		}
+
 	}
 }
 

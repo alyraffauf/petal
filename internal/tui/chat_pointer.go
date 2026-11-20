@@ -17,6 +17,7 @@ const (
 )
 
 type chatHitTargets struct {
+	cursor          *tea.Cursor
 	commands        image.Rectangle
 	firstCommand    int
 	visibleCommands []chatCommand

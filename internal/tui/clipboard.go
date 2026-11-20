@@ -2,7 +2,9 @@ package tui
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"math/rand/v2"
 	"net/http"
 	"slices"
@@ -55,6 +57,9 @@ func (m *terminal) clipboardError(text string) tea.Cmd {
 }
 
 func (m *terminal) clipboardEvent(msg tea.Msg) (bool, tea.Cmd) {
+	if _, ok := msg.(oversizedClipboardPacket); ok {
+		return true, m.clipboardError("Terminal sent an oversized clipboard packet.")
+	}
 	if timeout, ok := msg.(clipboardTimeout); ok {
 		if string(timeout) == m.clipboard.id {
 			m.clipboardError("Terminal clipboard timed out. " + clipboardFallback)
@@ -122,6 +127,9 @@ func (m *terminal) clipboardEvent(msg tea.Msg) (bool, tea.Cmd) {
 		if !slices.Contains(clipboardImages, typ) || http.DetectContentType(data) != typ {
 			return true, m.clipboardError("Clipboard image format does not match its contents.")
 		}
+		if typ == "image/png" && !completePNG(data) {
+			return true, m.clipboardError("Clipboard PNG was incomplete or damaged. Paste it again.")
+		}
 		return true, m.stageImage(map[string]any{"type": "image", "mimeType": typ, "data": base64.StdEncoding.EncodeToString(data)})
 	default:
 		return true, m.clipboardError("Terminal clipboard unavailable (" + petalLabel(fields["status"]) + "). " + clipboardFallback)
@@ -187,4 +195,27 @@ func (m *terminal) clipboardOffer(fields map[string]string, mime, payload string
 		}
 	}
 	return nil
+}
+
+// Check the wire chunks without allocating a full-resolution pixel buffer.
+// A valid signature alone also matches a transfer missing most of its data.
+func completePNG(data []byte) bool {
+	if len(data) < 8 {
+		return false
+	}
+	for chunks := data[8:]; len(chunks) >= 12; {
+		n := uint64(binary.BigEndian.Uint32(chunks))
+		if n > uint64(len(chunks)-12) {
+			return false
+		}
+		end := 8 + int(n)
+		if crc32.ChecksumIEEE(chunks[4:end]) != binary.BigEndian.Uint32(chunks[end:]) {
+			return false
+		}
+		if string(chunks[4:8]) == "IEND" {
+			return n == 0
+		}
+		chunks = chunks[end+4:]
+	}
+	return false
 }

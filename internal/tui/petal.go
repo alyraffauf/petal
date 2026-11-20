@@ -163,47 +163,6 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	gutter := min(3, w/4)
 	col := max(1, w-gutter-2)
 	menuHeight := min(5, len(v.commands), max(0, h-header-footer-1))
-	available := h - header - footer - menuHeight
-	gap := min(2, max(0, available-1), h/8)
-	body := transcript(v, col, available-gap)
-	previous := ""
-	for _, line := range body {
-		mark, fg := "", petalText
-		switch line.Role {
-		case "user":
-			mark = "❯"
-		case "assistant":
-			mark = "✿"
-		case "tool":
-			mark = "↳"
-			fg = petalMuted
-		case "system":
-			mark = "·"
-			fg = petalRose
-		}
-		if line.Role == previous || line.Text == "" {
-			mark = ""
-		}
-		previous = line.Role
-		rows = append(rows, richBand(" "+mark, gutter, petalRose, v.background, true)+richBand(line.Text, w-gutter, fg, v.background, false))
-	}
-	for len(rows) < h-footer-menuHeight {
-		rows = append(rows, richBand("", w, petalText, v.background, false))
-	}
-	menuStart := max(0, v.commandIndex-menuHeight+1)
-	if menuHeight > 0 {
-		hits.commands = image.Rect(1, len(rows), w, len(rows)+menuHeight)
-		hits.firstCommand = menuStart
-		hits.visibleCommands = v.commands[menuStart : menuStart+menuHeight]
-	}
-	for i := menuStart; i < menuStart+menuHeight; i++ {
-		c := v.commands[i]
-		bg, mark := v.background, "   "
-		if i == v.commandIndex {
-			bg, mark = selectionBand, " › "
-		}
-		rows = append(rows, richBand("", 1, petalText, v.background, false)+richBand(mark+c.name+"  "+c.description, w-1, petalText, bg, false))
-	}
 	model := v.Model
 	if v.activeModel != "" {
 		model = v.activeModel
@@ -232,24 +191,84 @@ func renderChat(v screen, hits *chatHitTargets) string {
 		actionLabel = " ↵ " + string(action) + " "
 		aw = ansi.StringWidth(actionLabel)
 	}
+	room := max(1, w-aw-4)
+	inputHeight := 1
+	if v.editor != nil && v.connection != connectionFailed {
+		limit := max(1, min(4, h-header-footer-menuHeight, h/4))
+		if v.editor.Width() != room || v.editor.MaxHeight != limit {
+			v.editor.MaxHeight = limit
+			v.editor.SetWidth(room)
+			v.editor.Model, _ = v.editor.Update(nil)
+		}
+		hits.actionInput = v.editor.Value()
+		if hits.actionInput != "" {
+			input = v.editor.View()
+			inputHeight = v.editor.Height()
+		}
+	}
+	available := h - header - footer - menuHeight - (inputHeight - 1)
+	gap := min(2, max(0, available-1), h/8)
+	body := transcript(v, col, available-gap)
+	previous := ""
+	for _, line := range body {
+		mark, fg := "", petalText
+		switch line.Role {
+		case "user":
+			mark = "❯"
+		case "assistant":
+			mark = "✿"
+		case "tool":
+			mark = "↳"
+			fg = petalMuted
+		case "system":
+			mark = "·"
+			fg = petalRose
+		}
+		if line.Role == previous || line.Text == "" {
+			mark = ""
+		}
+		previous = line.Role
+		rows = append(rows, richBand(" "+mark, gutter, petalRose, v.background, true)+richBand(line.Text, w-gutter, fg, v.background, false))
+	}
+	for len(rows) < h-footer-menuHeight-(inputHeight-1) {
+		rows = append(rows, richBand("", w, petalText, v.background, false))
+	}
+	menuStart := max(0, v.commandIndex-menuHeight+1)
+	if menuHeight > 0 {
+		hits.commands = image.Rect(1, len(rows), w, len(rows)+menuHeight)
+		hits.firstCommand = menuStart
+		hits.visibleCommands = v.commands[menuStart : menuStart+menuHeight]
+	}
+	for i := menuStart; i < menuStart+menuHeight; i++ {
+		c := v.commands[i]
+		bg, mark := v.background, "   "
+		if i == v.commandIndex {
+			bg, mark = selectionBand, " › "
+		}
+		rows = append(rows, richBand("", 1, petalText, v.background, false)+richBand(mark+c.name+"  "+c.description, w-1, petalText, bg, false))
+	}
 	hits.action = image.Rect(w-aw, len(rows), w, len(rows)+1)
 	hits.actionKind = action
 	if action == chatRun {
 		hits.actionCommand = v.commands[v.commandIndex]
 	}
 	hits.question = v.question
-	room := max(1, w-aw-4)
-	if v.editor != nil && v.connection != connectionFailed {
-		if v.editor.Width() != room {
-			v.editor.SetWidth(room)
-			v.editor.Model, _ = v.editor.Update(nil) // Reflow content before scrolling to the cursor.
-		}
-		hits.actionInput = v.editor.Value()
-		if hits.actionInput != "" {
-			input = v.editor.View()
+	if v.editor != nil && v.connection != connectionFailed && room+4 <= w {
+		if cursor := v.editor.Cursor(); cursor != nil {
+			cursor.X += 4
+			cursor.Y += len(rows)
+			if cursor.X < w-aw && cursor.Y >= len(rows) && cursor.Y < len(rows)+inputHeight {
+				hits.cursor = cursor
+			}
 		}
 	}
-	rows = append(rows, richBand("  › "+input, w-aw, petalText, petalSurface, false)+richBand(actionLabel, aw, petalInk, petalRose, true))
+	for i, line := range strings.Split(input, "\n") {
+		prefix, button := "    ", ""
+		if i == 0 {
+			prefix, button = "  › ", actionLabel
+		}
+		rows = append(rows, richBand(prefix+line, w-aw, petalText, petalSurface, false)+richBand(button, aw, petalInk, petalRose, button != ""))
+	}
 	if footer == 2 {
 		hint := " " + chatHelp(v) + " "
 		if v.queued > 0 {

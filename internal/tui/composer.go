@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"math"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -57,7 +58,11 @@ func newComposer() *composer {
 	editor.Prompt = ""
 	editor.ShowLineNumbers = false
 	editor.MaxHeight, editor.MaxWidth = 0, 0
+	editor.DynamicHeight = true
+	editor.MaxHeight = 1
+	editor.MaxContentHeight = math.MaxInt // MaxHeight limits visible rows only.
 	editor.SetHeight(1)
+	editor.SetVirtualCursor(false)
 	styles := editor.Styles()
 	// The surrounding composer band supplies the line colors, including while typing.
 	state := textarea.StyleState{Selection: lipgloss.NewStyle().Reverse(true)}
@@ -74,7 +79,7 @@ func newComposer() *composer {
 func (m *terminal) edit(msg tea.Msg) tea.Cmd {
 	updated, cmd := m.editor.Update(msg)
 	m.editor.Model = updated
-	if !strings.Contains(m.editor.Value(), imageMarker) {
+	if m.editor.image != nil && !strings.Contains(m.editor.Value(), imageMarker) {
 		m.editor.image = nil
 	}
 	return cmd

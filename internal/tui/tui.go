@@ -76,6 +76,7 @@ func nextFrame() tea.Cmd {
 }
 
 type terminal struct {
+	inputTTY              *os.File
 	clipboard             clipboardRead
 	limitedColor          bool
 	imageBase             int
@@ -154,7 +155,7 @@ func runSession(parent context.Context, start sessionStart, drafts sessionDrafts
 	if directGraphicsTerminal() {
 		defer os.Stdout.WriteString("\x1b[?5522l")
 	}
-	_, err = tea.NewProgram(m).Run()
+	err = runChat(m)
 	if m.next != nil {
 		drafts.remember(m)
 	}
@@ -223,7 +224,14 @@ func (m *terminal) View() tea.View {
 			v.Status += " · fork"
 		}
 	}
-	view := m.root.View(v.Width, v.Height, m.scene(v))
+	var view tea.View
+	if m.reading {
+		view = m.root.View(v.Width, v.Height, m.scene(v))
+	} else {
+		// Chat already produces the complete styled terminal frame.
+		view = tea.NewView(renderChat(v, &m.chatHits))
+		view.Cursor = m.chatHits.cursor
+	}
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
 	return view
@@ -387,6 +395,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Height = t.Height
 		m.chatHits = chatHitTargets{}
 	case terminalSignIn:
+		t.cmd.Stdin = m.inputTTY // The child needs the terminal fd for interactive sign-in.
 		cmd = tea.Batch(m.listen, tea.ExecProcess(t.cmd, func(err error) tea.Msg { t.done <- err; return nil }))
 	case dismissedQuestion:
 		if m.ask == t.q {
