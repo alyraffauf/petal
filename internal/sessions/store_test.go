@@ -21,7 +21,7 @@ func TestListKeepsOlderThreadsAndLegacySession(t *testing.T) {
 	}
 	for i, id := range []string{"older", "newer"} {
 		r := Record{ID: id, Account: "work", Model: "m", Opened: time.Unix(int64(i+1), 0)}
-		if err := Save(project, r); err != nil {
+		if _, err := Create(project, r); err != nil {
 			t.Fatal(err)
 		}
 	}

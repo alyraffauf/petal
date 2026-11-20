@@ -3,18 +3,30 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"petal/internal/sessions"
 )
 
-func (h *harness) rememberSetting(s sessions.Selection) {
-	for i, old := range h.record.Selections {
-		if old.ID == s.ID && old.LegacyMode == s.LegacyMode {
-			h.record.Selections[i] = s
-			return
+func selectionIndex(selections []sessions.Selection, selection sessions.Selection) int {
+	return slices.IndexFunc(selections, func(candidate sessions.Selection) bool {
+		return candidate.ID == selection.ID && candidate.LegacyMode == selection.LegacyMode
+	})
+}
+
+func (h *harness) rememberSetting(selection sessions.Selection) error {
+	return h.updateRecord(func(record *sessions.Record) bool {
+		index := selectionIndex(record.Selections, selection)
+		if index < 0 {
+			record.Selections = append(record.Selections, selection)
+			return true
 		}
-	}
-	h.record.Selections = append(h.record.Selections, s)
+		if record.Selections[index] == selection {
+			return false
+		}
+		record.Selections[index] = selection
+		return true
+	})
 }
 
 func (u settingsUpdate) selected(s sessions.Selection) (target setting, current string, available bool) {
@@ -38,8 +50,9 @@ func (u settingsUpdate) selected(s sessions.Selection) (target setting, current 
 // Consult the user before resuming with changed model or permission settings.
 // An adapter may return fresh defaults even when it restores the transcript.
 func (h *harness) reviewResumedSettings(ctx context.Context) error {
+	previous := h.record.Selections
 	var accepted []sessions.Selection
-	for _, saved := range h.record.Selections {
+	for _, saved := range previous {
 		target, current, available := h.initialSettings.selected(saved)
 		if current == saved.Value {
 			accepted = append(accepted, saved)
@@ -89,6 +102,29 @@ func (h *harness) reviewResumedSettings(ctx context.Context) error {
 			return fmt.Errorf("another setting changed %s to %q during resume", target.Name, current)
 		}
 	}
-	h.record.Selections = accepted
-	return nil
+	return h.saveReviewedSelections(previous, accepted)
+}
+
+func (h *harness) saveReviewedSelections(previous, accepted []sessions.Selection) error {
+	if slices.Equal(previous, accepted) {
+		return nil
+	}
+	return h.updateRecord(func(record *sessions.Record) bool {
+		changed := false
+		for _, reviewed := range previous {
+			current := selectionIndex(record.Selections, reviewed)
+			if current < 0 || record.Selections[current] != reviewed {
+				continue
+			}
+			next := selectionIndex(accepted, reviewed)
+			if next < 0 {
+				record.Selections = slices.Delete(record.Selections, current, current+1)
+				changed = true
+			} else if accepted[next] != reviewed {
+				record.Selections[current] = accepted[next]
+				changed = true
+			}
+		}
+		return changed
+	})
 }

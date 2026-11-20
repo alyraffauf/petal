@@ -38,7 +38,8 @@ func (m *terminal) fork() tea.Cmd {
 		if record.Title == "" {
 			child.Title = "Forked conversation"
 		}
-		return forkResult{id, sessions.Save(cwd, child)}
+		_, err = sessions.Create(cwd, child)
+		return forkResult{id, err}
 	}
 }
 

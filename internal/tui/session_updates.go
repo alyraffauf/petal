@@ -28,23 +28,22 @@ func (m *terminal) saveSessionInfo() {
 	if m.h.record.ID == "" || info.Title.IsUnset() && info.UpdatedAt.IsUnset() {
 		return
 	}
-	next := m.h.record
-	if !info.Title.IsUnset() {
-		next.Title, _ = info.Title.Value()
-	}
-	if stamp, ok := info.UpdatedAt.Value(); ok {
-		if parsed, err := time.Parse(time.RFC3339Nano, stamp); err == nil {
-			next.Updated = parsed
-		}
-	} else if info.UpdatedAt.IsNull() {
-		next.Updated = time.Time{}
-	}
 	m.pendingInfo = acp.SessionSessionInfoUpdate{}
-	if next.Title != m.h.record.Title || !next.Updated.Equal(m.h.record.Updated) {
-		m.h.record = next
-		if err := sessions.Save(m.h.cwd, next); err != nil {
-			m.recordNote("Could not save session details: " + err.Error())
+	if err := m.h.updateRecord(func(record *sessions.Record) bool {
+		previousTitle, previousUpdated := record.Title, record.Updated
+		if !info.Title.IsUnset() {
+			record.Title, _ = info.Title.Value()
 		}
+		if stamp, ok := info.UpdatedAt.Value(); ok {
+			if parsed, err := time.Parse(time.RFC3339Nano, stamp); err == nil {
+				record.Updated = parsed
+			}
+		} else if info.UpdatedAt.IsNull() {
+			record.Updated = time.Time{}
+		}
+		return record.Title != previousTitle || !record.Updated.Equal(previousUpdated)
+	}); err != nil {
+		m.recordNote("Could not save session details: " + err.Error())
 	}
 }
 

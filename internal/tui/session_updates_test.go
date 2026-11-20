@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,6 +15,16 @@ func TestSessionUpdatesSeparateTimelineAndLiveState(t *testing.T) {
 	cwd := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	h := &harness{cwd: cwd, record: sessions.Record{ID: "thread", Model: "model"}, events: make(chan tea.Msg, 1)}
+	if _, err := sessions.Create(cwd, h.record); err != nil {
+		t.Fatal(err)
+	}
+	settings := []sessions.Selection{{ID: "model", Value: "high"}}
+	if _, err := sessions.Update(cwd, h.record.ID, func(record *sessions.Record) bool {
+		record.Selections = settings
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
 	m := terminal{ctx: t.Context(), h: h, root: bloom.New(), screen: screen{Busy: true, connection: connected}}
 	update := func(payload string) {
 		t.Helper()
@@ -46,7 +57,7 @@ func TestSessionUpdatesSeparateTimelineAndLiveState(t *testing.T) {
 		t.Fatalf("live state: %+v %+v", m.notice, m.usage)
 	}
 	saved, err := sessions.Lookup(cwd, "thread")
-	if err != nil || saved.Title != "Thread title" || saved.Updated.Year() != 2024 {
+	if err != nil || saved.Title != "Thread title" || saved.Updated.Year() != 2024 || !slices.Equal(saved.Selections, settings) {
 		t.Fatalf("saved metadata: %+v, %v", saved, err)
 	}
 	update(`{"sessionUpdate":"session_info_update","title":null}`)

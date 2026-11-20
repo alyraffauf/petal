@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"petal/internal/paths"
@@ -41,11 +42,19 @@ func (r Record) LastActivity() time.Time {
 
 func key(s string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(s))) }
 
+func recordPath(cwd, id string) (string, error) {
+	return paths.XDG("STATE", filepath.Join("conversations", key(cwd), key(id)+".json"))
+}
+
 func Lookup(cwd, id string) (Record, error) {
-	path, err := paths.XDG("STATE", filepath.Join("conversations", key(cwd), key(id)+".json"))
+	path, err := recordPath(cwd, id)
 	if err != nil {
 		return Record{}, err
 	}
+	return readRecord(path)
+}
+
+func readRecord(path string) (Record, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Record{}, nil
@@ -58,15 +67,66 @@ func Lookup(cwd, id string) (Record, error) {
 	return record, err
 }
 
-func Save(cwd string, r Record) error {
-	dir, err := paths.XDG("STATE", filepath.Join("conversations", key(cwd)))
+// Create records a session the first time Petal sees it.
+func Create(cwd string, record Record) (saved Record, err error) {
+	err = lockRecord(cwd, record.ID, func(path string) error {
+		var err error
+		saved, err = readRecord(path)
+		if err != nil || saved.ID != "" {
+			return err
+		}
+		saved = record
+		return writeRecord(path, saved)
+	})
+	return saved, err
+}
+
+// Update applies an edit to the latest record and writes it when edit reports a change.
+func Update(cwd, id string, edit func(*Record) bool) (record Record, err error) {
+	err = lockRecord(cwd, id, func(path string) error {
+		var err error
+		record, err = readRecord(path)
+		if err != nil {
+			return err
+		}
+		if record.ID == "" {
+			return os.ErrNotExist
+		}
+		if !edit(&record) {
+			return nil
+		}
+		return writeRecord(path, record)
+	})
+	return record, err
+}
+
+func lockRecord(cwd, id string, edit func(string) error) error {
+	path, err := recordPath(cwd, id)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".pending-")
+	// Keep the lock file in place so every process locks the same inode.
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	for {
+		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
+		if err == nil {
+			return edit(path)
+		}
+		if !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+	}
+}
+
+func writeRecord(path string, r Record) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".pending-")
 	if err != nil {
 		return err
 	}
@@ -79,7 +139,7 @@ func Save(cwd string, r Record) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(f.Name(), filepath.Join(dir, key(r.ID)+".json"))
+	return os.Rename(f.Name(), path)
 }
 
 func List(cwd string, models []string) ([]Record, error) {
@@ -140,26 +200,24 @@ func List(cwd string, models []string) ([]Record, error) {
 
 // Forget removes local resume information after the adapter confirms deletion.
 func Forget(cwd, model, id string) error {
-	path, err := paths.XDG("STATE", filepath.Join("conversations", key(cwd), key(id)+".json"))
-	if err != nil {
-		return err
-	}
-	if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	legacy, err := paths.XDG("STATE", filepath.Join("sessions", key(cwd+"\x00"+model)))
-	if err != nil {
-		return err
-	}
-	data, err := os.ReadFile(legacy)
-	if errors.Is(err, os.ErrNotExist) {
+	return lockRecord(cwd, id, func(path string) error {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		legacy, err := paths.XDG("STATE", filepath.Join("sessions", key(cwd+"\x00"+model)))
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(legacy)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if string(data) == id {
+			return os.Remove(legacy)
+		}
 		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if string(data) == id {
-		return os.Remove(legacy)
-	}
-	return nil
+	})
 }

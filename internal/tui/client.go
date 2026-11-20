@@ -453,25 +453,40 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 		return "", fmt.Errorf("invalid route from proxy")
 	}
 	h.cwd = cwd
-	if resume {
-		h.record, err = sessions.Lookup(cwd, h.id)
-		if err != nil {
-			return "", err
-		}
-	}
-	if h.record.ID == "" {
-		h.record = sessions.Record{ID: h.id, Model: c.Model, Account: parts[0], Opened: time.Now()}
-	}
-	if resume {
-		if err := h.reviewResumedSettings(ctx); err != nil {
-			return "", err
-		}
-	}
-	if err := sessions.Save(cwd, h.record); err != nil {
+	initialRecord := sessions.Record{ID: h.id, Model: c.Model, Account: parts[0], Opened: time.Now()}
+	if err := h.prepareSessionRecord(ctx, initialRecord, resume); err != nil {
 		return "", err
 	}
 	if c.PinnedAccount != "" {
 		return c.PinnedAccount, nil
 	}
 	return parts[0], nil
+}
+
+func (h *harness) prepareSessionRecord(ctx context.Context, initial sessions.Record, resume bool) error {
+	var err error
+	if resume {
+		h.record, err = sessions.Lookup(h.cwd, initial.ID)
+		if err != nil {
+			return err
+		}
+	}
+	if h.record.ID == "" {
+		h.record, err = sessions.Create(h.cwd, initial)
+		if err != nil {
+			return err
+		}
+	}
+	if resume {
+		return h.reviewResumedSettings(ctx)
+	}
+	return nil
+}
+
+func (h *harness) updateRecord(edit func(*sessions.Record) bool) error {
+	updated, err := sessions.Update(h.cwd, h.record.ID, edit)
+	if updated.ID != "" {
+		h.record = updated
+	}
+	return err
 }

@@ -267,8 +267,13 @@ func (m *terminal) submit() tea.Cmd {
 	m.editor.Reset()
 	if m.h.record.ID != "" && m.h.record.Title == "" {
 		title := []rune(strings.Join(strings.Fields(clean(message.text)), " "))
-		m.h.record.Title = string(title[:min(len(title), 80)])
-		if err := sessions.Save(m.h.cwd, m.h.record); err != nil {
+		if err := m.h.updateRecord(func(record *sessions.Record) bool {
+			if record.Title != "" || len(title) == 0 {
+				return false
+			}
+			record.Title = string(title[:min(len(title), 80)])
+			return true
+		}); err != nil {
 			m.recordNote("Could not save conversation title: " + err.Error())
 		}
 	}
@@ -408,8 +413,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.agentSettings.Config = t.options.Config
 		}
 		if t.err == nil && m.h.record.ID != "" {
-			m.h.rememberSetting(t.selection)
-			if err := sessions.Save(m.h.cwd, m.h.record); err != nil {
+			if err := m.h.rememberSetting(t.selection); err != nil {
 				m.recordNote("Could not save session settings: " + err.Error())
 			}
 		}

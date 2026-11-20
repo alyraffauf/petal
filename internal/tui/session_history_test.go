@@ -26,7 +26,7 @@ func TestRemoteActivityReordersSavedHistory(t *testing.T) {
 		Opened: time.Unix(3, 0),
 	}
 	for _, saved := range []sessions.Record{older, newer} {
-		if err := sessions.Save(cwd, saved); err != nil {
+		if _, err := sessions.Create(cwd, saved); err != nil {
 			t.Fatal(err)
 		}
 	}
