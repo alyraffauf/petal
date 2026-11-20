@@ -3,7 +3,7 @@
 	<h1>Petal</h1>
 </div>
 
-Petal is a meta-harness that implements both the client and server sides of the Agent Client Protocol. Petal provides a beautiful TUI client, an agent server that can be integrated into your preferred Agent Development Environments, and a load balancer capable of maximizing usage across multiple Claude or Codex subscriptions.
+Petal is a meta-harness and implementing both the client and server sides of the Agent Client Protocol. Petal provides a beautiful TUI client, a proxied agent server accessible from your editor or other Agent Development Environment, and a load balancer which maximizes usage across multiple Claude or Codex subscriptions.
 
 Open Petal, pick a model. Petal checks the accounts that offer it and chooses the one with the most estimated quota left, weighted by subscription size. Each conversation stays on its account when you resume it. You can also pick the account yourself.
 
