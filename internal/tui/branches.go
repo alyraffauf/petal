@@ -34,16 +34,13 @@ func (m *terminal) fork() tea.Cmd {
 		if err != nil {
 			return forkResult{err: err}
 		}
-		child := sessions.Record{ID: id, Parent: record.ID, Title: "Fork of " + record.Title, Model: record.Model, Account: record.Account, Opened: time.Now()}
+		child := sessions.Record{ID: id, Parent: record.ID, Title: record.ForkTitle(), Model: record.Model, Account: record.Account, Opened: time.Now()}
 		child.Placement, err = placementFrom(r)
 		if err != nil {
 			return forkResult{err: err}
 		}
 		if child.Placement != nil {
 			child.Account = child.Placement.Account
-		}
-		if record.Title == "" {
-			child.Title = "Forked conversation"
 		}
 		_, err = sessions.Create(cwd, child)
 		return forkResult{id, err}

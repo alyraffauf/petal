@@ -180,8 +180,8 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			}
 			second := request(editor, "session/fork", parent)
 			fork, err := sessions.Lookup(cwd, stringField(second, "sessionId"))
-			if err != nil || fork.Placement == nil || fork.Placement.Reason != routing.ForkAccount {
-				t.Fatalf("saved fork placement: %+v, %v", fork.Placement, err)
+			if err != nil || fork.Parent != parent || fork.Title != record.ForkTitle() || fork.Placement == nil || fork.Placement.Reason != routing.ForkAccount {
+				t.Fatalf("saved fork: %+v, %v", fork, err)
 			}
 			open := func(result Object) proxyWireTest {
 				t.Helper()

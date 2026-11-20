@@ -117,6 +117,13 @@ func Lookup(cwd, id string) (Record, error) {
 	return decode(row)
 }
 
+func (r Record) ForkTitle() string {
+	if r.Title == "" {
+		return "Forked conversation"
+	}
+	return "Fork of " + r.Title
+}
+
 // Create keeps the first record for an ID, including when two clients see it at once.
 func Create(cwd string, record Record) (Record, error) {
 	return editRecord(cwd, record.ID, func(saved *Record) bool {

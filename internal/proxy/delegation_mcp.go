@@ -36,13 +36,14 @@ type delegationTools struct {
 }
 
 type delegationEndpoint struct {
-	ctx    context.Context
-	wakes  wakeQueue
-	cancel context.CancelFunc
-	ready  chan struct{}
-	parent string // published by closing ready
-	cwd    string
-	server routing.MCPServer
+	ctx        context.Context
+	wakes      wakeQueue
+	cancel     context.CancelFunc
+	ready      chan struct{}
+	parent     string // published by closing ready
+	cwd        string
+	forkParent string
+	server     routing.MCPServer
 }
 
 func newDelegationEndpoint(lifetime context.Context, cwd string, tools delegationTools) (*delegationEndpoint, error) {
@@ -165,6 +166,9 @@ func (p *proxy) prepareDelegation(lifetime context.Context, params Object, metho
 	if err != nil {
 		return nil, nil, err
 	}
+	if method == "session/fork" {
+		endpoint.forkParent = parent
+	}
 	configured := append([]routing.MCPServer{endpoint.server}, p.MCPServers...)
 	return endpoint, configured, nil
 }
@@ -183,9 +187,18 @@ func (p *proxy) bindDelegation(endpoint *delegationEndpoint, account, parent str
 	if cwd := p.delegationCwds[parent]; cwd != "" && cwd != endpoint.cwd {
 		return acp.NewInvalidParams("parent session belongs to a different working directory")
 	}
-	if _, err := sessions.Create(endpoint.cwd, sessions.Record{
+	record := sessions.Record{
 		ID: parent, Model: p.Model, Account: account, Opened: time.Now(), Placement: placement,
-	}); err != nil {
+	}
+	if endpoint.forkParent != "" {
+		source, err := sessions.Lookup(endpoint.cwd, endpoint.forkParent)
+		if err != nil {
+			return fmt.Errorf("read fork parent: %w", err)
+		}
+		record.Parent = endpoint.forkParent
+		record.Title = source.ForkTitle()
+	}
+	if _, err := sessions.Create(endpoint.cwd, record); err != nil {
 		return fmt.Errorf("record delegation parent session: %w", err)
 	}
 	p.closeDelegationLocked(parent)

@@ -46,7 +46,7 @@ Suppose a Claude account has 80% left for five hours, 60% for the week, and 5% f
 
 Petal ranks accounts by **capacity × remaining fraction**. A 5× subscription at 30% scores 1.5 and beats a 1× subscription at 90%, which scores 0.9. Petal breaks ties randomly for new top-level sessions. Resuming a conversation preserves its saved placement.
 
-Both probes run in the account's environment. To supply your own percentage, set `usage` to a command array that prints one number from 0 to 100. Auto prefers an account with measured quota over one with unknown quota. If every matching account is exhausted, on cooldown, or has a failed probe, Petal still opens the thread on the first matching account alphabetically. The provider enforces quota when you send a prompt.
+Both probes run in the account's environment. To supply your own percentage, set `usage` to a command array that prints one number from 0 to 100. Auto prefers an account with measured quota over one with unknown quota. If every matching account is exhausted, on cooldown, or has a failed probe, Petal still opens the thread on the alphabetically first matching account connected with the active ACP version. The provider enforces quota when you send a prompt.
 
 Open a thread's details in the control center to see the account decision saved when Petal opened it. Details show why Petal selected the account and whether it was eligible. When the probe supplies a percentage, details include the weighted score and the limiting window if known. A fork inherits the connected account. Older threads and threads discovered from an adapter may have no saved decision.
 
