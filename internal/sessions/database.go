@@ -21,12 +21,18 @@ import (
 var migrationFiles embed.FS
 var migrations, _ = fs.Sub(migrationFiles, "migrations")
 
+const storeFilename = "index.sqlite"
+
+func storeDir(cwd string) (string, error) {
+	return paths.XDG("STATE", filepath.Join("conversations", key(cwd)))
+}
+
 func openStore(cwd string) (*sql.DB, error) {
 	return openStoreContext(context.Background(), cwd)
 }
 
 func openStoreContext(ctx context.Context, cwd string) (*sql.DB, error) {
-	dir, err := paths.XDG("STATE", filepath.Join("conversations", key(cwd)))
+	dir, err := storeDir(cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +66,7 @@ func openStoreContext(ctx context.Context, cwd string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, "index.sqlite")
+	path := filepath.Join(dir, storeFilename)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err

@@ -1,4 +1,4 @@
-package acphost
+package processgroup
 
 import (
 	"syscall"
@@ -6,7 +6,7 @@ import (
 
 // Observe exit without reaping the leader. A completed exit may also cause
 // registration to fail with ESRCH if the process is already a zombie.
-func observeTerminalExit(pid int) {
+func observeExit(pid int) {
 	syscall.ForkLock.RLock()
 	queue, err := syscall.Kqueue()
 	if err == nil {

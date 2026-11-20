@@ -17,6 +17,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"petal/internal/delegation"
+	"petal/internal/processgroup"
 	"petal/internal/routing"
 )
 
@@ -409,7 +410,8 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 		return nil, err
 	}
 	cmd.Stdout = childOutput
-	if err := cmd.Start(); err != nil {
+	group, err := processgroup.Start(cmd)
+	if err != nil {
 		childOutput.Close()
 		stop()
 		in.Close()
@@ -560,7 +562,7 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 		conn.SetLogger(slog.New(slog.DiscardHandler))
 	}
 	go func() {
-		_ = cmd.Wait()
+		_ = group.Wait()
 		close(exited)
 		// A surviving helper may still hold stdout. Allow the reader to drain
 		// buffered frames, then terminate any blocked read.

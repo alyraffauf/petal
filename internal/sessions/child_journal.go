@@ -308,23 +308,33 @@ func loadChildBindings(db *sql.DB, records []Record) error {
 	for i := range records {
 		byID[records[i].ID] = &records[i]
 	}
-	rows, err := db.Query(`
+	statuses, err := childStatuses(context.Background(), db)
+	for binding, status := range statuses {
+		if record := byID[binding.ChildID]; record != nil {
+			record.DelegatedParent = binding.ParentID
+			record.DelegationStatus = status
+		}
+	}
+	return err
+}
+
+func childStatuses(ctx context.Context, db *sql.DB) (map[ChildBinding]string, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT child_id, parent_id, COALESCE(result_status,
 			CASE WHEN cancel_requested = 1 THEN 'cancelling' WHEN lease IS NOT NULL THEN 'running' ELSE '' END)
 		FROM child_bindings`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
+	statuses := make(map[ChildBinding]string)
 	for rows.Next() {
-		var child, parent, status string
-		if err := rows.Scan(&child, &parent, &status); err != nil {
-			return err
+		var binding ChildBinding
+		var status string
+		if err := rows.Scan(&binding.ChildID, &binding.ParentID, &status); err != nil {
+			return nil, err
 		}
-		if record := byID[child]; record != nil {
-			record.DelegatedParent = parent
-			record.DelegationStatus = status
-		}
+		statuses[binding] = status
 	}
-	return rows.Err()
+	return statuses, rows.Err()
 }

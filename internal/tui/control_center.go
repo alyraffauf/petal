@@ -31,6 +31,7 @@ func nodeStatus(n controlNode) string {
 
 type controlCenter struct {
 	cwd           string
+	childStatuses *sessions.ChildStatusWatch
 	cancelling    map[string]bool
 	cancelErrors  map[string]string
 	cancelButton  image.Rectangle
@@ -109,7 +110,7 @@ func (p *picker) nodes() []controlNode {
 		node := controlNode{id: r.ID, parent: parent, title: petalLabel(title), kind: kind, state: petalLabel(state), route: petalLabel(r.Model + " / " + r.Account), index: i}
 		if r.DelegatedParent != "" {
 			node.binding = sessions.ChildBinding{ParentID: r.DelegatedParent, ChildID: r.ID}
-			node.cancellable = r.DelegationStatus == "running" || r.DelegationStatus == "cancelling"
+			node.cancellable = childIsRunning(r.DelegationStatus)
 			if p.center.cancelling[node.id] {
 				node.state = "cancelling"
 			}

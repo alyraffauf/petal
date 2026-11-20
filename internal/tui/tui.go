@@ -423,6 +423,13 @@ func (m *terminal) restorePermissionDraft() {
 }
 
 func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if launch := m.launch; launch != nil && launch.center.childStatuses != nil {
+		defer func() {
+			if launch != m.launch {
+				launch.stopWatchingChildStatuses()
+			}
+		}()
+	}
 	if batch, ok := msg.(outputBatch); ok {
 		visibleBefore := len(m.Messages)
 		for _, e := range batch.events {
@@ -494,7 +501,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch msg.(type) {
-		case tea.MouseClickMsg, tea.MouseWheelMsg, tea.WindowSizeMsg, tea.KeyPressMsg, tea.PasteMsg, routeBalances, remoteSessions, transcriptResults, childCancellationResult:
+		case tea.MouseClickMsg, tea.MouseWheelMsg, tea.WindowSizeMsg, tea.KeyPressMsg, tea.PasteMsg, routeBalances, remoteSessions, transcriptResults, childCancellationResult, childStatusesChanged:
 			_, cmd := m.launch.Update(msg)
 			if m.launch == nil {
 				return m, cmd

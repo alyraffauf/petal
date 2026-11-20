@@ -19,7 +19,7 @@ type childCancellationResult struct {
 }
 
 func (p *picker) canCancelChild(n controlNode) bool {
-	if p.center.selected != n.id && (p.center.cancelling[p.center.selected] || p.center.cancelOutcome != "") {
+	if p.center.selected != "" && p.center.selected != n.id {
 		return false
 	}
 	return n.cancellable
@@ -74,4 +74,74 @@ func (p *picker) childCancellationFinished(msg childCancellationResult) {
 		message = "Cancellation unconfirmed."
 	}
 	p.center.cancelErrors[msg.binding.ChildID] = message
+}
+
+type childStatusesChanged struct {
+	watch    *sessions.ChildStatusWatch
+	statuses map[sessions.ChildBinding]string
+	err      error
+}
+
+func childIsRunning(status string) bool {
+	return status == "running" || status == "cancelling"
+}
+
+func (p *picker) hasRunningChild() bool {
+	for _, record := range p.saved {
+		if childIsRunning(record.DelegationStatus) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *picker) watchChildStatuses() tea.Cmd {
+	if p.center.cwd == "" || !p.hasRunningChild() {
+		return nil
+	}
+	watch, err := sessions.WatchChildStatuses(p.center.cwd)
+	if err != nil {
+		p.historyError = err.Error()
+		return nil
+	}
+	p.center.childStatuses = watch
+	return nextChildStatuses(watch)
+}
+
+func nextChildStatuses(watch *sessions.ChildStatusWatch) tea.Cmd {
+	return func() tea.Msg {
+		statuses, err := watch.Next()
+		return childStatusesChanged{watch, statuses, err}
+	}
+}
+
+func (p *picker) stopWatchingChildStatuses() {
+	if watch := p.center.childStatuses; watch != nil {
+		watch.Close()
+		p.center.childStatuses = nil
+	}
+}
+
+func (p *picker) refreshChildStatuses(msg childStatusesChanged) tea.Cmd {
+	if p.center.childStatuses != msg.watch {
+		return nil
+	}
+	if msg.err != nil {
+		p.stopWatchingChildStatuses()
+		p.historyError = msg.err.Error()
+		return nil
+	}
+	for i := range p.saved {
+		record := &p.saved[i]
+		// A cancellation response may already have applied a newer result.
+		if childIsRunning(record.DelegationStatus) {
+			binding := sessions.ChildBinding{ParentID: record.DelegatedParent, ChildID: record.ID}
+			record.DelegationStatus = msg.statuses[binding]
+		}
+	}
+	if !p.hasRunningChild() {
+		p.stopWatchingChildStatuses()
+		return nil
+	}
+	return nextChildStatuses(msg.watch)
 }

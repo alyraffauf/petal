@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -133,14 +135,8 @@ func TestControlCenterFollowsSavedDelegationWithoutLiveSession(t *testing.T) {
 func TestControlCenterCancelsOnlySelectedDelegation(t *testing.T) {
 	for _, input := range []string{"keyboard", "mouse"} {
 		t.Run(input, func(t *testing.T) {
-			p := newPicker(routing.Config{})
-			p.history, p.width, p.height = true, 92, 23
-			p.saved = []sessions.Record{
-				{ID: "parent", Title: "Parent"},
-				{ID: "child", Title: "Selected", DelegatedParent: "parent", DelegationStatus: "running"},
-				{ID: "sibling", Title: "Sibling", DelegatedParent: "parent", DelegationStatus: "running"},
-			}
-			p.center.cwd, p.center.selected, p.center.filter = t.TempDir(), "child", 2
+			p := runningChildrenPicker(t)
+			p.center.filter = 2
 			p.View()
 			var cmd tea.Cmd
 			if input == "keyboard" {
@@ -159,7 +155,24 @@ func TestControlCenterCancelsOnlySelectedDelegation(t *testing.T) {
 			if len(p.nodes()) != 2 {
 				t.Fatal("pending cancellation disappeared from the working filter")
 			}
-			p.Update(childCancellationResult{picker: p, binding: binding, result: &sessions.ChildResult{Status: "cancelled"}})
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			owner := make(chan error, 1)
+			go func() {
+				err := sessions.WaitForChildCancellation(ctx, p.center.cwd, binding)
+				if err == nil {
+					err = sessions.FinishChild(ctx, p.center.cwd, binding, sessions.ChildResult{Status: "cancelled"})
+				}
+				owner <- err
+			}()
+			p.Update(cmd())
+			if err := <-owner; err != nil {
+				t.Fatal(err)
+			}
+			sibling, err := sessions.ReadChildActivity(ctx, p.center.cwd, sessions.ChildBinding{ParentID: "parent", ChildID: "sibling"}, 0, 10)
+			if err != nil || sibling.Status != "running" || sibling.Result != nil {
+				t.Fatalf("sibling journal changed: %+v, %v", sibling, err)
+			}
 			rows := p.nodes()
 			if len(rows) != 1 || rows[0].id != "sibling" || rows[0].state != "running" {
 				t.Fatalf("expected only the running sibling, got %+v", rows)
@@ -177,4 +190,79 @@ func TestControlCenterCancelsOnlySelectedDelegation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestControlCenterRefreshesAfterIndependentChildCompletion(t *testing.T) {
+	p := runningChildrenPicker(t)
+	p.center.filter = 2
+	initial := p.Init()
+	if initial == nil {
+		t.Fatal("control center did not subscribe to child state")
+	}
+	_, next := p.Update(initial())
+	if next == nil {
+		t.Fatal("control center stopped watching after its initial snapshot")
+	}
+	if view := ansi.Strip(p.View().Content); !strings.Contains(view, cancelChildLabel) {
+		t.Fatal(view)
+	}
+	oldButton := p.center.cancelButton.Min
+	binding := sessions.ChildBinding{ParentID: "parent", ChildID: "child"}
+	if err := sessions.FinishChild(t.Context(), p.center.cwd, binding, sessions.ChildResult{Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := make(chan tea.Msg, 1)
+	go func() { updated <- next() }()
+	select {
+	case msg := <-updated:
+		p.Update(msg)
+	case <-time.After(5 * time.Second):
+		t.Fatal("control center did not refresh after the database commit")
+	}
+
+	if nodes := p.nodes(); len(nodes) != 1 || nodes[0].id != "sibling" {
+		t.Fatalf("working filter after completion: %+v", nodes)
+	}
+	if _, cmd := p.Update(tea.MouseClickMsg{X: oldButton.X, Y: oldButton.Y, Button: tea.MouseLeft}); cmd != nil {
+		t.Fatal("the previous button targeted a running sibling")
+	}
+	if _, cmd := p.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}); cmd != nil {
+		t.Fatal("keyboard cancellation targeted a running sibling")
+	}
+	p.center.filter = 0
+	if view := ansi.Strip(p.View().Content); !strings.Contains(view, "completed") || strings.Contains(view, cancelChildLabel) {
+		t.Fatal(view)
+	}
+}
+
+func runningChildrenPicker(t *testing.T) *picker {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	parent := sessions.Record{ID: "parent", Title: "Parent", Model: "test"}
+	if _, err := sessions.Create(cwd, parent); err != nil {
+		t.Fatal(err)
+	}
+	for _, child := range []sessions.Record{
+		{ID: "child", Title: "Selected", Model: "test"},
+		{ID: "sibling", Title: "Sibling", Model: "test"},
+	} {
+		binding := sessions.ChildBinding{ParentID: parent.ID, ChildID: child.ID}
+		release, err := sessions.StartChild(t.Context(), cwd, binding, child, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(release)
+	}
+	p := newPicker(routing.Config{})
+	p.history, p.width, p.height = true, 92, 23
+	p.center.cwd, p.center.selected = cwd, "child"
+	records, err := sessions.List(cwd, []string{"test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.saved = records
+	t.Cleanup(p.stopWatchingChildStatuses)
+	return p
 }

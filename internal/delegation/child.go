@@ -141,6 +141,9 @@ func (r *run) prompt(conn Connection, task string) (json.RawMessage, error) {
 	}
 	reply, err := conn.Request(r.ctx, "session/prompt", params)
 	if err != nil {
+		if r.version == 2 && r.ctx.Err() != nil {
+			return r.terminalResultOr(err)
+		}
 		return nil, err
 	}
 	if r.version == 1 {
@@ -163,15 +166,19 @@ func (r *run) prompt(conn Connection, task string) (json.RawMessage, error) {
 	case result := <-r.idle:
 		return result, nil
 	case <-r.ctx.Done():
-		return nil, r.ctx.Err()
+		return r.terminalResultOr(r.ctx.Err())
 	case <-conn.Done():
-		// A terminal update may have reached the journal just before EOF.
-		select {
-		case result := <-r.idle:
-			return result, nil
-		default:
-			return nil, errors.New("child disconnected before ACP v2 prompt completed")
-		}
+		return r.terminalResultOr(errors.New("child disconnected before ACP v2 prompt completed"))
+	}
+}
+
+// A terminal update already accepted before cancellation or EOF wins.
+func (r *run) terminalResultOr(err error) (json.RawMessage, error) {
+	select {
+	case result := <-r.idle:
+		return result, nil
+	default:
+		return nil, err
 	}
 }
 
