@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run Petal's local regressions and the official v1 kit against reference adapters.
+# Run Petal's local regressions and the official ACP kit against reference adapters.
 set -euo pipefail
 pin=7c71c4d1af0994e73bdc100c9f7f6b98f2319cda
 : "${ACP_TCK_DIR:?Set ACP_TCK_DIR to the pinned acp-tck checkout}"
@@ -18,9 +18,13 @@ cd "$kit"
 python=$(uv run --frozen --no-dev python -c 'import sys; print(sys.executable)')
 
 run_profile() {
-  local name=$1 output=$2 fixture work="$testdir/$1"
+  local name=$1 output=$2 fixture version=1 work="$testdir/$1"
   local -a options=()
   case "$name" in
+    v2-full) version=2; fixture=conforming_full
+      options=(--allow-logout --cancel-prompt __hang__ --auth-method '["fixture","tck"]') ;;
+    v2-baseline) version=2; fixture=conforming
+      options=(--cancel-prompt __hang__) ;;
     full) fixture=conforming_full
       options=(--allow-logout --cancel-prompt __hang__ --auth-method '["fixture","tck"]') ;;
     baseline) fixture=conforming ;;
@@ -33,12 +37,14 @@ run_profile() {
     *) echo "Unknown fixture profile: $name" >&2; return 2 ;;
   esac
   mkdir "$work"
-  "$python" - "$kit/tests/fixtures/agents/v1/$fixture.py" > "$work/config.toml" <<'PY'
+  "$python" - "$kit/tests/fixtures/agents/v$version/$fixture.py" "$version" > "$work/config.toml" <<'PY'
 import json, sys
+if sys.argv[2] == "2":
+    print("acp_v2 = true")
 print("[[accounts]]\nname = 'fixture'\n[[accounts.models]]\nid = 'fixture'")
 print("command = " + json.dumps([sys.executable, sys.argv[1]], ensure_ascii=False))
 PY
-  uv run --frozen --no-dev acp-tck --protocol-version 1 --timeout 5 --test-timeout 30 \
+  uv run --frozen --no-dev acp-tck --protocol-version "$version" --timeout 5 --test-timeout 30 \
     "${options[@]}" --agent-cwd "$work" --report-json "$output" -- \
     "$testdir/petal" acp fixture --account fixture --config "$work/config.toml"
 }
