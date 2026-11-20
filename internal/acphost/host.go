@@ -4,7 +4,6 @@ package acphost
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +16,8 @@ import (
 	"unicode/utf8"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"petal/internal/processgroup"
 )
 
 type Host struct {
@@ -40,7 +41,7 @@ func Open(ctx context.Context, cwd string, approve func(context.Context, string)
 func (h *Host) Close() {
 	h.mu.Lock()
 	for id, t := range h.terminals {
-		_ = t.stop()
+		_ = t.group.Stop()
 		delete(h.terminals, id)
 	}
 	h.cancel()
@@ -143,11 +144,9 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 		for _, e := range p.Env {
 			cmd.Env = append(cmd.Env, e.Name+"="+e.Value)
 		}
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		// Descendants can keep the output pipe open after the command exits.
 		cmd.WaitDelay = time.Second
 		t := &terminal{cmd: cmd, session: string(p.SessionId), limit: limit, done: make(chan struct{})}
-		cmd.Cancel = t.stop
 		cmd.Stdout = t
 		cmd.Stderr = t
 		h.mu.Lock()
@@ -155,9 +154,11 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if err := cmd.Start(); err != nil {
+		group, err := processgroup.Start(cmd)
+		if err != nil {
 			return nil, err
 		}
+		t.group = group
 		h.next++
 		id := strconv.Itoa(h.next)
 		h.terminals[id] = t
@@ -175,7 +176,7 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 			return nil, acp.NewRequestError(-32002, "Terminal not found", nil)
 		}
 		if method == "terminal/release" {
-			err := t.stop()
+			err := t.group.Stop()
 			if err == nil {
 				delete(h.terminals, p.TerminalID)
 			}
@@ -199,7 +200,7 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 				return struct{}{}, nil
 			default:
 			}
-			return struct{}{}, t.stop()
+			return struct{}{}, t.group.Stop()
 		}
 	}
 	return nil, acp.NewMethodNotFound(method)
@@ -229,34 +230,12 @@ type terminal struct {
 	session   string
 	limit     int64
 	done      chan struct{}
-	groupMu   sync.Mutex
-	groupDone bool
+	group     *processgroup.Group
 	mu        sync.Mutex
 	buf       []byte
 	start     int
 	truncated bool
 	exit      *acp.TerminalExitStatus
-}
-
-func (t *terminal) stop() error {
-	t.groupMu.Lock()
-	defer t.groupMu.Unlock()
-	if t.groupDone {
-		return nil
-	}
-	err := t.killGroup()
-	if err == nil {
-		t.groupDone = true
-	}
-	return err
-}
-
-// Call under groupMu while the group leader's PID is still reserved.
-func (t *terminal) killGroup() error {
-	if err := syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	return nil
 }
 
 func (t *terminal) Write(data []byte) (int, error) {
@@ -297,15 +276,7 @@ func (t *terminal) output() string {
 	return strings.ToValidUTF8(s, "�")
 }
 func (t *terminal) wait() {
-	observeTerminalExit(t.cmd.Process.Pid)
-	// Clean up while the unreaped leader still reserves the numeric group ID.
-	t.groupMu.Lock()
-	if !t.groupDone {
-		_ = t.killGroup()
-	}
-	t.groupDone = true
-	t.groupMu.Unlock()
-	_ = t.cmd.Wait()
+	_ = t.group.Wait()
 	status := &acp.TerminalExitStatus{}
 	if s, ok := t.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && s.Signaled() {
 		signal := s.Signal().String()

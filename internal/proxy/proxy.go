@@ -17,6 +17,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"petal/internal/delegation"
+	"petal/internal/processgroup"
 	"petal/internal/routing"
 )
 
@@ -32,12 +33,13 @@ func SessionID(p Object) (string, error) {
 }
 
 type backend struct {
-	close context.CancelFunc
-	ready atomic.Bool
-	raw   Object
-	conn  *acp.Connection
-	wire  *adapterWire
-	hello acp.InitializeResponse
+	close  context.CancelFunc
+	exited <-chan struct{}
+	ready  atomic.Bool
+	raw    Object
+	conn   *acp.Connection
+	wire   *adapterWire
+	hello  acp.InitializeResponse
 }
 type proxy struct {
 	embedded      bool
@@ -408,7 +410,8 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 		return nil, err
 	}
 	cmd.Stdout = childOutput
-	if err := cmd.Start(); err != nil {
+	group, err := processgroup.Start(cmd)
+	if err != nil {
 		childOutput.Close()
 		stop()
 		in.Close()
@@ -417,7 +420,8 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	}
 	childOutput.Close()
 	context.AfterFunc(lifetime, func() { out.Close(); in.Close() })
-	b := &backend{close: stop}
+	exited := make(chan struct{})
+	b := &backend{close: stop, exited: exited}
 	wire := &adapterWire{Writer: in, lifetime: lifetime, updates: make(chan struct{}, 128), nativeV2: version == 2}
 	reader := incoming(out, wire)
 	if receive != nil {
@@ -558,7 +562,8 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 		conn.SetLogger(slog.New(slog.DiscardHandler))
 	}
 	go func() {
-		_ = cmd.Wait()
+		_ = group.Wait()
+		close(exited)
 		// A surviving helper may still hold stdout. Allow the reader to drain
 		// buffered frames, then terminate any blocked read.
 		_ = out.SetReadDeadline(time.Now().Add(time.Second))

@@ -183,7 +183,10 @@ func (c *delegatedConnection) AccountName() string   { return c.account }
 func (c *delegatedConnection) Version() uint16       { return c.version }
 func (c *delegatedConnection) Done() <-chan struct{} { return c.backend.conn.Done() }
 func (c *delegatedConnection) RecordRateLimit()      { routing.RecordRateLimit(c.account) }
-func (c *delegatedConnection) Close()                { c.backend.close() }
+func (c *delegatedConnection) Close() {
+	c.backend.close()
+	<-c.backend.exited
+}
 
 func (c *delegatedConnection) nativeParams(params any) (Object, error) {
 	raw, err := json.Marshal(params)

@@ -9,6 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"petal/internal/sessions"
 )
 
 var centerFilters = [...]string{"all", "needs input", "working", "ready", "saved"}
@@ -28,21 +30,30 @@ func nodeStatus(n controlNode) string {
 }
 
 type controlCenter struct {
-	finding      bool
-	filter       int
-	graphID      string
-	edge         int
-	project      string
-	owner        *terminal
-	selected     string
-	folded       map[string]bool
-	inspect      bool
-	detailScroll backlogViewport
-	markdown     markdownCache
+	cwd           string
+	childStatuses *sessions.ChildStatusWatch
+	cancelling    map[string]bool
+	cancelErrors  map[string]string
+	cancelButton  image.Rectangle
+	cancelTarget  sessions.ChildBinding
+	cancelOutcome string
+	finding       bool
+	filter        int
+	graphID       string
+	edge          int
+	project       string
+	owner         *terminal
+	selected      string
+	folded        map[string]bool
+	inspect       bool
+	detailScroll  backlogViewport
+	markdown      markdownCache
 }
 
 type controlNode struct {
 	id, parent, title, kind, state, route string
+	binding                               sessions.ChildBinding
+	cancellable                           bool
 	index, depth                          int
 	branch, unread                        bool
 }
@@ -96,7 +107,15 @@ func (p *picker) nodes() []controlNode {
 			title = "untitled conversation"
 		}
 		savedNodes[r.ID] = len(all)
-		all = append(all, controlNode{id: r.ID, parent: parent, title: petalLabel(title), kind: kind, state: petalLabel(state), route: petalLabel(r.Model + " / " + r.Account), index: i, unread: r.UnreadChildResult})
+		node := controlNode{id: r.ID, parent: parent, title: petalLabel(title), kind: kind, state: petalLabel(state), route: petalLabel(r.Model + " / " + r.Account), index: i, unread: r.UnreadChildResult}
+		if r.DelegatedParent != "" {
+			node.binding = sessions.ChildBinding{ParentID: r.DelegatedParent, ChildID: r.ID}
+			node.cancellable = childIsRunning(r.DelegationStatus)
+			if p.center.cancelling[node.id] {
+				node.state = "cancelling"
+			}
+		}
+		all = append(all, node)
 	}
 	if current != "" {
 		for i, c := range m.agents.children {
@@ -111,8 +130,12 @@ func (p *picker) nodes() []controlNode {
 			node := controlNode{id: c.id, parent: c.parent, title: petalLabel(title), kind: "Subagent", state: state, index: i}
 			if index, ok := savedNodes[c.id]; ok {
 				if r := p.saved[all[index].index]; r.DelegatedParent != "" {
-					node.parent = r.DelegatedParent
-					node.unread = r.UnreadChildResult
+					saved := all[index]
+					node.unread = saved.unread
+					node.parent, node.binding, node.cancellable = saved.parent, saved.binding, saved.cancellable
+					if r.DelegationStatus != "running" || p.center.cancelling[node.id] {
+						node.state = saved.state
+					}
 				}
 				all[index] = node
 			} else {
@@ -187,6 +210,7 @@ func (p *picker) selectedNode(rows []controlNode) int {
 }
 func (p *picker) selectNode(n controlNode) {
 	p.center.selected = n.id
+	p.center.cancelOutcome = ""
 	p.center.detailScroll = backlogViewport{browsing: true}
 	p.center.markdown = markdownCache{}
 }
@@ -227,6 +251,10 @@ func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
 		p.center.inspect = false
 		p.center.detailScroll = backlogViewport{browsing: true}
 		return nil
+	case "ctrl+x":
+		if p.canCancelChild(n) {
+			return p.cancelChild(n)
+		}
 	case "ctrl+g":
 		p.openGraph(n.id)
 		return nil
@@ -390,7 +418,7 @@ func (p *picker) centerDetails(n controlNode) []entry {
 		}
 		if n.kind == "Delegated" {
 			rows = append(rows, entry{"system", "Parent · " + p.graphName(n.parent)})
-			if r.DelegationStatus != "" {
+			if r.DelegationStatus != "" && !n.cancellable {
 				label := "Result"
 				if n.unread {
 					label = "Unread result"
@@ -412,6 +440,7 @@ func (p *picker) centerDetails(n controlNode) []entry {
 	}
 }
 func (p *picker) centerView() tea.View {
+	p.center.cancelButton = image.Rectangle{}
 	if p.center.graphID != "" {
 		return p.graphView()
 	}
@@ -545,6 +574,27 @@ func (p *picker) centerView() tea.View {
 		hint = petalLabel(p.historyError) + " · " + escape
 	} else {
 		hint = styledHint(hint, p.background, w)
+	}
+	if p.center.cancelOutcome != "" && p.historyError == "" {
+		hint = p.center.cancelOutcome + "  " + escape
+	}
+	if p.center.cancelling[p.center.selected] {
+		hint = "Waiting for child to stop  " + escape
+	} else if len(nodes) > 0 && len(rows) < h {
+		n := nodes[index]
+		failure := p.center.cancelErrors[n.id]
+		if p.canCancelChild(n) {
+			hint = richBand(cancelChildLabel, len(cancelChildLabel), petalRose, selectionBand, true) + "  " + escape
+			if failure != "" {
+				hint += "  " + petalLabel(failure)
+			}
+			if w >= len(cancelChildLabel)+2 {
+				p.center.cancelButton = image.Rect(2, h-1, 2+len(cancelChildLabel), h)
+				p.center.cancelTarget = n.binding
+			}
+		} else if failure != "" {
+			hint = petalLabel(failure) + "  " + escape
+		}
 	}
 	rows = appendNavFooter(rows, w, h, hint, p.background)
 	view := tea.NewView(strings.Join(rows, "\n"))

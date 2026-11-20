@@ -209,3 +209,30 @@ func TestParentCancelRevokesChildPermission(t *testing.T) {
 		})
 	}
 }
+
+func TestV2QueuedTerminalUpdateSurvivesCancellation(t *testing.T) {
+	for _, acknowledgement := range []bool{true, false} {
+		t.Run(fmt.Sprintf("acknowledged=%t", acknowledgement), func(t *testing.T) {
+			for range 30 {
+				ctx, cancel := context.WithCancel(t.Context())
+				child := run{ctx: ctx, binding: sessions.ChildBinding{ChildID: "child"}, version: 2, idle: make(chan json.RawMessage, 1), active: true, endPermissions: func() {}}
+				terminal := json.RawMessage(`{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn"}`)
+				adapter := &echoAdapter{done: make(chan struct{}), prompt: func(ctx context.Context, _ string) (json.RawMessage, error) {
+					if err := child.update(terminal); err != nil {
+						t.Fatal(err)
+					}
+					cancel()
+					if !acknowledgement {
+						return nil, ctx.Err()
+					}
+					return json.RawMessage(`{"messageId":"accepted"}`), nil
+				}}
+				result, err := child.prompt(adapter, "finish")
+				cancel()
+				if err != nil || string(result) != string(terminal) {
+					t.Fatalf("prompt returned %s, %v after accepting terminal update", result, err)
+				}
+			}
+		})
+	}
+}

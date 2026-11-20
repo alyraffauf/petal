@@ -211,6 +211,10 @@ func TestInterruptedChildRecovery(t *testing.T) {
 		t.Fatalf("live child: %+v, %v", page, err)
 	}
 	release()
+	records, err := List(cwd, []string{record.Model})
+	if err != nil || len(records) != 1 || records[0].DelegationStatus != "failed" || !records[0].UnreadChildResult {
+		t.Fatalf("reopened history kept an interrupted child active: %+v, %v", records, err)
+	}
 	page, err = ReadChildActivity(t.Context(), cwd, binding, 0, 1)
 	if err != nil || page.Result == nil || page.Result.Status != "failed" {
 		t.Fatalf("orphaned child: %+v, %v", page, err)

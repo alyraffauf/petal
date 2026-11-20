@@ -188,7 +188,7 @@ func List(cwd string, models []string) ([]Record, error) {
 	if len(records) == 0 {
 		return records, nil
 	}
-	if err := loadChildBindings(db, records); err != nil {
+	if err := loadChildBindings(db, cwd, records); err != nil {
 		return nil, err
 	}
 	return records, nil

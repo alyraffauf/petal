@@ -141,7 +141,16 @@ func TestDelegationRoutingAdapterFixture(t *testing.T) {
 			}
 		case "session/new":
 			response["result"] = json.RawMessage(`{"sessionId":"child"}`)
+		case "session/cancel":
+			if os.Getenv("PETAL_DELEGATED_HELPER_ADDR") == "" {
+				t.Fatalf("unexpected cancellation")
+			}
+			continue
 		case "session/prompt":
+			if addr := os.Getenv("PETAL_DELEGATED_HELPER_ADDR"); addr != "" {
+				startDelegatedHelper(t, addr)
+				continue
+			}
 			reason := "end_turn"
 			if failure == "rate_limit" {
 				reason = failure

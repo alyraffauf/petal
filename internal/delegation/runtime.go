@@ -21,7 +21,7 @@ type Connection interface {
 	Request(context.Context, string, any) (json.RawMessage, error)
 	Notify(context.Context, string, any) error
 	Done() <-chan struct{}
-	Close()
+	Close() // Stops and waits for the child adapter.
 }
 
 type Receive func(ctx context.Context, method string, params json.RawMessage, notification bool) (any, error)
@@ -137,8 +137,10 @@ func (r *Runtime) Delegate(ctx context.Context, parentID, cwd, model, task strin
 		defer r.remove(child)
 		defer release()
 		defer closeTransport()
-		defer conn.Close()
-		child.execute(conn, task, closeTransport)
+		go child.watchCancellation()
+		result := child.execute(conn, task, closeTransport)
+		conn.Close()
+		child.finish(result)
 	}()
 	return Child{ID: binding.ChildID, Model: model, Done: done}, nil
 }
@@ -216,6 +218,24 @@ func (r *Runtime) Wait(ctx context.Context, parentID, cwd, childID string, after
 		case <-bounded.Done():
 			return page, ctx.Err()
 		case <-poll.C:
+		}
+	}
+}
+
+func (r *run) watchCancellation() {
+	for r.ctx.Err() == nil {
+		err := sessions.WaitForChildCancellation(r.ctx, r.cwd, r.binding)
+		if err == nil {
+			r.cancel()
+			return
+		}
+		if r.ctx.Err() != nil {
+			return
+		}
+		slog.Error("Could not check child cancellation", "childId", r.binding.ChildID, "error", err)
+		select {
+		case <-r.ctx.Done():
+		case <-time.After(time.Second):
 		}
 	}
 }

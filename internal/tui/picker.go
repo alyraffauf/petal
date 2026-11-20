@@ -49,7 +49,12 @@ type picker struct {
 	setting                                 *settingMenu
 }
 
-func (m *picker) Init() tea.Cmd { return nil }
+func (m *picker) Init() tea.Cmd {
+	if m.history {
+		return m.watchChildStatuses()
+	}
+	return nil
+}
 func newPicker(c routing.Config) *picker {
 	search := textinput.New()
 	search.Prompt = "  Search  "
@@ -71,6 +76,7 @@ func (m *picker) showHistory() {
 	m.saved = nil
 	cwd, err := os.Getwd()
 	if err == nil {
+		m.center.cwd = cwd
 		m.center.project = filepath.Base(cwd)
 		ctx, stop := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer stop()
@@ -177,6 +183,13 @@ type routeBalances struct {
 }
 
 func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.center.childStatuses != nil {
+		defer func() {
+			if !m.history {
+				m.stopWatchingChildStatuses()
+			}
+		}()
+	}
 	if profile, ok := msg.(tea.ColorProfileMsg); ok {
 		m.monochrome = profile.Profile <= colorprofile.ASCII
 	}
@@ -187,8 +200,28 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch t := msg.(type) {
+	case childStatusesChanged:
+		return m, m.refreshChildStatuses(t)
+	case childCancellationResult:
+		if t.picker == m {
+			m.childCancellationFinished(t)
+		}
 	case tea.MouseClickMsg:
-		if t.Button != tea.MouseLeft || !image.Pt(t.X, t.Y).In(m.pointerRows) {
+		if t.Button != tea.MouseLeft {
+			break
+		}
+		point := image.Pt(t.X, t.Y)
+		if m.history && m.center.graphID == "" && point.In(m.center.cancelButton) {
+			nodes := m.nodes()
+			if len(nodes) > 0 {
+				n := nodes[m.selectedNode(nodes)]
+				if m.canCancelChild(n) && n.binding == m.center.cancelTarget {
+					return m, m.cancelChild(n)
+				}
+			}
+			break
+		}
+		if !point.In(m.pointerRows) {
 			break
 		}
 		index := m.pointerFirst + t.Y - m.pointerRows.Min.Y
@@ -305,6 +338,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case key.Matches(t, resumeConversation) && !m.choosingRoute && m.setting == nil:
 			m.showHistory()
+			return m, m.watchChildStatuses()
 		case key.Matches(t, dismissMenu):
 			if m.choosingRoute {
 				m.choosingRoute = false
@@ -312,6 +346,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.fromCenter {
 				m.showHistory()
 				m.fromCenter = false
+				return m, m.watchChildStatuses()
 			} else {
 				return m, tea.Quit
 			}
@@ -510,6 +545,7 @@ func pick(c routing.Config, resume bool) (sessionStart, bool, error) {
 	if resume && len(m.saved) > 0 {
 		m.center.selected = m.saved[0].ID
 	}
+	defer m.stopWatchingChildStatuses()
 	_, err := tea.NewProgram(&frame{Model: m, background: m.background}).Run()
 	return sessionStart{cfg: m.cfg, resume: m.resume, id: m.id}, m.chosen, err
 }

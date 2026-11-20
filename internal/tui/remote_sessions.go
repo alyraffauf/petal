@@ -25,11 +25,12 @@ func (m *terminal) browseSessions() tea.Cmd {
 	if m.connection == connected {
 		picker.center.selected = m.h.record.ID
 	}
+	watch := picker.Init()
 	if m.h == nil || !m.h.canList {
-		return nil
+		return watch
 	}
 	h, cwd, parent := m.h, m.Cwd, m.ctx
-	return func() tea.Msg {
+	return tea.Batch(watch, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 		defer cancel()
 		var records []sessions.Record
@@ -63,7 +64,7 @@ func (m *terminal) browseSessions() tea.Cmd {
 			req.Cursor = result.NextCursor
 			cursors[*req.Cursor] = true
 		}
-	}
+	})
 }
 
 type endedSession struct {

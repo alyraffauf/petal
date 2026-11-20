@@ -46,6 +46,11 @@ func runChat(m *terminal) error {
 	}
 	m.inputTTY = tty
 	input := &clipboardInput{File: tty}
+	defer func() {
+		if m.launch != nil {
+			m.launch.stopWatchingChildStatuses()
+		}
+	}()
 	_, err := tea.NewProgram(&frame{Model: m, background: canvasBackground(m.cfg.TransparentBackground)}, tea.WithInput(input), tea.WithFilter(input.restorePacket)).Run()
 	return err
 }
