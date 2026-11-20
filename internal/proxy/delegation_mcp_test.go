@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -52,7 +53,7 @@ func TestDelegationAdapterFixture(t *testing.T) {
 			if version == 2 {
 				reply(json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"fork":{},"mcp":{"stdio":{}}}}}`))
 			} else {
-				reply(json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":false},"sessionCapabilities":{"close":{},"fork":{}}}}`))
+				reply(json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":false},"sessionCapabilities":{"close":{},"fork":{},"resume":{}}}}`))
 			}
 		case "session/new", "session/load", "session/resume", "session/fork":
 			if role == "child" && method == "session/new" {
@@ -66,7 +67,11 @@ func TestDelegationAdapterFixture(t *testing.T) {
 				nextID++
 				reply(Object{"sessionId": encoded("parent-" + strconv.Itoa(nextID)), "fixtureMCP": params["mcpServers"]})
 			} else {
-				reply(Object{"fixtureMCP": params["mcpServers"]})
+				result := Object{"fixtureMCP": params["mcpServers"]}
+				if version == 1 && method == "session/resume" {
+					result["sessionId"] = params["sessionId"]
+				}
+				reply(result)
 			}
 		case "session/close":
 			reply(Object{})
@@ -236,24 +241,42 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			if page := call(firstMCP, "petal_read", args, false); !strings.Contains(page, "receipt: echo") {
 				t.Fatalf("child output missing: %s", page)
 			}
+			if version == 1 {
+				config.Accounts = maps.Clone(config.Accounts)
+				config.Accounts["pinned-parent"] = config.Accounts["parent"]
+				config.PinnedAccount = "pinned-parent"
+			}
 			newEditor := connectWireTest(t, config)
 			newEditor.send(init)
 			newEditor.read()
-			method := "session/load"
-			if version == 2 {
-				method = "session/resume"
-				// A different spelling of the same routed ID must bind the same parent.
-				parent = `[ "parent", "parent", "parent-1" ]`
+			// A different JSON spelling must bind the same saved parent.
+			spelledParent := `[ "parent", "parent", "parent-1" ]`
+			resumed := request(newEditor, "session/resume", spelledParent)
+			if version == 1 && stringField(resumed, "sessionId") != spelledParent {
+				t.Errorf("pinned resume changed the editor session ID: %s", resumed["sessionId"])
 			}
-			reloaded := open(request(newEditor, method, parent))
+			reloaded := open(resumed)
 			if page := call(reloaded, "petal_read", args, false); !strings.Contains(page, "receipt: echo") {
-				t.Fatalf("resumed parent did not recover its child: %s", page)
+				t.Errorf("resumed parent did not recover its child: %s", page)
+			}
+			if version == 1 {
+				newEditor.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":%q,"prompt":[{"type":"text","text":"finish independent work"}]}}`, parent))
+				if frame := newEditor.read(); frame["error"] != nil {
+					t.Errorf("pinned resume rejected equivalent routed spelling: %s", frame["error"])
+				}
+				newEditor.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"session/resume","params":{"cwd":%q,"sessionId":%q,"mcpServers":[]}}`, t.TempDir(), parent))
+				if frame := newEditor.read(); frame["error"] == nil {
+					t.Error("pinned resume allowed an already bound parent to change project directories")
+				}
+				config.Accounts = maps.Clone(config.Accounts)
+				config.Accounts["pinned-child"] = config.Accounts["child"]
+				config.PinnedAccount = "pinned-child"
 			}
 			config.Model = "child"
 			childEditor := connectWireTest(t, config)
 			childEditor.send(init)
 			childEditor.read()
-			if result := request(childEditor, method, handle.ChildID); string(result["fixtureMCP"]) != "[]" {
+			if result := request(childEditor, "session/resume", handle.ChildID); string(result["fixtureMCP"]) != "[]" {
 				t.Fatalf("resumed child received delegation tools: %s", result["fixtureMCP"])
 			}
 		})

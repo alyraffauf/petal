@@ -119,6 +119,8 @@ func relayDelegationMCP(ctx context.Context, socket, token string, in io.Reader,
 	return err
 }
 
+// parent is the canonical editor-facing route, within cwd. Adapter pins can change
+// which backend serves that route without changing the stored session identity.
 func (p *proxy) prepareDelegation(lifetime context.Context, params Object, method, parent string, supportsStdio bool) (*delegationEndpoint, []routing.MCPServer, error) {
 	if p.delegation == nil || (method != "session/new" && method != "session/load" && method != "session/resume" && method != "session/fork") {
 		return nil, p.MCPServers, nil

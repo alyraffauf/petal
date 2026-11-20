@@ -200,7 +200,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		}
 		return Object{}, nil
 	}
-	var name, native, public string
+	var name, native, public, delegationParent string
 	if method == "session/new" {
 		if len(p.accounts) == 0 {
 			return nil, fmt.Errorf("no subscription offers %q", p.Model)
@@ -229,11 +229,13 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		}
 		public = id
 		name, native = parts[0], parts[2]
+		// The pin chooses the adapter. Delegation follows the editor's saved session.
+		delegationParent = p.publicID(name, native)
 		if p.PinnedAccount != "" && name != p.PinnedAccount {
 			canonical := p.publicID(p.PinnedAccount, native)
 			if method == "session/load" || method == "session/resume" {
 				p.aliases.Store(canonical, id)
-			} else if existing, ok := p.aliases.Load(canonical); !ok || existing != id {
+			} else if existing, ok := p.aliases.Load(canonical); !ok || !slices.Equal(decodeRouteID(existing.(string), 3), parts) {
 				return nil, acp.NewInvalidParams("session belongs to another account")
 			}
 			name = p.PinnedAccount
@@ -261,7 +263,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	case "session/new", "session/load", "session/resume", "session/fork":
 		var configured []routing.MCPServer
 		var err error
-		endpoint, configured, err = p.prepareDelegation(b.wire.lifetime, params, method, p.publicID(name, native), true)
+		endpoint, configured, err = p.prepareDelegation(b.wire.lifetime, params, method, delegationParent, true)
 		if err != nil {
 			return nil, err
 		}
@@ -274,7 +276,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		}
 	}
 	if public != "" {
-		p.handleDelegationLifecycle(method, p.publicID(name, native))
+		p.handleDelegationLifecycle(method, delegationParent)
 	}
 	if strings.HasPrefix(method, notificationPrefix) {
 		return relay(ctx, b.conn, method, params)
@@ -282,7 +284,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	var promptEndpoint *delegationEndpoint
 	var wakeCtx context.Context
 	if p.delegation != nil && method == "session/prompt" {
-		promptEndpoint = p.endpoint(p.publicID(name, native))
+		promptEndpoint = p.endpoint(delegationParent)
 		if promptEndpoint != nil {
 			var cancel context.CancelFunc
 			wakeCtx, cancel = promptEndpoint.waitContext()
@@ -316,11 +318,17 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		session = Object{}
 	}
 	if method == "session/new" || method == "session/fork" || session["sessionId"] != nil {
-		native, err = SessionID(session)
+		returnedNative, err := SessionID(session)
 		if err != nil {
 			return nil, err
 		}
-		session["sessionId"] = encoded(p.publicID(name, native))
+		if (method == "session/load" || method == "session/resume") && returnedNative == native {
+			session["sessionId"] = encoded(public)
+		} else {
+			delegationParent = p.publicID(name, returnedNative)
+			session["sessionId"] = encoded(delegationParent)
+		}
+		native = returnedNative
 	}
 	if method == "session/new" && p.Accounts[name].SelectModel[p.Model] {
 		opts, err := forward[Object](b.conn, ctx, "session/set_config_option", map[string]string{"sessionId": native, "configId": "model", "value": p.Model})
@@ -335,7 +343,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		session["petalSteering"] = b.hello.Meta["steering"]
 	}
 	if endpoint != nil {
-		if err := p.bindDelegation(endpoint, name, p.publicID(name, native)); err != nil {
+		if err := p.bindDelegation(endpoint, name, delegationParent); err != nil {
 			return nil, err
 		}
 	}

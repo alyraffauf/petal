@@ -25,6 +25,8 @@ Look up a model before delegating. Send its exact ID and a self-contained brief.
 
 When the parent finishes its turn, Petal sends a follow-up prompt as soon as a child result is ready. The prompt identifies the child and asks the parent to read its result. If a read or wait already returned the final result, Petal skips the wake-up. This runs on the live parent connection. After disconnecting, reopen the parent and read the stored result. Cancelling the parent clears pending wake-ups.
 
+In ACP v1, Petal keeps the editor's original prompt open while tracked child results are pending. Petal sends continuation prompts as results become ready and streams their output within the original editor turn. This happens only after an adapter reply with stop reason `end_turn`. Petal returns other stop reasons immediately. In ACP v2, the editor receives a prompt insertion acknowledgment and Petal schedules the follow-up after the adapter reports idle.
+
 Start with `after: 0`. Read responses contain up to 100 entries in ascending `sequence` order. Each entry has a `kind` and may include JSON `data`. Pass `nextAfter` as the next cursor. When `hasMore` is true, call `petal_read` to drain the remaining entries, even if the response already contains a final result. An empty page keeps the cursor unchanged.
 
 While the child runs, `status` is `running` or `needs_input`. A permission request wakes a waiting parent. Petal collects assistant text before publishing it to the journal.
@@ -37,7 +39,7 @@ The `result` field is null until the runtime records a final result. A final res
 
 Petal checks the direct parent-child binding for every journal read. A different parent receives the same error as it would for an unknown child. The parent can access only its own direct children in the project.
 
-Child tools and permissions remain subject to the adapter and Petal's permission handling. Petal forwards supported child permission requests through the parent session. The child starts without the Petal delegation MCP server. Cancelling the parent cancels its running children. Cancelling an individual wait stops the wait.
+A child starts with an empty session MCP server list, including when Petal or the editor configured servers for the parent. Tools configured directly in the child adapter can still be available. Petal accepts the child's session updates for its journal and forwards supported permission requests through the parent session. Child filesystem and terminal callbacks to the editor are unsupported. A resumed child does not receive the Petal delegation MCP server. Cancelling the parent cancels its running children. Cancelling an individual wait stops the wait.
 
 Petal stores bindings, ordered activity, and final results in the project's local session database. A parent can read committed activity and results after reconnecting to the same stored session. Child execution depends on the live runtime. After an abrupt process exit, the next journal read detects the released process lock and records a failed result.
 
