@@ -1,16 +1,16 @@
-# Proposal: Petal delegation over MCP
+# Petal delegation over MCP
 
 Petal can expose four tools to a parent agent through a Petal-managed stdio MCP server. The parent chooses a configured model, starts a child in the same project directory, and reads the child's activity and final result. Petal routes the model through its configured accounts, including any account pin.
 
-## Enable delegation
+## Disable delegation
 
-Set the top-level option in the Petal configuration used by the ACP proxy.
+To disable the tools, set the top-level option in the Petal configuration used by the ACP proxy.
 
 ```toml
-delegation = true
+delegation = false
 ```
 
-Delegation defaults to off. The parent adapter must support stdio MCP servers. Petal reserves the server name `petal-delegation` while delegation is enabled. Petal sets the parent session and working directory when it binds the MCP server. The relay authenticates to a private socket with a per-session credential. Treat adapters running under your OS account as trusted processes. The tools accept neither a parent session ID nor a working directory.
+Delegation is enabled by default. The parent adapter must support stdio MCP servers. Petal reserves the server name `petal-delegation` while delegation is enabled. Petal sets the parent session and working directory when it binds the MCP server. The relay authenticates to a private socket with a per-session credential. Treat adapters running under your OS account as trusted processes. The tools accept neither a parent session ID nor a working directory.
 
 ## Tool calls
 

@@ -106,7 +106,7 @@ The adapter handles OAuth and remembers the login for its profile. Claude Code c
 
 ### Petal delegation
 
-The delegation proposal describes how to enable Petal's own MCP tools and read the child activity journal. [Petal delegation over MCP](petal-delegation.md)
+Petal exposes its delegation tools by default. Set `delegation = false` to disable them. [Petal delegation over MCP](petal-delegation.md)
 
 ## Terminal background
 

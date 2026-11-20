@@ -49,6 +49,7 @@ type fileSettings struct {
 
 func (c *Config) readSettings(path string) error {
 	settings := viper.New()
+	settings.SetDefault("delegation", c.Delegation)
 	settings.SetConfigFile(path)
 	settings.SetConfigType("toml")
 	if filepath.Ext(path) == ".json" {
