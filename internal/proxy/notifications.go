@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	acp "github.com/coder/acp-go-sdk"
 )
@@ -19,6 +21,7 @@ import (
 // before writing to a peer. The SDK still owns cancellation, ordering and replies.
 const notificationPrefix = "\x00petal/notification/"
 const requestPrefix = "\x00petal/request/"
+const v2RequestPrefix = "\x00petal/v2-request/"
 
 type editorRequestID struct{}
 
@@ -47,15 +50,51 @@ func forward[T any](conn *acp.Connection, ctx context.Context, method string, pa
 	return acp.SendRequest[T](conn, ctx, method, params)
 }
 
+// Keep awaiting a v2 response after cancellation. In particular, an already
+// inserted prompt still returns its message ID and a cancelled permission
+// request still returns its outcome. The SDK's normal cancellation discards
+// those responses, so send the notification separately using its wire ID.
+func forwardV2(conn *acp.Connection, wire *adapterWire, ctx context.Context, source context.Context, method string, params any, id json.RawMessage) (json.RawMessage, error) {
+	wait, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	stop := context.AfterFunc(source, cancel)
+	defer stop()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	token := strconv.FormatUint(wire.nextRequest.Add(1), 10)
+	request := &v2Request{ctx: ctx, sourceID: id}
+	wire.requests.Store(token, request)
+	defer wire.requests.Delete(token)
+	defer func() {
+		if request.stopCancel != nil {
+			request.stopCancel()
+			wire.ids.Delete(request.wireID)
+		}
+	}()
+	return acp.SendRequest[json.RawMessage](conn, wait, v2RequestPrefix+token+"/"+method, params)
+}
+
+type v2Request struct {
+	ctx        context.Context
+	sourceID   json.RawMessage
+	wireID     string
+	stopCancel func() bool
+}
+
 type adapterWire struct {
-	updates  chan struct{}
-	lifetime context.Context
+	updates     chan struct{}
+	lifetime    context.Context
+	nativeV2    bool
+	conn        *acp.Connection
+	nextRequest atomic.Uint64
+	requests    sync.Map
 	io.Writer
 	ids sync.Map // adapter request ID -> originating editor request ID
 }
 
 func (w *adapterWire) Write(line []byte) (int, error) {
-	if !bytes.Contains(line, []byte(`\u0000petal/request/`)) {
+	if !bytes.Contains(line, []byte(`\u0000petal/request/`)) && !bytes.Contains(line, []byte(`\u0000petal/v2-request/`)) {
 		return w.Writer.Write(line)
 	}
 	var frame Object
@@ -65,30 +104,48 @@ func (w *adapterWire) Write(line []byte) (int, error) {
 	var method string
 	_ = json.Unmarshal(frame["method"], &method)
 	name, editorID := untag(method)
-	if editorID == nil {
+	var request *v2Request
+	if tag, ok := strings.CutPrefix(method, v2RequestPrefix); ok {
+		token, native, _ := strings.Cut(tag, "/")
+		if value, ok := w.requests.Load(token); ok {
+			request = value.(*v2Request)
+			name, editorID = native, request.sourceID
+		}
+	}
+	if editorID == nil && request == nil {
 		return w.Writer.Write(line)
 	}
+	id := frame["id"]
 	frame["method"] = encoded(name)
-	w.ids.Store(string(frame["id"]), editorID)
+	w.ids.Store(string(id), editorID)
 	data, err := json.Marshal(frame)
 	if err != nil {
 		return 0, err
 	}
 	_, err = w.Writer.Write(append(data, '\n'))
 	if err != nil {
-		w.ids.Delete(string(frame["id"]))
+		w.ids.Delete(string(id))
 		return 0, err
+	}
+	if request != nil {
+		request.wireID = string(id)
+		request.stopCancel = context.AfterFunc(request.ctx, func() {
+			if _, pending := w.ids.Load(string(id)); pending {
+				_ = w.conn.SendNotification(w.lifetime, "$/cancel_request", Object{"requestId": id})
+			}
+		})
 	}
 	return len(line), nil
 }
 
 type wireReader struct {
+	editor  *adapterWire
 	scan    *bufio.Scanner
 	pending []byte
 	adapter *adapterWire
 }
 
-func incoming(r io.Reader, adapter *adapterWire) io.Reader {
+func incoming(r io.Reader, adapter *adapterWire) *wireReader {
 	s := bufio.NewScanner(r)
 	s.Buffer(make([]byte, 4096), 10<<20)
 	return &wireReader{scan: s, adapter: adapter}
@@ -108,8 +165,13 @@ func (r *wireReader) Read(dst []byte) (int, error) {
 		}
 		if json.Unmarshal(line, &head) == nil {
 			method := head.Method
-			if r.adapter != nil && method == "" {
-				r.adapter.ids.Delete(string(head.ID))
+			if method == "" {
+				if r.adapter != nil {
+					r.adapter.ids.Delete(string(head.ID))
+				}
+				if r.editor != nil {
+					r.editor.ids.Delete(string(head.ID))
+				}
 			}
 			if method != "" && method != "$/cancel_request" {
 				if strings.HasPrefix(method, "\x00") {
@@ -128,7 +190,7 @@ func (r *wireReader) Read(dst []byte) (int, error) {
 					}
 					method = notificationPrefix + method
 				}
-				if head.ID != nil && r.adapter == nil {
+				if head.ID != nil && (r.adapter == nil || r.adapter.nativeV2) {
 					method = tagged(method, head.ID)
 				}
 				elicit := r.adapter != nil && (head.Method == "elicitation/create" || head.Method == "elicitation/complete")

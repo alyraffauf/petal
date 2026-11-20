@@ -20,7 +20,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'`
 	}}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	b, err := p.startBackend(ctx, "local", json.RawMessage(`{"protocolVersion":1}`))
+	b, err := p.startBackend(ctx, "local", json.RawMessage(`{"protocolVersion":1}`), 1)
 	if err != nil {
 		t.Fatal(err)
 	}

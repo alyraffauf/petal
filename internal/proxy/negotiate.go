@@ -50,42 +50,87 @@ func queryAccounts[T any](names []string, call func(string) (T, error)) []accoun
 }
 
 func (p *proxy) initialize(ctx context.Context, raw json.RawMessage) (any, error) {
-	var req acp.InitializeRequest
-	if err := json.Unmarshal(raw, &req); err != nil || req.ProtocolVersion == 0 {
-		return nil, acp.NewInvalidParams("protocolVersion is required")
-	}
 	p.mu.Lock()
-	if p.initialized || p.initializing {
+	if p.initializing || p.used || (p.initialized && !p.repeatInitialize) {
 		p.mu.Unlock()
 		return nil, acp.NewInvalidRequest("already initialized")
 	}
 	p.initializing = true
 	p.mu.Unlock()
 	defer func() { p.mu.Lock(); p.initializing = false; p.mu.Unlock() }()
+
+	var request struct {
+		Version *uint16 `json:"protocolVersion"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil || request.Version == nil {
+		return nil, acp.NewInvalidParams("protocolVersion must be a uint16")
+	}
+	if *request.Version == 0 {
+		supported := []uint16{1}
+		if p.ACPv2 {
+			supported = append(supported, 2)
+		}
+		return nil, acp.NewRequestError(-32022, "Unsupported protocol version", map[string]any{
+			"requested": *request.Version, "supported": supported,
+		})
+	}
+
+	var names []string
+	for _, name := range slices.Sorted(maps.Keys(p.Accounts)) {
+		if len(p.Accounts[name].Models[p.Model]) > 0 && (p.PinnedAccount == "" || name == p.PinnedAccount) {
+			names = append(names, name)
+		}
+	}
+	if p.ACPv2 && *request.Version >= 2 {
+		result, selected, err := p.initializeV2(ctx, raw, names, *request.Version)
+		if selected || err != nil {
+			return result, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return p.initializeV1(ctx, raw, names, *request.Version > 1)
+}
+
+func (p *proxy) installBackends(version uint16, names []string, backends map[string]*backend, repeat bool) {
+	p.mu.Lock()
+	previous := p.backends
+	p.version, p.accounts, p.backends = version, names, backends
+	p.repeatInitialize, p.initialized = repeat, true
+	for _, b := range backends {
+		b.ready.Store(true)
+	}
+	for _, b := range previous {
+		b.ready.Store(false)
+		b.close()
+	}
+	p.mu.Unlock()
+}
+
+func (p *proxy) initializeV1(ctx context.Context, raw json.RawMessage, names []string, fallback bool) (any, error) {
+	var params Object
+	_ = json.Unmarshal(raw, &params)
+	if fallback {
+		// The offered version determines which initialization fields are sent.
+		delete(params, "info")
+		delete(params, "capabilities")
+	}
+	params["protocolVersion"] = json.RawMessage("1")
+	init, _ := json.Marshal(params)
+	var req acp.InitializeRequest
+	if err := json.Unmarshal(init, &req); err != nil {
+		if !fallback {
+			return nil, acp.NewInvalidParams(err.Error())
+		}
+		delete(params, "clientInfo")
+		delete(params, "clientCapabilities")
+		init, _ = json.Marshal(params)
+		req = acp.InitializeRequest{}
+	}
 	var caps, meta map[string]any
 	auth := []Object{}
-	accounts := maps.Clone(p.Accounts)
-	var names []string
-	for _, name := range slices.Sorted(maps.Keys(accounts)) {
-		if len(accounts[name].Models[p.Model]) == 0 || (p.PinnedAccount != "" && name != p.PinnedAccount) {
-			delete(accounts, name)
-			continue
-		}
-		names = append(names, name)
-	}
-	if req.ProtocolVersion > 1 {
-		// The version offered to an adapter is the version Petal will speak.
-		// Preserve v1 capabilities and extension fields from dual-stack editors.
-		var hello Object
-		if err := json.Unmarshal(raw, &hello); err != nil {
-			return nil, err
-		}
-		hello["protocolVersion"] = json.RawMessage("1")
-		delete(hello, "info")
-		delete(hello, "capabilities")
-		raw, _ = json.Marshal(hello)
-	}
-	results := queryAccounts(names, func(name string) (*backend, error) { return p.startBackend(ctx, name, raw) })
+	results := queryAccounts(names, func(name string) (*backend, error) { return p.startBackend(ctx, name, init, 1) })
 	backends := make(map[string]*backend)
 	var available []string
 	committed := false
@@ -103,7 +148,6 @@ func (p *proxy) initialize(ctx context.Context, raw json.RawMessage) (any, error
 		name, b := names[i], result.value
 		if result.err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", name, result.err))
-			delete(accounts, name)
 			continue
 		}
 		backends[name] = b
@@ -156,15 +200,16 @@ func (p *proxy) initialize(ctx context.Context, raw json.RawMessage) (any, error
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(data, &p.capabilities); err != nil {
+	var negotiated acp.AgentCapabilities
+	if err := json.Unmarshal(data, &negotiated); err != nil {
 		return nil, err
 	}
-	p.mu.Lock()
-	p.Config.Accounts = accounts
-	p.accounts, p.backends = available, backends
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p.capabilities = negotiated
+	p.installBackends(1, available, backends, fallback || p.ACPv2)
 	committed = true
-	p.initialized = true
-	p.mu.Unlock()
 	result := map[string]any{"protocolVersion": 1, "agentInfo": map[string]string{"name": "petal", "version": "0-unstable", "title": "Petal"}, "agentCapabilities": caps, "authMethods": auth}
 	if len(meta) > 0 {
 		result["_meta"] = meta
@@ -176,57 +221,97 @@ func (p *proxy) initialize(ctx context.Context, raw json.RawMessage) (any, error
 }
 
 // Each page belongs to one account. Its native cursor stays opaque.
+type sessionCursor struct {
+	account string
+	native  *string
+}
+
+func decodeSessionCursor(raw json.RawMessage, nativeV2 bool) (sessionCursor, error) {
+	var cursor sessionCursor
+	if raw == nil || string(raw) == "null" {
+		return cursor, nil
+	}
+	var key string
+	var fields []json.RawMessage
+	if json.Unmarshal(raw, &key) != nil || json.Unmarshal([]byte(key), &fields) != nil ||
+		len(fields) != 2 || json.Unmarshal(fields[0], &cursor.account) != nil || cursor.account == "" ||
+		json.Unmarshal(fields[1], &cursor.native) != nil || (!nativeV2 && cursor.native == nil) {
+		return sessionCursor{}, acp.NewInvalidParams("invalid session cursor")
+	}
+	if !nativeV2 && *cursor.native == "" {
+		cursor.native = nil
+	}
+	return cursor, nil
+}
+
+// Each page belongs to one account. Its native cursor stays opaque.
 func (p *proxy) list(ctx context.Context, params Object) (any, error) {
-	var cursor [2]string
 	if params == nil {
 		params = Object{}
 	}
-	if raw := params["cursor"]; raw != nil && string(raw) != "null" {
-		var key string
-		if json.Unmarshal(raw, &key) != nil || json.Unmarshal([]byte(key), &cursor) != nil || p.backends[cursor[0]] == nil {
-			return nil, acp.NewInvalidParams("invalid session cursor")
-		}
+	nativeV2 := p.version == 2
+	cursor, err := decodeSessionCursor(params["cursor"], nativeV2)
+	if err != nil || (cursor.account != "" && p.backends[cursor.account] == nil) {
+		return nil, acp.NewInvalidParams("invalid session cursor")
 	}
-	index := 0
-	if cursor[0] != "" {
-		index = sort.SearchStrings(p.accounts, cursor[0])
-	}
+	index := sort.SearchStrings(p.accounts, cursor.account)
 	if index >= len(p.accounts) {
 		return Object{"sessions": json.RawMessage("[]")}, nil
 	}
 	name := p.accounts[index]
 	delete(params, "cursor")
-	if cursor[1] != "" {
-		params["cursor"] = encoded(cursor[1])
+	if cursor.native != nil {
+		params["cursor"] = encoded(*cursor.native)
 	}
-	result, err := forward[Object](p.backends[name].conn, ctx, "session/list", params)
-	if err != nil {
-		return nil, err
+	var result Object
+	if nativeV2 {
+		b := p.backends[name]
+		raw, err := p.relayV2Backend(ctx, b, "session/list", params, false)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil, err
+		}
+	} else {
+		result, err = forward[Object](p.backends[name].conn, ctx, "session/list", params)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var rows []Object
 	if err := json.Unmarshal(result["sessions"], &rows); err != nil {
 		return nil, err
 	}
-	for _, r := range rows {
-		id, err := SessionID(r)
-		if err != nil {
-			return nil, err
+	if nativeV2 && rows == nil {
+		return nil, fmt.Errorf("adapter did not return a sessions array")
+	}
+	for _, row := range rows {
+		if !hasString(row, "sessionId") || (!nativeV2 && stringField(row, "sessionId") == "") {
+			return nil, fmt.Errorf("adapter returned a session without sessionId")
 		}
-		r["sessionId"] = encoded(p.publicID(name, id))
+		row["sessionId"] = encoded(p.publicID(name, stringField(row, "sessionId")))
 	}
 	result["sessions"], _ = json.Marshal(rows)
-	var next string
+	var next *string
 	if raw := result["nextCursor"]; raw != nil {
 		if err := json.Unmarshal(raw, &next); err != nil {
 			return nil, err
 		}
 	}
+	if !nativeV2 && next != nil && *next == "" {
+		next = nil
+	}
 	delete(result, "nextCursor")
-	if next != "" || index+1 < len(p.accounts) {
-		if next == "" {
+	if next != nil || index+1 < len(p.accounts) {
+		if next == nil {
 			name = p.accounts[index+1]
+			if !nativeV2 {
+				empty := ""
+				next = &empty
+			}
 		}
-		raw, _ := json.Marshal([2]string{name, next})
+		raw, _ := json.Marshal([2]any{name, next})
 		result["nextCursor"] = encoded(string(raw))
 	}
 	return result, nil

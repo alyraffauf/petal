@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -31,23 +32,31 @@ func SessionID(p Object) (string, error) {
 
 type backend struct {
 	close context.CancelFunc
+	ready atomic.Bool
 	raw   Object
 	conn  *acp.Connection
+	wire  *adapterWire
 	hello acp.InitializeResponse
 }
 type proxy struct {
 	embedded      bool
 	editorUpdates chan struct{}
 	routing.Config
-	lifetime     context.Context
-	editor       *acp.Connection
-	mu           sync.Mutex
-	aliases      sync.Map // canonical backend ID to the editor ID for an explicit resume override
-	initializing bool
-	initialized  bool
-	backends     map[string]*backend
-	accounts     []string
-	capabilities acp.AgentCapabilities
+	lifetime         context.Context
+	editor           *acp.Connection
+	editorWire       *adapterWire
+	mu               sync.Mutex
+	aliases          sync.Map // canonical backend ID to the editor ID for an explicit resume override
+	initializing     bool
+	initialized      bool
+	repeatInitialize bool
+	used             bool
+	version          uint16
+	v2Capabilities   Object
+	hasV2Auth        bool
+	backends         map[string]*backend
+	accounts         []string
+	capabilities     acp.AgentCapabilities
 }
 
 func unknownSession(id string) *acp.RequestError {
@@ -60,6 +69,9 @@ func rpcError(err error) *acp.RequestError {
 	var re *acp.RequestError
 	if errors.As(err, &re) {
 		return re
+	}
+	if errors.Is(err, context.Canceled) {
+		return acp.NewRequestCancelled(nil)
 	}
 	return acp.NewInternalError(err.Error())
 }
@@ -76,10 +88,33 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		return p.initialize(ctx, raw)
 	}
 	p.mu.Lock()
-	ready := p.initialized
-	p.mu.Unlock()
+	notification := strings.HasPrefix(method, notificationPrefix)
+	ready, version := p.initialized && !p.initializing, p.version
+	if ready && !notification {
+		p.used = true
+	}
+	// Notifications can arrive before the first request, while the selected
+	// backends are still replaceable by a repeated initialize.
+	if ready && notification && !p.used {
+		defer p.mu.Unlock()
+	} else {
+		p.mu.Unlock()
+	}
 	if !ready {
+		if notification {
+			return nil, nil
+		}
 		return nil, acp.NewInvalidRequest("initialize first")
+	}
+	if version == 2 {
+		return p.handleV2(ctx, method, raw)
+	}
+	if native, notification := strings.CutPrefix(method, notificationPrefix); notification {
+		if native != "session/cancel" && native != "mcp/message" && !strings.HasPrefix(native, "_") {
+			return nil, nil
+		}
+	} else if method == "session/cancel" || method == "mcp/message" {
+		return nil, acp.NewInvalidRequest("expected a notification")
 	}
 	caps := p.capabilities
 	switch method {
@@ -168,7 +203,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		// account, but let the provider enforce its limit when the user sends.
 		name = p.accounts[0]
 		if len(p.accounts) > 1 {
-			if chosen, err := p.Choose(ctx); err == nil {
+			if chosen, err := p.choose(ctx); err == nil {
 				name = chosen
 			} else if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -269,6 +304,15 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	return session, nil
 }
 
+func (p *proxy) choose(ctx context.Context) (string, error) {
+	config := p.Config
+	config.Accounts = make(map[string]routing.Account, len(p.accounts))
+	for _, name := range p.accounts {
+		config.Accounts[name] = p.Accounts[name]
+	}
+	return config.Choose(ctx)
+}
+
 func (p *proxy) publicID(name, native string) string {
 	b, _ := json.Marshal([]string{name, p.Model, native})
 	return string(b)
@@ -282,14 +326,16 @@ func (p *proxy) editorID(name, native string) string {
 	return id
 }
 
-func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMessage) (*backend, error) {
-	var helloRequest struct {
-		ClientCapabilities Object
-	}
-	if err := json.Unmarshal(init, &helloRequest); err != nil {
+func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMessage, version uint16) (*backend, error) {
+	var request Object
+	if err := json.Unmarshal(init, &request); err != nil {
 		return nil, acp.NewInvalidParams(err.Error())
 	}
-	clientCaps := helloRequest.ClientCapabilities
+	capabilityField := "clientCapabilities"
+	if version == 2 {
+		capabilityField = "capabilities"
+	}
+	clientCaps := request.member(capabilityField)
 
 	a := p.Accounts[name]
 	lifetime, stop := context.WithCancel(p.lifetime)
@@ -319,11 +365,18 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 	}
 	childOutput.Close()
 	context.AfterFunc(lifetime, func() { out.Close(); in.Close() })
-	wire := &adapterWire{Writer: in, lifetime: lifetime, updates: make(chan struct{}, 128)}
+	b := &backend{close: stop}
+	wire := &adapterWire{Writer: in, lifetime: lifetime, updates: make(chan struct{}, 128), nativeV2: version == 2}
 	conn := acp.NewConnection(func(ctx context.Context, method string, raw json.RawMessage) (any, *acp.RequestError) {
 		native, notification := strings.CutPrefix(method, notificationPrefix)
 		if notification && native == "session/update" {
 			defer func() { <-wire.updates }()
+		}
+		if version == 2 {
+			if !b.ready.Load() {
+				return nil, acp.NewInvalidRequest("initialize first")
+			}
+			return p.relayV2ClientCall(ctx, name, method, raw, clientCaps, lifetime)
 		}
 		if notification {
 			switch native {
@@ -436,6 +489,7 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 		result, err := relay(ctx, p.editor, method, args)
 		return result, rpcError(err)
 	}, wire, incoming(out, wire))
+	wire.conn = conn
 	if p.embedded {
 		conn.SetLogger(slog.New(slog.DiscardHandler))
 	}
@@ -451,6 +505,19 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 		stop()
 		return nil, err
 	}
+	b.raw, b.conn, b.wire = rawHello, conn, wire
+	if version == 2 {
+		var selected uint16
+		if json.Unmarshal(rawHello["protocolVersion"], &selected) != nil || selected != 2 {
+			stop()
+			return nil, fmt.Errorf("adapter did not negotiate ACP v2")
+		}
+		if !validImplementation(rawHello["info"]) {
+			stop()
+			return nil, fmt.Errorf("adapter returned invalid ACP v2 implementation info")
+		}
+		return b, nil
+	}
 	var hello acp.InitializeResponse
 	data, err := json.Marshal(rawHello)
 	if err == nil {
@@ -464,7 +531,8 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 		stop()
 		return nil, fmt.Errorf("unsupported adapter protocol version %d", hello.ProtocolVersion)
 	}
-	return &backend{raw: rawHello, conn: conn, hello: hello, close: stop}, nil
+	b.hello = hello
+	return b, nil
 }
 
 func Serve(c routing.Config) {
@@ -480,24 +548,23 @@ func ConnectEmbedded(ctx context.Context, c routing.Config, out io.Writer, in io
 }
 
 func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Reader, embedded bool, updates chan struct{}) *acp.Connection {
-	p := proxy{editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
+	lifetime, stop := context.WithCancel(lifetime)
+	editorWire := &adapterWire{Writer: out, lifetime: lifetime}
+	p := proxy{editorWire: editorWire, editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
 	ready := make(chan struct{})
+	reader := incoming(in, nil)
+	reader.editor = editorWire
 	p.editor = acp.NewConnection(func(ctx context.Context, method string, params json.RawMessage) (any, *acp.RequestError) {
 		<-ready
 		method, id := untag(method)
-		if native, notification := strings.CutPrefix(method, notificationPrefix); notification {
-			if native != "session/cancel" && native != "mcp/message" && !strings.HasPrefix(native, "_") {
-				return nil, nil
-			}
-		} else if id != nil {
-			if method == "session/cancel" || method == "mcp/message" {
-				return nil, acp.NewInvalidRequest("expected a notification")
-			}
+		if id != nil {
 			ctx = context.WithValue(ctx, editorRequestID{}, id)
 		}
 		result, err := p.handle(ctx, method, params)
 		return result, rpcError(err)
-	}, out, incoming(in, nil))
+	}, editorWire, reader)
+	editorWire.conn = p.editor
+	go func() { <-p.editor.Done(); stop() }()
 	if embedded {
 		p.editor.SetLogger(slog.New(slog.DiscardHandler))
 	}

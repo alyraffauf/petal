@@ -25,6 +25,7 @@ type MCPEnvVariable struct {
 
 // Keep identifiers in values because Viper folds configuration keys to lowercase.
 type fileSettings struct {
+	ACPv2                 bool        `mapstructure:"acp_v2"`
 	StreamResponses       bool        `mapstructure:"stream_responses"`
 	TransparentBackground bool        `mapstructure:"transparent_background"`
 	BusyInput             string      `mapstructure:"busy_input"`
@@ -66,6 +67,7 @@ func (c *Config) readSettings(path string) error {
 		return err
 	}
 	c.MCPServers = file.MCPServers
+	c.ACPv2 = file.ACPv2
 	c.StreamResponses = file.StreamResponses
 	c.BusyInput = file.BusyInput
 	c.TransparentBackground = file.TransparentBackground
