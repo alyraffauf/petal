@@ -37,7 +37,7 @@ func TestAccountAdapter(t *testing.T) {
 		var r any = map[string]any{}
 		switch q.Method {
 		case "initialize":
-			r = map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": name == "b", "sessionCapabilities": map[string]any{"options": map[string]any{}, "list": map[string]any{}, "resume": map[string]any{}, "delete": map[string]any{}, "close": map[string]any{}}}, "authMethods": []map[string]any{
+			r = map[string]any{"protocolVersion": q.Params["protocolVersion"], "agentCapabilities": map[string]any{"loadSession": name == "b", "sessionCapabilities": map[string]any{"options": map[string]any{}, "list": map[string]any{}, "resume": map[string]any{}, "delete": map[string]any{}, "close": map[string]any{}}}, "authMethods": []map[string]any{
 				{"id": "login", "name": "Sign in"},
 				{"type": "terminal", "id": "interactive", "name": "Interactive", "args": []string{"auth"}},
 			}}
@@ -324,6 +324,25 @@ func fixtureAccount(t *testing.T, env map[string]string) routing.Account {
 	return routing.Account{
 		Models: map[string][]string{"m": {exe, "-test.run=^TestAccountAdapter$"}},
 		Env:    env,
+	}
+}
+
+func TestV1ProxyNegotiatesWithDualVersionAdapter(t *testing.T) {
+	account := fixtureAccount(t, map[string]string{})
+	client, ctx := connectTestEditor(t, routing.Config{Model: "m", Accounts: map[string]routing.Account{"work": account}}, nil)
+	hello, err := acp.SendRequest[Object](client, ctx, "initialize", Object{
+		"protocolVersion": json.RawMessage("2"),
+		"info":            json.RawMessage(`{"name":"editor","version":"1"}`),
+		"capabilities":    json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(hello["protocolVersion"]) != "1" {
+		t.Fatalf("version = %s", hello["protocolVersion"])
+	}
+	if _, err := acp.SendRequest[Object](client, ctx, "session/new", Object{"cwd": encoded(t.TempDir()), "mcpServers": json.RawMessage("[]")}); err != nil {
+		t.Fatal(err)
 	}
 }
 

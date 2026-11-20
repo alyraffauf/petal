@@ -73,6 +73,18 @@ func (p *proxy) initialize(ctx context.Context, raw json.RawMessage) (any, error
 		}
 		names = append(names, name)
 	}
+	if req.ProtocolVersion > 1 {
+		// The version offered to an adapter is the version Petal will speak.
+		// Preserve v1 capabilities and extension fields from dual-stack editors.
+		var hello Object
+		if err := json.Unmarshal(raw, &hello); err != nil {
+			return nil, err
+		}
+		hello["protocolVersion"] = json.RawMessage("1")
+		delete(hello, "info")
+		delete(hello, "capabilities")
+		raw, _ = json.Marshal(hello)
+	}
 	results := queryAccounts(names, func(name string) (*backend, error) { return p.startBackend(ctx, name, raw) })
 	backends := make(map[string]*backend)
 	var available []string
