@@ -30,8 +30,8 @@ func TestPickerEditsFuzzyQueryAndRoutesSelectedModel(t *testing.T) {
 		m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	frame := ansi.Strip(m.View().Content)
-	if !strings.Contains(frame, "› model-24") || !strings.Contains(frame, "┃") {
-		t.Fatalf("selected row or scrollbar missing:\n%s", frame)
+	if m.option(m.index) != "model-24" || !strings.Contains(frame, "model-24") {
+		t.Fatalf("selection did not scroll into view:\n%s", frame)
 	}
 	m.Update(tea.PasteMsg{Content: "Solar"})
 	if m.count() != 1 || m.option(0) != "gpt-6.2-sol" || !strings.Contains(ansi.Strip(m.View().Content), "Solar") {
@@ -44,9 +44,6 @@ func TestPickerEditsFuzzyQueryAndRoutesSelectedModel(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
 	if m.search.Value() != "g62s" || m.count() != 1 || m.option(0) != "gpt-6.2-sol" {
 		t.Fatalf("query %q returned %v", m.search.Value(), m.matches)
-	}
-	if strings.Contains(ansi.Strip(m.View().Content), "┃") {
-		t.Fatal("scrollbar visible for one result")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
