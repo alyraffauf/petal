@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -146,25 +148,16 @@ func (c Config) Choose(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	scores := c.Scores(ctx)
-	// A product of two float64 significands fits in 106 bits.
-	const scorePrecision = 106
-	var best big.Float
-	best.SetPrec(scorePrecision).SetInt64(-1)
+	best := weightedQuota(-1, 1)
 	var choices []string
 	for _, s := range scores {
 		if s.Err != nil || s.Remaining == 0 {
 			continue
 		}
-		var score big.Float
-		score.SetPrec(scorePrecision).SetFloat64(s.Remaining)
-		if s.Remaining > 0 {
-			// Compare exact products of two float64 values. The common
-			// divisor of 100 cannot change their order.
-			score.Mul(&score, big.NewFloat(s.Capacity))
-		}
-		order := score.Cmp(&best)
+		score := weightedQuota(s.Remaining, s.Capacity)
+		order := score.Cmp(best)
 		if order > 0 {
-			best.Set(&score)
+			best.Set(score)
 			choices = nil
 		}
 		if order >= 0 {
@@ -177,12 +170,87 @@ func (c Config) Choose(ctx context.Context) (string, error) {
 	return choices[rand.IntN(len(choices))], nil
 }
 
+// Rank returns eligible accounts in descending quota order, with unknown quota
+// after measured quota. Affinity breaks ties in favor of the parent account.
+func (c Config) Rank(ctx context.Context, affinity string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if c.PinnedAccount != "" {
+		if len(c.Accounts[c.PinnedAccount].Models[c.Model]) == 0 {
+			return nil, fmt.Errorf("pinned account %q does not offer model %q", c.PinnedAccount, c.Model)
+		}
+		return []string{c.PinnedAccount}, nil
+	}
+
+	scores := make(map[string]Quota, len(c.Accounts))
+	for _, quota := range c.Scores(ctx) {
+		scores[quota.Name] = quota
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	type candidate struct {
+		name  string
+		score *big.Float
+	}
+	var candidates []candidate
+	for name, account := range c.Accounts {
+		quota, measured := scores[name]
+		if len(account.Models[c.Model]) == 0 || quota.coolingDown || RemainingBackoff(name) > 0 {
+			continue
+		}
+		if measured && quota.Err == nil && quota.Remaining == 0 {
+			continue
+		}
+		score := weightedQuota(-1, 1)
+		if measured && quota.Err == nil {
+			score = weightedQuota(quota.Remaining, quota.Capacity)
+		}
+		candidates = append(candidates, candidate{name, score})
+	}
+	slices.SortFunc(candidates, func(a, b candidate) int {
+		if order := b.score.Cmp(a.score); order != 0 {
+			return order
+		}
+		switch {
+		case a.name == b.name:
+			return 0
+		case a.name == affinity:
+			return -1
+		case b.name == affinity:
+			return 1
+		default:
+			return cmp.Compare(a.name, b.name)
+		}
+	})
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no eligible subscription for model %q has available or unknown quota", c.Model)
+	}
+	names := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		names = append(names, candidate.name)
+	}
+	return names, nil
+}
+
+func weightedQuota(remaining, capacity float64) *big.Float {
+	// A product of two float64 significands fits in 106 bits. The common
+	// divisor of 100 cannot change the order.
+	score := new(big.Float).SetPrec(106).SetFloat64(remaining)
+	if remaining > 0 {
+		score.Mul(score, big.NewFloat(capacity))
+	}
+	return score
+}
+
 type Quota struct {
-	Tier      string
-	Capacity  float64
-	Name      string
-	Remaining float64
-	Err       error
+	Tier        string
+	Capacity    float64
+	Name        string
+	Remaining   float64
+	Err         error
+	coolingDown bool
 }
 
 func (c Config) Scores(ctx context.Context) []Quota {
@@ -197,7 +265,7 @@ func (c Config) Scores(ctx context.Context) []Quota {
 		count++
 		go func() {
 			if d := RemainingBackoff(name); d > 0 {
-				pending <- Quota{Name: name, Err: fmt.Errorf("rate limited; retry in %s", d.Round(time.Second))}
+				pending <- Quota{Name: name, coolingDown: true, Err: fmt.Errorf("rate limited; retry in %s", d.Round(time.Second))}
 				return
 			}
 			q := a.inspectQuota(ctx, c.Model)

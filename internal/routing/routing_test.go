@@ -205,3 +205,43 @@ func TestCodexDiscoveryHonorsEmptyAccountHomeOverride(t *testing.T) {
 		t.Fatalf("loaded models from the wrong Codex home: %v", account.Models)
 	}
 }
+
+func TestRankChildAccountsByWeightedQuotaAndAffinity(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	account := func(model, probe string, capacity float64) Account {
+		return Account{
+			Models:   map[string][]string{model: {"agent"}},
+			Usage:    []string{"/bin/sh", "-c", probe},
+			Capacity: &capacity,
+		}
+	}
+	config := Config{Model: "m", Accounts: map[string]Account{
+		"a":         account("m", "echo 90", 1),
+		"parent":    account("m", "echo 30", 3),
+		"larger":    account("m", "echo 20", 5),
+		"unknown":   account("m", "exit 1", 1),
+		"exhausted": account("m", "echo 0", 10),
+		"cooled":    account("m", "echo 100", 10),
+		"other":     account("another", "echo 100", 10),
+	}}
+	RecordRateLimit("cooled")
+	rank := func(want ...string) {
+		t.Helper()
+		got, err := config.Rank(t.Context(), "parent")
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("got %v, %v; want %v", got, err, want)
+		}
+	}
+	rank("larger", "parent", "a", "unknown")
+	config.PinnedAccount = "cooled"
+	rank("cooled")
+	config.PinnedAccount = "other"
+	if names, err := config.Rank(t.Context(), "parent"); err == nil {
+		t.Fatalf("rank accepted a pin that does not offer the model: %v", names)
+	}
+	config.PinnedAccount = ""
+	config.Accounts = map[string]Account{"cooled": config.Accounts["cooled"], "exhausted": config.Accounts["exhausted"]}
+	if names, err := config.Rank(t.Context(), "parent"); err == nil {
+		t.Fatalf("rank accepted exhausted or cooled accounts: %v", names)
+	}
+}

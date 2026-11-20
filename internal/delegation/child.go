@@ -61,6 +61,16 @@ func (r *run) execute(conn Connection, task string, closeTransport context.Cance
 	journalErr := r.err
 	r.mu.Unlock()
 
+	var stop struct {
+		Reason string `json:"stopReason"`
+	}
+	_ = json.Unmarshal(data, &stop)
+	if stop.Reason == "rate_limit" {
+		if reporter, ok := conn.(interface{ RecordRateLimit() }); ok {
+			reporter.RecordRateLimit()
+		}
+	}
+
 	cancelled := !stopAbort()
 	if cancelled {
 		<-aborted
@@ -76,10 +86,6 @@ func (r *run) execute(conn Connection, task string, closeTransport context.Cance
 	case err != nil:
 		result = failed(err)
 	default:
-		var stop struct {
-			Reason string `json:"stopReason"`
-		}
-		_ = json.Unmarshal(data, &stop)
 		switch stop.Reason {
 		case "cancelled":
 			result.Status = "cancelled"

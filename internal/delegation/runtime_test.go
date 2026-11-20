@@ -76,12 +76,12 @@ func TestDelegateEchoReceipt(t *testing.T) {
 			release := make(chan struct{})
 			acknowledged := make(chan struct{})
 			adapter := &echoAdapter{version: version, done: make(chan struct{}), cancel: make(chan string, 1)}
-			runtime := New(ctx, func(_ context.Context, model string, receive Receive) (Connection, error) {
+			runtime := New(ctx, func(_ context.Context, model, _ string, receive Receive, setup func(Connection) error) (Connection, error) {
 				if model != "child-model" {
 					return nil, fmt.Errorf("incorrect routing model %q", model)
 				}
 				adapter.receive = receive
-				return adapter, nil
+				return adapter, setup(adapter)
 			}, nil)
 			adapter.prompt = func(ctx context.Context, task string) (json.RawMessage, error) {
 				if version == 2 {
@@ -152,9 +152,9 @@ func TestParentCancelRevokesChildPermission(t *testing.T) {
 			defer cancel()
 			adapter := &echoAdapter{version: version, done: make(chan struct{}), cancel: make(chan string, 1)}
 			permission := make(chan string, 1)
-			runtime := New(ctx, func(_ context.Context, _ string, receive Receive) (Connection, error) {
+			runtime := New(ctx, func(_ context.Context, _, _ string, receive Receive, setup func(Connection) error) (Connection, error) {
 				adapter.receive = receive
-				return adapter, nil
+				return adapter, setup(adapter)
 			}, func(ctx context.Context, parent, child string, family uint16, _ json.RawMessage) (json.RawMessage, error) {
 				permission <- fmt.Sprintf("%s/%s/v%d", parent, child, family)
 				<-ctx.Done()

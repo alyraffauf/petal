@@ -25,7 +25,9 @@ type Connection interface {
 }
 
 type Receive func(ctx context.Context, method string, params json.RawMessage, notification bool) (any, error)
-type OpenChild func(ctx context.Context, model string, receive Receive) (Connection, error)
+
+// OpenChild tries routes until setup accepts a connection. It closes any rejected connection.
+type OpenChild func(ctx context.Context, model, parentID string, receive Receive, setup func(Connection) error) (Connection, error)
 type Permission func(ctx context.Context, parentID, childID string, version uint16, params json.RawMessage) (json.RawMessage, error)
 
 type Child struct {
@@ -92,7 +94,12 @@ func (r *Runtime) Delegate(ctx context.Context, parentID, cwd, model, task strin
 	if err := work.Err(); err != nil {
 		return Child{}, err
 	}
-	conn, err := r.open(transport, model, child.receive)
+	var childID string
+	conn, err := r.open(transport, model, parentID, child.receive, func(conn Connection) error {
+		id, err := createChildSession(transport, conn, cwd, parentID)
+		childID = id
+		return err
+	})
 	if err != nil {
 		return Child{}, err
 	}
@@ -101,21 +108,6 @@ func (r *Runtime) Delegate(ctx context.Context, parentID, cwd, model, task strin
 			conn.Close()
 		}
 	}()
-	version := conn.Version()
-	if version != 1 && version != 2 {
-		return Child{}, fmt.Errorf("unsupported child ACP version %d", version)
-	}
-	params := map[string]any{"cwd": cwd, "mcpServers": []any{}}
-	raw, err := conn.Request(transport, "session/new", params)
-	if err != nil {
-		return Child{}, err
-	}
-	var created struct {
-		ID *string `json:"sessionId"`
-	}
-	if json.Unmarshal(raw, &created) != nil || created.ID == nil || *created.ID == "" || *created.ID == parentID {
-		return Child{}, errors.New("adapter returned an invalid child session ID")
-	}
 	if err := transport.Err(); err != nil {
 		return Child{}, err
 	}
@@ -127,7 +119,7 @@ func (r *Runtime) Delegate(ctx context.Context, parentID, cwd, model, task strin
 	if !stopRequest() || !stopWork() {
 		return Child{}, context.Canceled
 	}
-	binding := sessions.ChildBinding{ParentID: parentID, ChildID: *created.ID}
+	binding := sessions.ChildBinding{ParentID: parentID, ChildID: childID}
 	record := sessions.Record{ID: binding.ChildID, Model: model, Opened: time.Now()}
 	if routed, ok := conn.(interface{ AccountName() string }); ok {
 		record.Account = routed.AccountName()
@@ -136,7 +128,7 @@ func (r *Runtime) Delegate(ctx context.Context, parentID, cwd, model, task strin
 	if err != nil {
 		return Child{}, err
 	}
-	child.binding, child.version = binding, version
+	child.binding, child.version = binding, conn.Version()
 	close(child.ready)
 	started = true
 	done := make(chan struct{})
@@ -149,6 +141,25 @@ func (r *Runtime) Delegate(ctx context.Context, parentID, cwd, model, task strin
 		child.execute(conn, task, closeTransport)
 	}()
 	return Child{ID: binding.ChildID, Model: model, Done: done}, nil
+}
+
+func createChildSession(ctx context.Context, conn Connection, cwd, parentID string) (string, error) {
+	version := conn.Version()
+	if version != 1 && version != 2 {
+		return "", fmt.Errorf("unsupported child ACP version %d", version)
+	}
+	params := map[string]any{"cwd": cwd, "mcpServers": []any{}}
+	raw, err := conn.Request(ctx, "session/new", params)
+	if err != nil {
+		return "", err
+	}
+	var created struct {
+		ID string `json:"sessionId"`
+	}
+	if json.Unmarshal(raw, &created) != nil || created.ID == "" || created.ID == parentID {
+		return "", errors.New("adapter returned an invalid child session ID")
+	}
+	return created.ID, nil
 }
 
 func (r *Runtime) remove(child *run) {

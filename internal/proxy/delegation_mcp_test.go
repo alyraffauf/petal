@@ -30,10 +30,6 @@ func TestDelegationAdapterFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rateLimit := func(message Object) {
-		write(Object{"jsonrpc": encoded("2.0"), "id": message["id"], "error": json.RawMessage(`{"code":429,"message":"rate limited"}`)})
-	}
-	failure := os.Getenv("PETAL_DELEGATION_FIXTURE_FAILURE")
 	update := func(payload string) {
 		write(Object{"jsonrpc": encoded("2.0"), "method": encoded("session/update"), "params": jsonValue(Object{
 			"sessionId": encoded("child"), "update": json.RawMessage(payload),
@@ -51,12 +47,7 @@ func TestDelegationAdapterFixture(t *testing.T) {
 		reply := func(result any) {
 			write(Object{"jsonrpc": encoded("2.0"), "id": message["id"], "result": jsonValue(result)})
 		}
-		method := stringField(message, "method")
-		if failure == method {
-			rateLimit(message)
-			continue
-		}
-		switch method {
+		switch method := stringField(message, "method"); method {
 		case "initialize":
 			if err := json.Unmarshal(params["protocolVersion"], &version); err != nil {
 				t.Fatal(err)
@@ -124,15 +115,6 @@ func TestDelegationAdapterFixture(t *testing.T) {
 			var prompt []Object
 			if err := json.Unmarshal(params["prompt"], &prompt); err != nil || len(prompt) != 1 {
 				t.Fatalf("invalid prompt: %s", params["prompt"])
-			}
-			if failure == "rate_limit" {
-				if version == 2 {
-					reply(json.RawMessage(`{"messageId":"accepted"}`))
-					update(`{"sessionUpdate":"state_update","state":"idle","stopReason":"rate_limit"}`)
-				} else {
-					reply(json.RawMessage(`{"stopReason":"rate_limit"}`))
-				}
-				continue
 			}
 			if version == 2 {
 				update(`{"sessionUpdate":"state_update","state":"running"}`)

@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -125,45 +126,67 @@ type delegatedConnection struct {
 	version uint16
 }
 
-func (p *proxy) openDelegatedChild(ctx context.Context, model string, receive delegation.Receive) (delegation.Connection, error) {
+func (p *proxy) openDelegatedChild(ctx context.Context, model, parentID string, receive delegation.Receive, setup func(delegation.Connection) error) (delegation.Connection, error) {
 	config := p.Config
 	config.Model = model
 	config.Delegation = false
 	config.MCPServers = nil
-	config.Accounts = make(map[string]routing.Account)
-
-	for name, account := range p.Accounts {
-		if len(account.Models[model]) != 0 && (config.PinnedAccount == "" || config.PinnedAccount == name) {
-			config.Accounts[name] = account
-		}
-	}
-	if len(config.Accounts) == 0 {
+	if !slices.Contains(config.ModelNames(), model) {
 		return nil, fmt.Errorf("no configured account offers model %q; use petal_capabilities to find model IDs", model)
 	}
-	names := slices.Sorted(maps.Keys(config.Accounts))
-	name := names[0]
-	if len(names) > 1 {
-		if chosen, err := config.Choose(ctx); err == nil {
-			name = chosen
-		}
+	var affinity string
+	if route := decodeRouteID(parentID, 3); route != nil {
+		affinity = route[0]
+	}
+	names, err := config.Rank(ctx, affinity)
+	if err != nil {
+		return nil, err
 	}
 	host := &proxy{Config: config, lifetime: ctx, embedded: p.embedded}
-
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if config.ACPv2 {
-		b, err := host.startBackendWithReceiver(ctx, name, json.RawMessage(`{"protocolVersion":2,"info":{"name":"petal","version":"0-unstable"},"capabilities":{}}`), 2, receive)
+	var failures []error
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if config.PinnedAccount == "" && routing.RemainingBackoff(name) > 0 {
+			failures = append(failures, fmt.Errorf("account %q is rate limited", name))
+			continue
+		}
+		conn, err := host.startDelegatedAdapter(ctx, name, receive)
 		if err == nil {
-			return &delegatedConnection{host, name, b, 2}, nil
+			err = setup(conn)
+			if err == nil {
+				return conn, nil
+			}
+			conn.Close()
+		}
+		failures = append(failures, fmt.Errorf("account %q: %w", name, err))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("set up child model %q: %w", model, errors.Join(failures...))
+}
+
+func (p *proxy) startDelegatedAdapter(ctx context.Context, name string, receive delegation.Receive) (*delegatedConnection, error) {
+	if p.ACPv2 {
+		backend, err := p.startBackendWithReceiver(ctx, name, json.RawMessage(`{"protocolVersion":2,"info":{"name":"petal","version":"0-unstable"},"capabilities":{}}`), 2, receive)
+		if err == nil {
+			return &delegatedConnection{p, name, backend, 2}, nil
+		}
+		if routing.RememberRateLimit(name, err) {
+			return nil, err
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 	}
-	b, err := host.startBackendWithReceiver(ctx, name, json.RawMessage(`{"protocolVersion":1,"clientInfo":{"name":"petal","version":"0-unstable"},"clientCapabilities":{}}`), 1, receive)
-	if err == nil {
-		return &delegatedConnection{host, name, b, 1}, nil
+	backend, err := p.startBackendWithReceiver(ctx, name, json.RawMessage(`{"protocolVersion":1,"clientInfo":{"name":"petal","version":"0-unstable"},"clientCapabilities":{}}`), 1, receive)
+	if err != nil {
+		routing.RememberRateLimit(name, err)
+		return nil, err
 	}
-
-	return nil, fmt.Errorf("open adapter for child model %q: %w", model, err)
+	return &delegatedConnection{p, name, backend, 1}, nil
 }
 
 func (p *proxy) routeChildParams(account string, raw json.RawMessage) json.RawMessage {
@@ -179,6 +202,7 @@ func (p *proxy) routeChildParams(account string, raw json.RawMessage) json.RawMe
 func (c *delegatedConnection) AccountName() string   { return c.account }
 func (c *delegatedConnection) Version() uint16       { return c.version }
 func (c *delegatedConnection) Done() <-chan struct{} { return c.backend.conn.Done() }
+func (c *delegatedConnection) RecordRateLimit()      { routing.RecordRateLimit(c.account) }
 func (c *delegatedConnection) Close()                { c.backend.close() }
 
 func (c *delegatedConnection) nativeParams(params any) (Object, error) {
@@ -206,8 +230,12 @@ func (c *delegatedConnection) Request(ctx context.Context, method string, params
 		return nil, err
 	}
 	result, err := acp.SendRequest[json.RawMessage](c.backend.conn, ctx, method, native)
-	if err != nil || method != "session/new" {
-		return result, err
+	if err != nil {
+		routing.RememberRateLimit(c.account, err)
+		return nil, err
+	}
+	if method != "session/new" {
+		return result, nil
 	}
 	var session Object
 	if json.Unmarshal(result, &session) != nil || !hasString(session, "sessionId") || stringField(session, "sessionId") == "" {
@@ -220,6 +248,7 @@ func (c *delegatedConnection) Request(ctx context.Context, method string, params
 			params["type"] = encoded("id")
 		}
 		if _, err := acp.SendRequest[json.RawMessage](c.backend.conn, ctx, "session/set_config_option", params); err != nil {
+			routing.RememberRateLimit(c.account, err)
 			return nil, fmt.Errorf("select child model %q: %w", c.host.Model, err)
 		}
 	}
