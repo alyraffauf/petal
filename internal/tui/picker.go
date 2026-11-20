@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"os"
@@ -80,6 +81,16 @@ func (m *picker) showHistory() {
 	}
 	if err != nil {
 		m.historyError = err.Error()
+	}
+	// Delegated records can be saved before route metadata is available.
+	for i, record := range m.saved {
+		if record.DelegatedParent == "" || record.Account != "" {
+			continue
+		}
+		var route []string
+		if json.Unmarshal([]byte(record.ID), &route) == nil && len(route) == 3 && route[1] == record.Model {
+			m.saved[i].Account = route[0]
+		}
 	}
 	if pin := m.cfg.PinnedAccount; pin != "" {
 		m.saved = slices.DeleteFunc(m.saved, func(r sessions.Record) bool { return r.Account != pin })

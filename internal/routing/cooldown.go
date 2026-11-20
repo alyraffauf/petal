@@ -21,16 +21,21 @@ const rateLimitBackoff = 5 * time.Minute
 func limitPath(account string) (string, error) {
 	return paths.XDG("STATE", fmt.Sprintf("quota/%x", sha256.Sum256([]byte(account))))
 }
-func RememberRateLimit(account string, err error) {
+func RememberRateLimit(account string, err error) bool {
 	var rpc *acp.RequestError
 	if !errors.As(err, &rpc) {
-		return
+		return false
 	}
 	var data struct{ ErrorKind string }
 	_ = json.Unmarshal(rpc.Data, &data)
 	if data.ErrorKind != "rate_limit" && rpc.Code != 429 {
-		return
+		return false
 	}
+	RecordRateLimit(account)
+	return true
+}
+
+func RecordRateLimit(account string) {
 	p, e := limitPath(account)
 	if e != nil {
 		return

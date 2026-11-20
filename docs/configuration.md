@@ -104,6 +104,10 @@ Set the variable in Petal’s environment to the complete header value, includin
 
 The adapter handles OAuth and remembers the login for its profile. Claude Code can request sign-in when you reconnect the server through its MCP command. On first use Codex can ask you to run `codex mcp login <name>`. Use the same Codex home and server URL as the Petal account. If the server exists only in Petal, supply its URL to the CLI with `codex -c 'mcp_servers.work-tools.url="https://tools.example.org/mcp"' mcp login work-tools`.
 
+### Petal delegation
+
+The delegation proposal describes how to enable Petal's own MCP tools and read the child activity journal. [Petal delegation over MCP](petal-delegation.md)
+
 ## Terminal background
 
 Petal uses a solid dark background by default. To use your terminal’s background, put this before the account tables in `config.toml` and restart Petal.

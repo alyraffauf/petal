@@ -52,6 +52,12 @@ func (s MCPServer) validateHTTP() error {
 // WireDefinition reads credentials only for servers actually sent to an adapter.
 func (s MCPServer) WireDefinition() (any, error) {
 	if s.URL == "" {
+		if s.Env == nil {
+			s.Env = []MCPEnvVariable{}
+		}
+		if s.Args == nil {
+			s.Args = []string{}
+		}
 		return s, nil
 	}
 	headers := make([]acp.HttpHeader, 0, len(s.Headers))

@@ -43,6 +43,7 @@ func (p *proxy) relayV2ClientCall(ctx context.Context, name, method string, raw 
 			fields[key] = encoded(p.publicID(name, stringField(fields, key)))
 		}
 	}
+	nativeSession := stringField(params, "sessionId")
 	rewriteID(params, "sessionId")
 	switch native {
 	case "elicitation/create", "elicitation/complete":
@@ -80,9 +81,36 @@ func (p *proxy) relayV2ClientCall(ctx context.Context, name, method string, raw 
 				return nil, rpcError(source.Err())
 			}
 		}
+		var wakeEndpoint *delegationEndpoint
+		var wakeCtx context.Context
+		var cancelWake context.CancelFunc
+		if p.delegation != nil && native == "session/update" {
+			update := params.member("update")
+			if stringField(update, "sessionUpdate") == "state_update" {
+				e := p.endpoint(stringField(params, "sessionId"))
+				if e != nil {
+					switch stringField(update, "state") {
+					case "running":
+						e.wakes.interrupt(false)
+					case "idle":
+						if stringField(update, "stopReason") == "end_turn" {
+							wakeEndpoint = e
+							wakeCtx, cancelWake = e.waitContext(e.ctx)
+						}
+					}
+				}
+			}
+		}
 		err := p.editor.SendNotification(ctx, native, params)
 		if err != nil && updateSlot {
 			<-p.editorUpdates
+		}
+		if wakeEndpoint != nil {
+			if err != nil {
+				cancelWake()
+			} else {
+				wakeEndpoint.idleV2(wakeCtx, cancelWake, p.backends[name], nativeSession)
+			}
 		}
 		return nil, rpcError(err)
 	}

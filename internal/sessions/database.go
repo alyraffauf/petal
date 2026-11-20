@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -21,6 +22,10 @@ var migrationFiles embed.FS
 var migrations, _ = fs.Sub(migrationFiles, "migrations")
 
 func openStore(cwd string) (*sql.DB, error) {
+	return openStoreContext(context.Background(), cwd)
+}
+
+func openStoreContext(ctx context.Context, cwd string) (*sql.DB, error) {
 	dir, err := paths.XDG("STATE", filepath.Join("conversations", key(cwd)))
 	if err != nil {
 		return nil, err
@@ -36,9 +41,20 @@ func openStore(cwd string) (*sql.DB, error) {
 	}
 	defer lock.Close()
 	for {
-		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
-		if !errors.Is(err, syscall.EINTR) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
 			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Millisecond):
 		}
 	}
 	if err != nil {
@@ -60,7 +76,7 @@ func openStore(cwd string) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
 	if err == nil {
-		_, err = provider.Up(context.Background())
+		_, err = provider.Up(ctx)
 	}
 	if err != nil {
 		db.Close()

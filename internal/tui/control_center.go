@@ -69,10 +69,18 @@ func (p *picker) nodes() []controlNode {
 			all = append(all, controlNode{id: "model/" + model, parent: "new", title: petalLabel(p.cfg.ModelLabel(model)), kind: "Model", state: "start"})
 		}
 	}
+	savedNodes := make(map[string]int, len(p.saved))
 	for i, r := range p.saved {
 		kind, state := "Session", "saved"
-		if r.Parent != "" {
+		parent := r.Parent
+		if parent != "" {
 			kind = "Fork"
+		}
+		if r.DelegatedParent != "" {
+			parent, kind = r.DelegatedParent, "Delegated"
+			if r.DelegationStatus != "" {
+				state = r.DelegationStatus
+			}
 		}
 		if r.ID == current {
 			state = m.Status
@@ -87,7 +95,8 @@ func (p *picker) nodes() []controlNode {
 		if title == "" {
 			title = "untitled conversation"
 		}
-		all = append(all, controlNode{id: r.ID, parent: r.Parent, title: petalLabel(title), kind: kind, state: petalLabel(state), route: petalLabel(r.Model + " / " + r.Account), index: i})
+		savedNodes[r.ID] = len(all)
+		all = append(all, controlNode{id: r.ID, parent: parent, title: petalLabel(title), kind: kind, state: petalLabel(state), route: petalLabel(r.Model + " / " + r.Account), index: i})
 	}
 	if current != "" {
 		for i, c := range m.agents.children {
@@ -99,7 +108,15 @@ func (p *picker) nodes() []controlNode {
 			if m.ask != nil && m.ask.sessionID == c.id {
 				state = "needs input"
 			}
-			all = append(all, controlNode{id: c.id, parent: c.parent, title: petalLabel(title), kind: "Subagent", state: state, index: i})
+			node := controlNode{id: c.id, parent: c.parent, title: petalLabel(title), kind: "Subagent", state: state, index: i}
+			if index, ok := savedNodes[c.id]; ok {
+				if r := p.saved[all[index].index]; r.DelegatedParent != "" {
+					node.parent = r.DelegatedParent
+				}
+				all[index] = node
+			} else {
+				all = append(all, node)
+			}
 		}
 		group := "turns"
 		added := false
@@ -348,7 +365,7 @@ func (p *picker) centerDetails(n controlNode) []entry {
 		if m.ask != nil && m.ask.sessionID == n.id {
 			rows = append(rows, entry{"system", "**Permission requested**\n\n" + m.ask.title}, entry{"system", "**Enter** · Review in parent"})
 		}
-		rows = append(rows, entry{"system", "**Parent** · " + m.graphName(c.parent)})
+		rows = append(rows, entry{"system", "**Parent** · " + p.graphName(n.parent)})
 		for _, r := range m.agents.details(n.index) {
 			rows = append(rows, entry{r.Role, "**" + sentenceLabel(r.Role) + "** · " + r.Text})
 		}
@@ -367,7 +384,12 @@ func (p *picker) centerDetails(n controlNode) []entry {
 		if stamp := r.LastActivity(); !stamp.IsZero() {
 			rows = append(rows, entry{"system", stamp.Local().Format("Jan 2 · 15:04")})
 		}
-		if r.Parent != "" {
+		if n.kind == "Delegated" {
+			rows = append(rows, entry{"system", "Parent · " + p.graphName(n.parent)})
+			if r.DelegationStatus != "" {
+				rows = append(rows, entry{"system", "Result · " + petalLabel(r.DelegationStatus)})
+			}
+		} else if r.Parent != "" {
 			for _, parent := range p.saved {
 				if parent.ID == r.Parent {
 					rows = append(rows, entry{"system", "Fork of " + parent.Title})
@@ -537,8 +559,8 @@ func (p *picker) nodeLine(n controlNode, width int, selected bool) string {
 		mark = "▼"
 	}
 	name := n.title
-	if n.kind == "Fork" {
-		name = "Fork · " + name
+	if n.kind == "Fork" || n.kind == "Delegated" {
+		name = n.kind + " · " + name
 	}
 	state := n.state
 	fg := petalMuted
@@ -603,7 +625,7 @@ func (p *picker) permissionPreview(n controlNode, width int) []entry {
 	field("", m.ask.title)
 	field("Enter", "  Review in parent")
 	rows = append(rows, entry{})
-	field("Parent", "  "+m.graphName(c.parent))
+	field("Parent", "  "+p.graphName(n.parent))
 	return rows
 }
 

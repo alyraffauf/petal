@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -63,7 +64,13 @@ func main() {
 	root.Flags().BoolVar(&resume, "resume", false, "choose a saved conversation for this directory")
 	server.Flags().StringVar(&terminalAuth, "terminal-auth", "", "ACP terminal authentication")
 	_ = server.Flags().MarkHidden("terminal-auth")
-	root.AddCommand(server)
+	bridge := &cobra.Command{
+		Use: "delegation-mcp SOCKET", Hidden: true, Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return proxy.RelayDelegationMCP(cmd.Context(), args[0], os.Stdin, os.Stdout)
+		},
+	}
+	root.AddCommand(server, bridge)
 
 	if err := root.Execute(); err != nil {
 		log.Fatal(err)
