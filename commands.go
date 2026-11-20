@@ -9,10 +9,13 @@ import (
 type chatCommand struct{ name, description string }
 
 func (m *terminal) commandMatches() []chatCommand {
-	if m.ask != nil || len(m.draft) == 0 || m.draft[0] != '/' || m.Status == "Connection failed" {
+	if m.ask != nil || m.editor == nil || m.Status == "Connection failed" {
 		return nil
 	}
-	query := string(m.draft)
+	query := m.editor.Value()
+	if !strings.HasPrefix(query, showCommands.Keys()[0]) {
+		return nil
+	}
 	var matches []chatCommand
 	add := func(name, description string) {
 		if strings.HasPrefix(name, query) {
@@ -41,8 +44,7 @@ func (m *terminal) openPicker(routeOnly bool) tea.Cmd {
 }
 
 func (m *terminal) runCommand(command chatCommand) tea.Cmd {
-	m.draft = nil
-	m.cursor = 0
+	m.editor.Reset()
 	m.commandIndex = 0
 	switch command.name {
 	case "/new", "/model":

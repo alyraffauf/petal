@@ -1,6 +1,7 @@
 package main
 
 import (
+	"charm.land/bubbles/v2/key"
 	"context"
 	"fmt"
 	"slices"
@@ -99,29 +100,29 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyPressMsg:
 		opts := m.options()
-		switch t.String() {
-		case "ctrl+c":
+		switch {
+		case key.Matches(t, quitPetal):
 			return m, tea.Quit
-		case "esc":
+		case key.Matches(t, dismissMenu):
 			if m.choosingRoute {
 				m.choosingRoute = false
 				m.index = max(0, slices.Index(m.options(), m.cfg.model))
 			} else {
 				return m, tea.Quit
 			}
-		case "down", "ctrl+n":
+		case key.Matches(t, selectNext, newThread):
 			m.index = min(m.index+1, max(0, len(opts)-1))
-		case "up", "ctrl+p":
+		case key.Matches(t, selectPrevious) || t.String() == "ctrl+p":
 			m.index = max(0, m.index-1)
-		case "pgdown":
+		case key.Matches(t, pageLater):
 			m.index = min(m.index+max(1, m.height-9), max(0, len(opts)-1))
-		case "pgup":
+		case key.Matches(t, pageEarlier):
 			m.index = max(0, m.index-max(1, m.height-9))
-		case "tab":
+		case key.Matches(t, chooseRoute):
 			if !m.choosingRoute && m.cfg.forced == "" && len(opts) > 0 {
 				return m, m.routeMenu(opts[m.index])
 			}
-		case "enter":
+		case key.Matches(t, confirmChoice):
 			if len(opts) > 0 {
 				if m.choosingRoute {
 					m.cfg.forced = opts[m.index]
@@ -131,7 +132,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chosen = true
 				return m, tea.Quit
 			}
-		case "backspace":
+		case t.String() == "backspace":
 			if !m.choosingRoute && len(m.query) > 0 {
 				_, size := utf8.DecodeLastRuneInString(m.query)
 				m.query = m.query[:len(m.query)-size]
@@ -212,14 +213,11 @@ func (m *picker) View() tea.View {
 	for len(rows) < h-1 {
 		rows = append(rows, blank())
 	}
-	hint := "  Enter start   Tab override subscription"
-	if m.resume {
-		hint = "  Enter resume   Tab override subscription"
-	}
+	hint := shortHelp(w, confirmChoice, chooseRoute)
 	if m.choosingRoute {
-		hint = "  Enter confirm   Esc back"
+		hint = shortHelp(w, confirmChoice, dismissMenu)
 	} else if m.cfg.forced != "" {
-		hint = "  Enter confirm   Account " + m.cfg.forced
+		hint = shortHelp(w, confirmChoice) + "   Account " + m.cfg.forced
 	}
 	rows = append(rows, row(hint, petalMuted, false))
 	rows = rows[:min(h, len(rows))]

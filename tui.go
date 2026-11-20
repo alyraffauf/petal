@@ -12,6 +12,7 @@ import (
 
 	"bloomfx.dev/bloom"
 	"bloomfx.dev/bloom/anim"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	acp "github.com/coder/acp-go-sdk"
@@ -19,16 +20,17 @@ import (
 
 type entry struct{ Role, Text string }
 type screen struct {
-	busyAction                         string
-	queued                             int
-	backlog                            *backlogViewport
-	markdown                           *markdownCache
-	Width, Height, Frame, cursorColumn int
-	Model, Account, Cwd, Status, Input string
-	Messages                           []entry
-	Busy                               bool
-	commands                           []chatCommand
-	commandIndex                       int
+	busyAction                  string
+	queued                      int
+	backlog                     *backlogViewport
+	markdown                    *markdownCache
+	Width, Height, Frame        int
+	editor                      *textarea.Model
+	Model, Account, Cwd, Status string
+	Messages                    []entry
+	Busy                        bool
+	commands                    []chatCommand
+	commandIndex                int
 }
 
 func clean(s string) string {
@@ -58,12 +60,19 @@ func transcript(v screen, width, height int) []entry {
 	if width <= 0 || height <= 0 {
 		return nil
 	}
+	if v.markdown == nil {
+		v.markdown = &markdownCache{}
+	}
+	if n := len(v.Messages); n < len(v.markdown.layouts) {
+		clear(v.markdown.layouts[n:])
+		v.markdown.layouts = v.markdown.layouts[:n]
+	}
 	var lines []entry
-	for _, e := range v.Messages {
+	for index, e := range v.Messages {
 		if len(lines) > 0 {
 			lines = append(lines, entry{})
 		}
-		for _, s := range v.messageLines(e, width) {
+		for _, s := range v.messageLines(index, e, width) {
 			lines = append(lines, entry{e.Role, s})
 		}
 	}
@@ -89,13 +98,13 @@ type terminal struct {
 	outbox                []string
 	steering, waitForTurn bool
 	lateFinish            *finished
-	permissionDraft       []rune
-	permissionCursor      int
+	permissionDraft       *textarea.Model
 	launch                *picker
 	next                  *sessionStart
 	tools                 map[string]toolEvent
 	reader                anim.Presence
 	readerBacklog         backlogViewport
+	readerMarkdown        markdownCache
 	animating             bool
 	replay                bool
 	screen
@@ -104,8 +113,6 @@ type terminal struct {
 	ctx           context.Context
 	cfg           config
 	resume, ready bool
-	draft         []rune
-	cursor        int
 	ask           *permission
 	chatBacklog   backlogViewport
 	pending       turnLog
@@ -118,7 +125,7 @@ func demoScreen() screen {
 		{"tool", "Read  accounts.go  ·  config.choose"},
 		{"assistant", "Placement happens in config.choose. It probes the accounts that serve your model and picks the one with the most remaining quota."},
 		{"user", "What happens to **my thread** if the `work` account runs low?"},
-		{"tool", "Read  main.go  ·  proxy.open"},
+		{"tool", "Read  proxy.go  ·  proxy.open"},
 		{"assistant", "### Your thread stays pinned\nExisting turns stay on **the original adapter**. Only new sessions run the quota probes.\n\n| Action | Route |\n| :--- | :--- |\n| Continue | Original account |\n| Start fresh | Highest quota |\n\nResume the thread:\n\n```sh\npetal tui sonnet --resume\n```"},
 	}}
 }
@@ -126,8 +133,7 @@ func demoScreen() screen {
 type sessionStart struct {
 	cfg    config
 	resume bool
-	draft  []rune
-	cursor int
+	editor *textarea.Model
 }
 
 func runTUI(parent context.Context, c config, resume, demo bool) error {
@@ -144,7 +150,7 @@ func runSession(parent context.Context, start sessionStart, demo bool) (*session
 	c := start.cfg
 	ctx, stop := context.WithCancel(parent)
 	defer stop()
-	m := &terminal{reader: anim.NewPresence(anim.Duration(160 * time.Millisecond)), root: bloom.New(), ctx: ctx, cfg: c, resume: start.resume, draft: start.draft, cursor: start.cursor}
+	m := &terminal{reader: anim.NewPresence(anim.Duration(160 * time.Millisecond)), root: bloom.New(), ctx: ctx, cfg: c, resume: start.resume}
 	if demo {
 		m.screen = demoScreen()
 		m.ready = true
@@ -156,6 +162,10 @@ func runSession(parent context.Context, start sessionStart, demo bool) (*session
 		m.screen = screen{Cwd: cwd, Model: c.model, Account: c.forced, Status: "Connecting"}
 		m.h = startHarness(ctx, c)
 		defer m.h.close()
+	}
+	m.editor = start.editor
+	if m.editor == nil {
+		m.editor = newComposer()
 	}
 	m.markdown = &markdownCache{}
 	_, err := tea.NewProgram(m).Run()
@@ -211,11 +221,6 @@ func (m *terminal) View() tea.View {
 	v.commands = m.commandMatches()
 	v.commandIndex = min(m.commandIndex, max(0, len(v.commands)-1))
 	v.backlog = &m.chatBacklog
-	if len(m.draft) > 0 {
-		prefix := strings.ReplaceAll(string(m.draft[:m.cursor]), "\n", " ↵ ")
-		v.cursorColumn = ansi.StringWidth(prefix)
-		v.Input = prefix + "▏" + strings.ReplaceAll(string(m.draft[m.cursor:]), "\n", " ↵ ")
-	}
 	v.Cwd = clean(v.Cwd)
 	v.Account = clean(v.Account)
 	v.Model = clean(v.Model)
@@ -224,14 +229,8 @@ func (m *terminal) View() tea.View {
 	view.MouseMode = tea.MouseModeCellMotion
 	return view
 }
-func (m *terminal) insert(s string) {
-	r := []rune(clean(s))
-	tail := append([]rune(nil), m.draft[m.cursor:]...)
-	m.draft = append(append(m.draft[:m.cursor], r...), tail...)
-	m.cursor += len(r)
-}
 func (m *terminal) submit() tea.Cmd {
-	text := strings.TrimSpace(string(m.draft))
+	text := strings.TrimSpace(m.editor.Value())
 	if text == "" {
 		return nil
 	}
@@ -251,7 +250,7 @@ func (m *terminal) submit() tea.Cmd {
 	if !m.ready {
 		return nil
 	}
-	m.draft, m.cursor = nil, 0
+	m.editor.Reset()
 	if m.h == nil {
 		m.Messages = append(m.Messages, entry{"user", text}, entry{"system", "Demo session. Launch petal tui MODEL to send this prompt to your agent."})
 		return nil
@@ -261,8 +260,7 @@ func (m *terminal) submit() tea.Cmd {
 }
 
 func (m *terminal) restorePermissionDraft() {
-	m.draft, m.cursor = m.permissionDraft, m.permissionCursor
-	m.permissionDraft, m.permissionCursor = nil, 0
+	m.editor, m.permissionDraft = m.permissionDraft, nil
 }
 
 func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -288,7 +286,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.launch.chosen {
 				m.next = &sessionStart{cfg: m.launch.cfg, resume: m.launch.resume}
 				if m.Status == "Connection failed" {
-					m.next.draft, m.next.cursor = m.draft, m.cursor
+					m.next.editor = m.editor
 				}
 				return m, tea.Quit
 			}
@@ -392,8 +390,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t.ask != nil {
 			m.chatBacklog.browsing = false
 			ui = tea.Batch(ui, m.reader.Hide())
-			m.permissionDraft, m.permissionCursor = m.draft, m.cursor
-			m.draft, m.cursor = nil, 0
+			m.permissionDraft, m.editor = m.editor, newComposer()
 			m.ask = t.ask
 			m.Status = "Permission required"
 		}
@@ -415,139 +412,10 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.PasteMsg:
 		if !m.reader.Shown() && m.Status != "Connection failed" {
-			m.insert(t.Content)
+			cmd = m.paste(t.Content)
 		}
 	case tea.KeyPressMsg:
-		if m.reader.Shown() {
-			step := max(1, m.Height-8)
-			switch t.String() {
-			case "esc", "f3":
-				cmd = m.reader.Hide()
-			case "ctrl+c":
-				cmd = tea.Quit
-			case "pgup":
-				m.readerBacklog.move(-step)
-			case "end", "ctrl+end":
-				m.readerBacklog.browsing = false
-			case "up":
-				m.readerBacklog.move(-1)
-			case "pgdown":
-				m.readerBacklog.move(step)
-			case "down":
-				m.readerBacklog.move(1)
-			}
-			break
-		}
-		if m.Status == "Connection failed" {
-			switch t.String() {
-			case "enter", "r":
-				m.next = &sessionStart{cfg: m.cfg, resume: m.resume, draft: m.draft, cursor: m.cursor}
-				return m, tea.Quit
-			case "tab":
-				return m, m.openPicker(true)
-			case "ctrl+n", "ctrl+c", "f3", "pgup", "pgdown", "ctrl+end":
-				// These shortcuts also work on the recovery screen.
-			default:
-				return m, nil
-			}
-		}
-		if matches := m.commandMatches(); len(matches) > 0 {
-			index := min(m.commandIndex, len(matches)-1)
-			switch t.String() {
-			case "up":
-				m.commandIndex = max(0, index-1)
-				return m, nil
-			case "down":
-				m.commandIndex = min(len(matches)-1, index+1)
-				return m, nil
-			case "enter":
-				return m, m.runCommand(matches[index])
-			case "esc":
-				m.draft, m.cursor, m.commandIndex = nil, 0, 0
-				return m, nil
-			}
-		}
-		m.commandIndex = 0
-		switch t.String() {
-		case "ctrl+n":
-			if m.h != nil && !m.Busy && m.Status != "Connecting" {
-				cmd = m.openPicker(false)
-			}
-		case "f3":
-			m.readerBacklog.browsing = false
-			cmd = m.reader.Show()
-		case "ctrl+r":
-			if m.h == nil {
-				sample := demoScreen()
-				m.Messages = sample.Messages
-				last := m.Messages[len(m.Messages)-1]
-				m.Messages = m.Messages[:len(m.Messages)-1]
-				m.pending = turnLog{}
-				m.pending.push(event{role: last.Role, text: last.Text, chunk: true})
-				m.replay = true
-				m.chatBacklog.browsing = false
-				m.Frame = 0
-				m.Status = "Demo · working"
-				m.Busy = true
-			}
-		case "ctrl+c":
-			return m, tea.Quit
-		case "enter":
-			cmd = m.submit()
-		case "esc":
-			if m.ask != nil {
-				m.recordNote("Permission declined.")
-				m.ask.reply <- -1
-				m.ask = nil
-				m.restorePermissionDraft()
-				m.Status = "Working"
-				cmd = m.deliver()
-			} else if m.Busy && m.h == nil {
-				m.replay = false
-				m.pending = turnLog{}
-				m.Busy = false
-				m.Status = "Demo · ready"
-			} else if m.Busy {
-				m.Status = "Cancelling"
-				cmd = func() tea.Msg {
-					err := m.h.conn.SendNotification(m.ctx, "session/cancel", map[string]string{"sessionId": m.h.id})
-					if err != nil {
-						return cancelFailed{err}
-					}
-					return nil
-				}
-			}
-		case "pgup":
-			m.chatBacklog.move(-max(1, m.Height/2))
-		case "pgdown":
-			m.chatBacklog.move(max(1, m.Height/2))
-		case "ctrl+end":
-			m.chatBacklog.browsing = false
-		case "left":
-			m.cursor = max(0, m.cursor-1)
-		case "right":
-			m.cursor = min(len(m.draft), m.cursor+1)
-		case "home", "ctrl+a":
-			m.cursor = 0
-		case "end", "ctrl+e":
-			m.cursor = len(m.draft)
-		case "ctrl+u":
-			m.draft = nil
-			m.cursor = 0
-		case "backspace":
-			if m.cursor > 0 {
-				m.draft = append(m.draft[:m.cursor-1], m.draft[m.cursor:]...)
-				m.cursor--
-			}
-		case "delete":
-			if m.cursor < len(m.draft) {
-				m.draft = append(m.draft[:m.cursor], m.draft[m.cursor+1:]...)
-			}
-		default:
-			if t.Text != "" {
-				m.insert(t.Text)
-			}
-		}
+		cmd = m.handleKey(t)
 	}
 	if !m.animating && (m.replay || m.Busy) {
 		m.animating = true

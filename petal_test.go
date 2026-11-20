@@ -10,7 +10,7 @@ import (
 func TestPetalKeepsMultilineChromeOnItsOwnRows(t *testing.T) {
 	v := screen{
 		Width: 80, Height: 27, Model: "model\nvariant", Account: "account\nname",
-		Status: "status\nready", Cwd: "/tmp/line\nbreak", Input: "draft\ncontinued",
+		Status: "status\nready", Cwd: "/tmp/line\nbreak", editor: testComposer("draft\ncontinued", 9),
 	}
 	rows := strings.Split(ansi.Strip(petal(v)), "\n")
 	if len(rows) != v.Height {
@@ -22,7 +22,7 @@ func TestPetalKeepsMultilineChromeOnItsOwnRows(t *testing.T) {
 	}{
 		{0, "status ready"},
 		{1, "model variant / account name"},
-		{25, "draft continued"},
+		{25, "continued"},
 		{26, "/tmp/line break"},
 	} {
 		if !strings.Contains(rows[want.row], want.text) {

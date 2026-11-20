@@ -117,12 +117,8 @@ func petal(v screen) string {
 		}
 		rows = append(rows, richBand(mark+c.name+"  "+c.description, w, petalRose, bg, false))
 	}
-	input := petalLabel(v.Input)
-	fg := petalText
-	if input == "" {
-		input = "Ask " + petalLabel(v.Model) + "…"
-		fg = petalMuted
-	}
+	input := "Ask " + petalLabel(v.Model) + "…"
+	fg := petalMuted
 	action := " ↵ Send "
 	switch {
 	case v.Status == "Connection failed":
@@ -139,25 +135,23 @@ func petal(v screen) string {
 		aw = ansi.StringWidth(action)
 	}
 	room := max(1, w-aw-4)
-	if n := ansi.StringWidth(input); n > room {
-		start := max(0, v.cursorColumn-room+1)
-		input = ansi.Cut(input, start, start+room)
+	if v.editor != nil && v.Status != "Connection failed" {
+		if v.editor.Width() != room {
+			v.editor.SetWidth(room)
+			*v.editor, _ = v.editor.Update(nil) // Reflow content before scrolling to the cursor.
+		}
+		if v.editor.Value() != "" {
+			input, fg = v.editor.View(), petalText
+		}
 	}
 	rows = append(rows, richBand("  › "+input, w-aw, fg, petalSurface, false)+richBand(action, aw, petalInk, petalRose, true))
 	if footer == 2 {
-		hint := " / commands   ^N new   Pg↑↓ history   F3 read "
-		if v.Status == "Connection failed" {
-			hint = " ^N new thread   ^C quit "
-		} else if len(v.commands) > 0 {
-			hint = " ↑↓ select   Enter run   Esc dismiss "
-		} else if v.Busy {
-			hint = " Pg↑↓ history   F3 read   Esc cancel "
-		}
+		hint := " " + chatHelp(v) + " "
 		if v.queued > 0 {
-			hint = fmt.Sprintf(" %d pending  ", v.queued) + hint
+			hint = fmt.Sprintf(" %d pending ", v.queued) + hint
 		}
 		if v.backlog != nil && v.backlog.browsing {
-			hint = fmt.Sprintf(" ↓ %d lines   Ctrl+End latest ", v.backlog.limit-v.backlog.top)
+			hint = fmt.Sprintf(" ↓ %d lines ", v.backlog.limit-v.backlog.top) + hint
 		}
 		hw := min(w, ansi.StringWidth(hint))
 		rows = append(rows, richBand("  "+petalLabel(v.Cwd), w-hw, petalMuted, petalInk, false)+richBand(hint, hw, petalMuted, petalInk, false))

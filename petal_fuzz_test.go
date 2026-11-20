@@ -22,7 +22,7 @@ func FuzzPetalFrame(f *testing.F) {
 		}
 		v := screen{
 			Width: int(columns % 101), Height: int(rows % 41), Model: model,
-			Account: account, Status: status, Cwd: cwd, Input: input,
+			Account: account, Status: status, Cwd: cwd, editor: testComposer(clean(input), 0),
 			Messages: []entry{{"assistant", message}},
 		}
 		if v.Width == 0 || v.Height == 0 {
@@ -150,8 +150,8 @@ func FuzzPetalMarkdownCache(f *testing.F) {
 			}
 			width := 1 + int(op>>2)
 			e := entry{"assistant", source}
-			got := v.messageLines(e, width)
-			want := (screen{}).messageLines(e, width)
+			got := v.messageLines(0, e, width)
+			want := (screen{}).messageLines(0, e, width)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("op %d at width %d: cached render differs from a fresh renderer", i, width)
 			}
@@ -231,7 +231,7 @@ func FuzzPetalMarkdownContent(f *testing.F) {
 			want.WriteString(form.visible)
 		}
 		width := 2 + int(columns%79)
-		rows := (screen{}).messageLines(entry{"assistant", source.String()}, width)
+		rows := (screen{}).messageLines(0, entry{"assistant", source.String()}, width)
 		for _, row := range rows {
 			if actual := ansi.StringWidth(row); actual > width {
 				t.Fatalf("rendered %d columns at width %d: %q", actual, width, ansi.Strip(row))

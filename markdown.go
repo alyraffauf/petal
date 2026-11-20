@@ -10,26 +10,30 @@ import (
 
 // Rendering happens on the Bubble Tea event loop. Keep completed Markdown
 // layouts across animation frames and transcript navigation.
-type markdownKey struct {
+type messageLayout struct {
+	lines []string
 	text  string
 	width int
 }
 type markdownCache struct {
-	lines    map[markdownKey][]string
+	layouts  []messageLayout
 	renderer *glamour.TermRenderer
 	width    int
 }
 
-func (v screen) messageLines(e entry, width int) []string {
+func (v screen) messageLines(index int, e entry, width int) []string {
 	width = max(1, width)
 	c := v.markdown
 	if c == nil {
 		c = &markdownCache{}
 	}
 	accent := "#ffafd5"
-	key := markdownKey{e.Text, width}
-	if result, ok := c.lines[key]; ok {
-		return result
+	if index >= len(c.layouts) {
+		c.layouts = append(c.layouts, make([]messageLayout, index+1-len(c.layouts))...)
+	}
+	layout := &c.layouts[index]
+	if layout.width == width && layout.text == e.Text {
+		return layout.lines
 	}
 	if c.renderer == nil || c.width != width {
 		style := styles.DarkStyleConfig
@@ -76,10 +80,7 @@ func (v screen) messageLines(e entry, width int) []string {
 		}
 		wrapped = append(wrapped, parts...)
 	}
-	if c.lines == nil || len(c.lines) >= 192 {
-		c.lines = make(map[markdownKey][]string)
-	}
-	c.lines[key] = wrapped
+	*layout = messageLayout{text: e.Text, width: width, lines: wrapped}
 	return wrapped
 }
 

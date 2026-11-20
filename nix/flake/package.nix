@@ -13,7 +13,7 @@
           ) ../..)
         ];
       };
-      vendorHash = "sha256-frby66cZK0GSTwCW2izgyvWvTeNoQGM50MwdK0Fi7Dg=";
+      vendorHash = "sha256-Qgfvd5mNSW8GmU4X8DgqnR5K1nGCobxV2gazV+HQ6oM=";
       subPackages = [ "." ];
       # The Claude bridge uses the user's installed CLI, discovered at runtime.
       ldflags = [

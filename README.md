@@ -94,7 +94,7 @@ petal tui sonnet --resume
 petal serve sonnet
 ```
 
-Enter sends the draft, arrow keys edit it, the mouse wheel, trackpad, or Page Up and Page Down scroll the backlog, Ctrl+End returns to the latest message, Escape cancels, and Ctrl+C quits. When an agent requests permission, enter the number of an offered option, or press Escape to decline. The client displays agent text, thoughts, and tool activity. Adapters must provide their own filesystem and terminal facilities.
+Enter sends the draft. Alt+Enter inserts a newline (Shift+Enter also works in terminals that report it). Arrow keys edit it, the mouse wheel, trackpad, or Page Up and Page Down scroll the backlog, Ctrl+End returns to the latest message, Escape cancels, and Ctrl+C quits. When an agent requests permission, enter the number of an offered option, or press Escape to decline. The client displays agent text, thoughts, and tool activity. Adapters must provide their own filesystem and terminal facilities.
 
 Petal saves the last session ID for each model and working directory under `$XDG_STATE_HOME/petal/sessions` (default `~/.local/state/petal/sessions`). The adapter owns conversation history and must support ACP session loading to resume. Overriding an existing route requires the selected account to have access to that history.
 
@@ -116,4 +116,4 @@ CGO_ENABLED=0 go test -run '^$' -fuzz '^FuzzSessionResumePlacement$' -fuzztime=1
 
 The session target uses local ACP subprocesses and temporary state directories. It creates and resumes sessions across two accounts, projects, and models, then asks the running adapter which account received the request. The Auto routing target compares eligible winners against an independent exact-arithmetic model. Both run offline.
 
-The transcript target generates interleaved message chunks, tool updates, cancellations, and history replay. The five rendering targets check frame dimensions, scrolling through a changing backlog, Markdown cache consistency, visible content, and reader layout. These campaigns cover bounded histories and synthetic adapters. Live provider behavior, terminal input delivery, and the timing of concurrent external requests need separate integration checks.
+The transcript target generates interleaved message chunks, tool updates, cancellations, and history replay. The five rendering targets check frame dimensions, scrolling through a changing backlog, Markdown cache consistency, visible content, and reader layout. These campaigns cover bounded histories and synthetic adapters. On Linux and macOS, the regular Go suite also drives the CLI through a pseudoterminal with an offline ACP adapter. It checks bracketed multiline paste, resizing, steering during a turn, and opening the reader. Live provider behavior and concurrent external requests need separate integration checks.
