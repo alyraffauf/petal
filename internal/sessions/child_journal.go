@@ -308,7 +308,10 @@ func loadChildBindings(db *sql.DB, records []Record) error {
 	for i := range records {
 		byID[records[i].ID] = &records[i]
 	}
-	rows, err := db.Query("SELECT child_id, parent_id, COALESCE(result_status, '') FROM child_bindings")
+	rows, err := db.Query(`
+		SELECT child_id, parent_id, COALESCE(result_status,
+			CASE WHEN cancel_requested = 1 THEN 'cancelling' WHEN lease IS NOT NULL THEN 'running' ELSE '' END)
+		FROM child_bindings`)
 	if err != nil {
 		return err
 	}

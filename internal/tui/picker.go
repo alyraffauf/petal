@@ -71,6 +71,7 @@ func (m *picker) showHistory() {
 	m.saved = nil
 	cwd, err := os.Getwd()
 	if err == nil {
+		m.center.cwd = cwd
 		m.center.project = filepath.Base(cwd)
 		ctx, stop := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer stop()
@@ -187,8 +188,26 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch t := msg.(type) {
+	case childCancellationResult:
+		if t.picker == m {
+			m.childCancellationFinished(t)
+		}
 	case tea.MouseClickMsg:
-		if t.Button != tea.MouseLeft || !image.Pt(t.X, t.Y).In(m.pointerRows) {
+		if t.Button != tea.MouseLeft {
+			break
+		}
+		point := image.Pt(t.X, t.Y)
+		if m.history && m.center.graphID == "" && point.In(m.center.cancelButton) {
+			nodes := m.nodes()
+			if len(nodes) > 0 {
+				n := nodes[m.selectedNode(nodes)]
+				if m.canCancelChild(n) && n.binding == m.center.cancelTarget {
+					return m, m.cancelChild(n)
+				}
+			}
+			break
+		}
+		if !point.In(m.pointerRows) {
 			break
 		}
 		index := m.pointerFirst + t.Y - m.pointerRows.Min.Y

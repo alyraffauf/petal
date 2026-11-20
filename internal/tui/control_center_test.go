@@ -129,3 +129,52 @@ func TestControlCenterFollowsSavedDelegationWithoutLiveSession(t *testing.T) {
 		t.Fatalf("saved delegation was not revealed under its parent: %+v", nodes)
 	}
 }
+
+func TestControlCenterCancelsOnlySelectedDelegation(t *testing.T) {
+	for _, input := range []string{"keyboard", "mouse"} {
+		t.Run(input, func(t *testing.T) {
+			p := newPicker(routing.Config{})
+			p.history, p.width, p.height = true, 92, 23
+			p.saved = []sessions.Record{
+				{ID: "parent", Title: "Parent"},
+				{ID: "child", Title: "Selected", DelegatedParent: "parent", DelegationStatus: "running"},
+				{ID: "sibling", Title: "Sibling", DelegatedParent: "parent", DelegationStatus: "running"},
+			}
+			p.center.cwd, p.center.selected, p.center.filter = t.TempDir(), "child", 2
+			p.View()
+			var cmd tea.Cmd
+			if input == "keyboard" {
+				_, cmd = p.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+			} else {
+				point := p.center.cancelButton.Min
+				_, cmd = p.Update(tea.MouseClickMsg{X: point.X, Y: point.Y, Button: tea.MouseLeft})
+			}
+			if cmd == nil {
+				t.Fatal("no cancellation requested")
+			}
+			binding := sessions.ChildBinding{ParentID: "parent", ChildID: "child"}
+			if len(p.center.cancelling) != 1 || !p.center.cancelling[binding.ChildID] {
+				t.Fatalf("wrong cancellation target: %v", p.center.cancelling)
+			}
+			if len(p.nodes()) != 2 {
+				t.Fatal("pending cancellation disappeared from the working filter")
+			}
+			p.Update(childCancellationResult{picker: p, binding: binding, result: &sessions.ChildResult{Status: "cancelled"}})
+			rows := p.nodes()
+			if len(rows) != 1 || rows[0].id != "sibling" || rows[0].state != "running" {
+				t.Fatalf("expected only the running sibling, got %+v", rows)
+			}
+			if view := ansi.Strip(p.View().Content); !strings.Contains(view, "Selected · cancelled") {
+				t.Fatal(view)
+			}
+			if _, cmd := p.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}); cmd != nil {
+				t.Fatal("repeated cancellation targeted the sibling after the selected child left the filter")
+			}
+			p.center.selected = "child"
+			p.center.filter = 0
+			if view := ansi.Strip(p.View().Content); !strings.Contains(view, "cancelled") || strings.Contains(view, cancelChildLabel) {
+				t.Fatal(view)
+			}
+		})
+	}
+}

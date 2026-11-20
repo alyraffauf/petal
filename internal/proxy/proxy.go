@@ -32,12 +32,13 @@ func SessionID(p Object) (string, error) {
 }
 
 type backend struct {
-	close context.CancelFunc
-	ready atomic.Bool
-	raw   Object
-	conn  *acp.Connection
-	wire  *adapterWire
-	hello acp.InitializeResponse
+	close  context.CancelFunc
+	exited <-chan struct{}
+	ready  atomic.Bool
+	raw    Object
+	conn   *acp.Connection
+	wire   *adapterWire
+	hello  acp.InitializeResponse
 }
 type proxy struct {
 	embedded      bool
@@ -417,7 +418,8 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	}
 	childOutput.Close()
 	context.AfterFunc(lifetime, func() { out.Close(); in.Close() })
-	b := &backend{close: stop}
+	exited := make(chan struct{})
+	b := &backend{close: stop, exited: exited}
 	wire := &adapterWire{Writer: in, lifetime: lifetime, updates: make(chan struct{}, 128), nativeV2: version == 2}
 	reader := incoming(out, wire)
 	if receive != nil {
@@ -559,6 +561,7 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	}
 	go func() {
 		_ = cmd.Wait()
+		close(exited)
 		// A surviving helper may still hold stdout. Allow the reader to drain
 		// buffered frames, then terminate any blocked read.
 		_ = out.SetReadDeadline(time.Now().Add(time.Second))

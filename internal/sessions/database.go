@@ -74,7 +74,7 @@ func openStoreContext(ctx context.Context, cwd string) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations, goose.WithAllowOutofOrder(true))
 	if err == nil {
 		_, err = provider.Up(ctx)
 	}
