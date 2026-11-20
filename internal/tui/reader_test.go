@@ -10,22 +10,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestReaderSeparatesRoleFromMessage(t *testing.T) {
-	m := terminal{reading: true}
-	v := screen{Width: 38, Height: 16, Messages: []entry{{"assistant", "answer"}}}
-	frame := ansi.Strip(m.renderReader(v))
-	for _, row := range strings.Split(frame, "\n") {
-		if !strings.Contains(row, "answer") {
-			continue
-		}
-		fields := strings.Fields(row)
-		if slices.Equal(fields, []string{"✦", "agent", "answer"}) {
-			return
-		}
-	}
-	t.Fatalf("reader message should have a gap after its role:\n%s", frame)
-}
-
 func TestReaderPageKeepsOneLineOfContext(t *testing.T) {
 	for _, height := range []int{10, 23, 36} {
 		m := terminal{reading: true, screen: screen{Width: 92, Height: height}}

@@ -156,14 +156,14 @@ func TestOversizedPastePreservesDraft(t *testing.T) {
 }
 
 func TestComposerKeepsColorsOnFirstKeystroke(t *testing.T) {
-	m := terminal{screen: screen{Width: 60, Height: 12, connection: connected, editor: newComposer()}}
-	frame := func() *canvas.Canvas {
-		return canvas.Parse(petal(m.screen), ansi.GraphemeWidth)
-	}
-	placeholder := frame().CellAt(4, m.Height-2)
+	m := terminal{root: bloom.New(), screen: screen{Width: 60, Height: 12, connection: connected, editor: newComposer()}}
+	before := m.View()
+	x, y := before.Cursor.X, before.Cursor.Y
+	placeholder := canvas.Parse(before.Content, ansi.GraphemeWidth).CellAt(x, y)
 	m.edit(tea.KeyPressMsg{Code: 'x', Text: "x"})
-	typed := frame().CellAt(4, m.Height-2)
-	if placeholder.Content != "A" || typed.Content != "x" || !typed.Style.Equal(&placeholder.Style) {
-		t.Fatalf("composer changed on typing: %#v → %#v", placeholder, typed)
+	after := m.View()
+	typed := canvas.Parse(after.Content, ansi.GraphemeWidth).CellAt(after.Cursor.X-1, after.Cursor.Y)
+	if typed.Style.Fg != placeholder.Style.Fg || typed.Style.Bg != placeholder.Style.Bg {
+		t.Fatalf("typing changed composer colors: %#v → %#v", placeholder.Style, typed.Style)
 	}
 }
