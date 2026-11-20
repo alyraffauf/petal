@@ -30,12 +30,18 @@ func TestDelegationAdapterFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	rateLimit := func(message Object) {
+		write(Object{"jsonrpc": encoded("2.0"), "id": message["id"], "error": json.RawMessage(`{"code":429,"message":"rate limited"}`)})
+	}
+	failure := os.Getenv("PETAL_DELEGATION_FIXTURE_FAILURE")
 	update := func(payload string) {
 		write(Object{"jsonrpc": encoded("2.0"), "method": encoded("session/update"), "params": jsonValue(Object{
 			"sessionId": encoded("child"), "update": json.RawMessage(payload),
 		})})
 	}
 	version, nextID := 0, 0
+	rejectedWake := false
+	rejectedTeardowns := make(map[string]bool)
 	for scan.Scan() {
 		var message Object
 		if err := json.Unmarshal(scan.Bytes(), &message); err != nil {
@@ -45,15 +51,20 @@ func TestDelegationAdapterFixture(t *testing.T) {
 		reply := func(result any) {
 			write(Object{"jsonrpc": encoded("2.0"), "id": message["id"], "result": jsonValue(result)})
 		}
-		switch method := stringField(message, "method"); method {
+		method := stringField(message, "method")
+		if failure == method {
+			rateLimit(message)
+			continue
+		}
+		switch method {
 		case "initialize":
 			if err := json.Unmarshal(params["protocolVersion"], &version); err != nil {
 				t.Fatal(err)
 			}
 			if version == 2 {
-				reply(json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"fork":{},"mcp":{"stdio":{}}}}}`))
+				reply(json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"fork":{},"delete":{},"mcp":{"stdio":{}}}}}`))
 			} else {
-				reply(json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":false},"sessionCapabilities":{"close":{},"fork":{},"resume":{}}}}`))
+				reply(json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":false},"sessionCapabilities":{"close":{},"delete":{},"fork":{},"resume":{}}}}`))
 			}
 		case "session/new", "session/load", "session/resume", "session/fork":
 			if role == "child" && method == "session/new" {
@@ -73,7 +84,12 @@ func TestDelegationAdapterFixture(t *testing.T) {
 				}
 				reply(result)
 			}
-		case "session/close":
+		case "session/close", "session/delete":
+			if role == "parent" && !rejectedTeardowns[method] {
+				rejectedTeardowns[method] = true
+				write(Object{"jsonrpc": encoded("2.0"), "id": message["id"], "error": json.RawMessage(`{"code":-32603,"message":"teardown rejected"}`)})
+				continue
+			}
 			reply(Object{})
 		case "session/prompt":
 			if role == "parent" {
@@ -86,6 +102,11 @@ func TestDelegationAdapterFixture(t *testing.T) {
 					wantID, _ := json.Marshal(`["child","child","child"]`)
 					if !strings.Contains(prompt[0].Text, string(wantID)) || !strings.Contains(prompt[0].Text, "petal_read") {
 						t.Fatal("missing child completion context")
+					}
+					if version == 1 && !rejectedWake {
+						rejectedWake = true
+						write(Object{"jsonrpc": encoded("2.0"), "id": message["id"], "error": json.RawMessage(`{"code":-32603,"message":"wake rejected"}`)})
+						continue
 					}
 					write(Object{"jsonrpc": encoded("2.0"), "method": encoded("session/update"), "params": jsonValue(Object{"sessionId": encoded(native), "update": json.RawMessage(`{"sessionUpdate":"agent_message_chunk","messageId":"response","content":{"type":"text","text":"parent resumed"}}`)})})
 				}
@@ -103,6 +124,15 @@ func TestDelegationAdapterFixture(t *testing.T) {
 			var prompt []Object
 			if err := json.Unmarshal(params["prompt"], &prompt); err != nil || len(prompt) != 1 {
 				t.Fatalf("invalid prompt: %s", params["prompt"])
+			}
+			if failure == "rate_limit" {
+				if version == 2 {
+					reply(json.RawMessage(`{"messageId":"accepted"}`))
+					update(`{"sessionUpdate":"state_update","state":"idle","stopReason":"rate_limit"}`)
+				} else {
+					reply(json.RawMessage(`{"stopReason":"rate_limit"}`))
+				}
+				continue
 			}
 			if version == 2 {
 				update(`{"sessionUpdate":"state_update","state":"running"}`)
@@ -222,7 +252,18 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			}
 			args := fmt.Sprintf(`{"child_id":%q}`, handle.ChildID)
 			call(secondMCP, "petal_read", args, true)
-			editor.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":%q,"prompt":[{"type":"text","text":"finish independent work"}]}}`, parent))
+			promptParent := func(id int) {
+				t.Helper()
+				editor.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"session/prompt","params":{"sessionId":%q,"prompt":[{"type":"text","text":"finish independent work"}]}}`, id, parent))
+			}
+			promptParent(3)
+			if version == 1 {
+				frame := editor.read()
+				if string(frame["id"]) != "3" || stringField(frame.member("result"), "stopReason") != "end_turn" {
+					t.Fatalf("rejected wake replaced successful parent reply: %s", jsonValue(frame))
+				}
+				promptParent(4)
+			}
 			// Neither parent calls read/wait before the continuation. Observe its
 			// response through the same editor connection as the original turn.
 			for {
@@ -240,6 +281,35 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			}
 			if page := call(firstMCP, "petal_read", args, false); !strings.Contains(page, "receipt: echo") {
 				t.Fatalf("child output missing: %s", page)
+			}
+			for _, teardown := range []struct {
+				method, parent string
+				mcp            proxyWireTest
+			}{
+				{"session/close", parent, firstMCP},
+				{"session/delete", stringField(second, "sessionId"), secondMCP},
+			} {
+				waitReply := func(id string) Object {
+					t.Helper()
+					for {
+						frame := editor.read()
+						if string(frame["id"]) == id {
+							return frame
+						}
+					}
+				}
+				editor.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":5,"method":%q,"params":{"sessionId":%q}}`, teardown.method, teardown.parent))
+				if frame := waitReply("5"); string(frame.member("error")["code"]) != "-32603" {
+					t.Fatalf("%s did not relay backend rejection: %s", teardown.method, jsonValue(frame))
+				}
+				call(teardown.mcp, "petal_capabilities", `{}`, false)
+				editor.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":6,"method":%q,"params":{"sessionId":%q}}`, teardown.method, teardown.parent))
+				if frame := waitReply("6"); frame["result"] == nil {
+					t.Fatalf("%s failed on retry: %s", teardown.method, jsonValue(frame))
+				}
+				if teardown.mcp.scan.Scan() || teardown.mcp.scan.Err() != nil {
+					t.Fatalf("%s did not close the MCP connection: %q, %v", teardown.method, teardown.mcp.scan.Text(), teardown.mcp.scan.Err())
+				}
 			}
 			if version == 1 {
 				config.Accounts = maps.Clone(config.Accounts)

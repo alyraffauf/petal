@@ -339,7 +339,10 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			e.wakes.interrupt(false)
 		}
 	}
-	p.handleDelegationLifecycle(method, canonical)
+	if method == "session/cancel" {
+		p.cancelDelegation(canonical)
+	}
+	closingEndpoint := p.delegationEndpointToClose(method, canonical)
 	result, err := p.relayV2Backend(ctx, b, method, params, notification)
 	if err != nil {
 		var rpc *acp.RequestError
@@ -362,6 +365,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 		}
 		return nil, err
 	}
+	p.finishDelegationClose(canonical, closingEndpoint)
 	if method == "session/fork" {
 		var fork Object
 		if json.Unmarshal(result, &fork) != nil || !hasString(fork, "sessionId") {

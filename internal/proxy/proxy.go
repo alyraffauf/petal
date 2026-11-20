@@ -275,27 +275,28 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, err
 		}
 	}
-	if public != "" {
-		p.handleDelegationLifecycle(method, delegationParent)
-	}
 	if strings.HasPrefix(method, notificationPrefix) {
+		if method == notificationPrefix+"session/cancel" {
+			p.cancelDelegation(delegationParent)
+		}
 		return relay(ctx, b.conn, method, params)
 	}
+	closingEndpoint := p.delegationEndpointToClose(method, delegationParent)
 	var promptEndpoint *delegationEndpoint
 	var wakeCtx context.Context
 	if p.delegation != nil && method == "session/prompt" {
 		promptEndpoint = p.endpoint(delegationParent)
 		if promptEndpoint != nil {
 			var cancel context.CancelFunc
-			wakeCtx, cancel = promptEndpoint.waitContext()
+			wakeCtx, cancel = promptEndpoint.waitContext(ctx)
 			defer cancel()
-			stop := context.AfterFunc(ctx, cancel)
+			stop := context.AfterFunc(promptEndpoint.ctx, cancel)
 			defer stop()
 		}
 	}
 	result, err := forward[json.RawMessage](b.conn, ctx, method, params)
 	if promptEndpoint != nil && err == nil {
-		result, err = promptEndpoint.continueV1(wakeCtx, b, native, result)
+		result = promptEndpoint.continueV1(wakeCtx, b, native, result)
 	}
 	if err != nil {
 		var re *acp.RequestError
@@ -307,6 +308,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		}
 		return nil, err
 	}
+	p.finishDelegationClose(delegationParent, closingEndpoint)
 	if method != "session/new" && method != "session/load" && method != "session/resume" && method != "session/fork" {
 		return result, nil
 	}

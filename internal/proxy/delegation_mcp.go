@@ -202,29 +202,41 @@ func (p *proxy) bindDelegation(endpoint *delegationEndpoint, account, parent str
 
 func (p *proxy) closeDelegationLocked(parent string) {
 	if endpoint := p.delegationEndpoints[parent]; endpoint != nil {
+		endpoint.wakes.interrupt(true)
 		endpoint.cancel()
 		delete(p.delegationEndpoints, parent)
 	}
 }
 
-func (p *proxy) handleDelegationLifecycle(method, parent string) {
-	if parent == "" || p.delegationRuntime == nil {
-		return
-	}
+func (p *proxy) delegationEndpointToClose(method, parent string) *delegationEndpoint {
 	if method == "session/close" || method == "session/delete" {
-		p.delegationMu.Lock()
-		p.closeDelegationLocked(parent)
-		p.delegationMu.Unlock()
-	} else if method != "session/cancel" && method != notificationPrefix+"session/cancel" {
+		return p.endpoint(parent)
+	}
+	return nil
+}
+
+func (p *proxy) finishDelegationClose(parent string, endpoint *delegationEndpoint) {
+	if endpoint == nil {
 		return
 	}
 	p.delegationMu.Lock()
-	cwd := p.delegationCwds[parent]
-	p.delegationMu.Unlock()
-	if endpoint := p.endpoint(parent); endpoint != nil {
+	defer p.delegationMu.Unlock()
+	if p.delegationEndpoints[parent] == endpoint {
+		p.closeDelegationLocked(parent)
+		p.delegationRuntime.CancelParent(parent, endpoint.cwd)
+	}
+}
+
+func (p *proxy) cancelDelegation(parent string) {
+	if parent == "" || p.delegationRuntime == nil {
+		return
+	}
+	p.delegationMu.Lock()
+	defer p.delegationMu.Unlock()
+	if endpoint := p.delegationEndpoints[parent]; endpoint != nil {
 		endpoint.wakes.interrupt(true)
 	}
-	p.delegationRuntime.CancelParent(parent, cwd)
+	p.delegationRuntime.CancelParent(parent, p.delegationCwds[parent])
 }
 
 type mcpRequest struct {

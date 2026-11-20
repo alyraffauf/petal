@@ -74,19 +74,19 @@ func (q *wakeQueue) interrupt(clear bool) {
 	}
 }
 
-func (e *delegationEndpoint) waitContext() (context.Context, context.CancelFunc) {
+func (e *delegationEndpoint) waitContext(parent context.Context) (context.Context, context.CancelFunc) {
 	q := &e.wakes
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.stop != nil {
 		q.stop()
 	}
-	ctx, cancel := context.WithCancel(e.ctx)
+	ctx, cancel := context.WithCancel(parent)
 	q.stop = cancel
 	return ctx, cancel
 }
 
-func (q *wakeQueue) next(ctx context.Context, consume bool) []string {
+func (q *wakeQueue) next(ctx context.Context) []string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for ctx.Err() == nil && len(q.children) > 0 {
@@ -94,9 +94,6 @@ func (q *wakeQueue) next(ctx context.Context, consume bool) []string {
 		for id, done := range q.children {
 			if done {
 				ready = append(ready, id)
-				if consume {
-					delete(q.children, id)
-				}
 			}
 		}
 		if len(ready) > 0 {
@@ -129,21 +126,30 @@ func (p *proxy) endpoint(parent string) *delegationEndpoint {
 
 // V1 keeps the editor's prompt open across continuation turns so that its
 // reply and every session/update still belong to the original user turn.
-func (e *delegationEndpoint) continueV1(wait context.Context, b *backend, native string, result json.RawMessage) (json.RawMessage, error) {
+func (e *delegationEndpoint) continueV1(wait context.Context, b *backend, native string, result json.RawMessage) json.RawMessage {
 	for {
 		var end struct{ StopReason string }
 		if json.Unmarshal(result, &end) != nil || end.StopReason != "end_turn" {
-			return result, nil
+			return result
 		}
-		ids := e.wakes.next(wait, true)
+		ids := e.wakes.next(wait)
 		if len(ids) == 0 {
-			return result, nil
+			return result
 		}
-		var err error
-		result, err = acp.SendRequest[json.RawMessage](b.conn, wait, "session/prompt", wakePrompt(native, ids))
+		submission := &wakeSubmission{queue: &e.wakes, ctx: wait, endpoint: e.ctx, native: native, ids: ids}
+		reply, err := b.sendWake(submission)
 		if err != nil {
-			return nil, err
+			return result
 		}
+		// A rejected or interrupted wake leaves unread results queued for the next turn.
+		e.wakes.mu.Lock()
+		if wait.Err() == nil {
+			for _, id := range submission.ids {
+				delete(e.wakes.children, id)
+			}
+		}
+		e.wakes.mu.Unlock()
+		result = reply
 	}
 }
 
@@ -152,26 +158,35 @@ func (e *delegationEndpoint) continueV1(wait context.Context, b *backend, native
 func (e *delegationEndpoint) idleV2(wait context.Context, cancel context.CancelFunc, b *backend, native string) {
 	go func() {
 		defer cancel()
-		ids := e.wakes.next(wait, false)
+		ids := e.wakes.next(wait)
 		if len(ids) == 0 {
 			return
 		}
-		token := strconv.FormatUint(b.wire.nextRequest.Add(1), 10)
-		b.wire.wakes.Store(token, &wakeSubmission{&e.wakes, wait, native, ids})
-		defer b.wire.wakes.Delete(token)
-		if _, err := acp.SendRequest[json.RawMessage](b.conn, wait, wakePrefix+token, nil); err != nil && wait.Err() == nil {
-			slog.Warn("Could not wake delegation parent", "error", err)
-		}
+		// The adapter may report idle before replying to the insertion.
+		_, _ = b.sendWake(&wakeSubmission{queue: &e.wakes, ctx: wait, endpoint: e.ctx, native: native, ids: ids, consumeOnWrite: true})
 	}()
+}
+
+func (b *backend) sendWake(submission *wakeSubmission) (json.RawMessage, error) {
+	token := strconv.FormatUint(b.wire.nextRequest.Add(1), 10)
+	b.wire.wakes.Store(token, submission)
+	defer b.wire.wakes.Delete(token)
+	result, err := acp.SendRequest[json.RawMessage](b.conn, submission.ctx, wakePrefix+token, nil)
+	if err != nil && submission.ctx.Err() == nil && submission.endpoint.Err() == nil {
+		slog.Warn("Could not wake delegation parent", "error", err)
+	}
+	return result, err
 }
 
 // The SDK writes before checking the request context. Check ownership at the
 // wire, holding the queue lock only through submission, never through the reply.
 type wakeSubmission struct {
-	queue  *wakeQueue
-	ctx    context.Context
-	native string
-	ids    []string
+	queue          *wakeQueue
+	ctx            context.Context
+	endpoint       context.Context
+	native         string
+	ids            []string
+	consumeOnWrite bool
 }
 
 func (s *wakeSubmission) write(out io.Writer, frame Object, originalLen int) (int, error) {
@@ -179,6 +194,9 @@ func (s *wakeSubmission) write(out io.Writer, frame Object, originalLen int) (in
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := s.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := s.endpoint.Err(); err != nil {
 		return 0, err
 	}
 	var ready []string
@@ -196,12 +214,20 @@ func (s *wakeSubmission) write(out io.Writer, frame Object, originalLen int) (in
 	if err != nil {
 		return 0, err
 	}
-	if _, err = out.Write(append(data, '\n')); err != nil {
+	data = append(data, '\n')
+	n, err := out.Write(data)
+	if err != nil {
 		return 0, err
 	}
-	for _, id := range ready {
-		delete(q.children, id)
+	if n != len(data) {
+		return 0, io.ErrShortWrite
 	}
-	q.stop = nil // The following running update belongs to this accepted prompt.
+	s.ids = ready
+	if s.consumeOnWrite {
+		for _, id := range ready {
+			delete(q.children, id)
+		}
+		q.stop = nil // The following running update belongs to this accepted prompt.
+	}
 	return originalLen, nil
 }

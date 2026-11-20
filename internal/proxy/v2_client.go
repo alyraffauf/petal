@@ -95,7 +95,7 @@ func (p *proxy) relayV2ClientCall(ctx context.Context, name, method string, raw 
 					case "idle":
 						if stringField(update, "stopReason") == "end_turn" {
 							wakeEndpoint = e
-							wakeCtx, cancelWake = e.waitContext()
+							wakeCtx, cancelWake = e.waitContext(e.ctx)
 						}
 					}
 				}
