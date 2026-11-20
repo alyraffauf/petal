@@ -24,40 +24,66 @@ func executable(names ...string) string {
 	return ""
 }
 
+func providerCLI(provider string, env map[string]string) string {
+	var variable string
+	switch provider {
+	case "codex":
+		variable = "CODEX_PATH"
+	case "claude":
+		variable = "CLAUDE_CODE_EXECUTABLE"
+	}
+	override, configured := env[variable]
+	if !configured {
+		override = os.Getenv(variable)
+	}
+	return executable(override, provider)
+}
+
 func (c *Config) discover() {
 	if c.Accounts == nil {
 		c.Accounts = map[string]Account{}
 	}
 	for _, provider := range []string{"claude", "codex"} {
-		cli := executable(provider)
-		var adapter string
+		var adapter, bundled string
 		switch provider {
 		case "codex":
 			adapter = executable("codex-acp")
-			if adapter == "" && cli != "" {
-				adapter = executable(bundledCodex)
-			}
+			bundled = bundledCodex
 		case "claude":
 			adapter = executable("claude-agent-acp", "claude-code-acp")
-			if adapter == "" && cli != "" {
-				adapter = executable(bundledClaude)
-			}
+			bundled = bundledClaude
 		}
 		if adapter == "" {
-			if cli != "" {
-				c.Hints = append(c.Hints, provider+" installed; ACP bridge missing")
+			bundled = executable(bundled)
+		}
+		missingBridge := false
+		discover := func(a Account) Account {
+			cli := providerCLI(provider, a.Env)
+			bridge := adapter
+			if bridge == "" && cli != "" {
+				bridge = bundled
+				missingBridge = missingBridge || bridge == ""
 			}
-			continue
+			if bridge == "" {
+				return a
+			}
+			return discoverAccount(provider, cli, bridge, a)
 		}
 		named := false
 		for name, a := range c.Accounts {
 			if a.Provider == provider {
-				c.Accounts[name] = discoverAccount(provider, cli, adapter, a)
+				c.Accounts[name] = discover(a)
 				named = true
 			}
 		}
 		if _, exists := c.Accounts[provider]; !named && !exists {
-			c.Accounts[provider] = discoverAccount(provider, cli, adapter, Account{Provider: provider})
+			a := discover(Account{Provider: provider})
+			if len(a.Models) > 0 {
+				c.Accounts[provider] = a
+			}
+		}
+		if missingBridge {
+			c.Hints = append(c.Hints, provider+" installed; ACP bridge missing")
 		}
 	}
 }

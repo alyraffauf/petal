@@ -78,6 +78,40 @@ func TestProfileDiscoveryPreservesExplicitCommands(t *testing.T) {
 	}
 }
 
+func TestBundledDiscoveryUsesConfiguredProviderExecutables(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("CODEX_PATH", "")
+	t.Setenv("CLAUDE_CODE_EXECUTABLE", "")
+	dir := t.TempDir()
+	executableFile := func(name string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	oldCodex, oldClaude := bundledCodex, bundledClaude
+	t.Cleanup(func() { bundledCodex, bundledClaude = oldCodex, oldClaude })
+	bundledCodex, bundledClaude = executableFile("codex-acp"), executableFile("claude-agent-acp")
+	codex, claude := executableFile("codex"), executableFile("claude")
+	c := Config{Accounts: map[string]Account{
+		"work":       {Provider: "codex", Env: map[string]string{"CODEX_PATH": codex, "CODEX_HOME": dir}},
+		"personal":   {Provider: "claude", Env: map[string]string{"CLAUDE_CODE_EXECUTABLE": claude}},
+		"unresolved": {Provider: "codex"},
+	}}
+	c.discover()
+	if got := c.Accounts["work"].Models["codex/default"]; !slices.Equal(got, []string{bundledCodex}) {
+		t.Fatalf("Codex route points to %v", got)
+	}
+	if got := c.Accounts["personal"].Models["claude/default"]; !slices.Equal(got, []string{bundledClaude}) {
+		t.Fatalf("Claude route points to %v", got)
+	}
+	if got := c.Accounts["unresolved"].Models; len(got) != 0 {
+		t.Fatalf("another account unexpectedly inherited a private CLI: %v", got)
+	}
+}
+
 func TestRateLimitMovesOnlyFutureAutoRoutes(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	a := Account{Models: map[string][]string{"model": {"agent"}}}

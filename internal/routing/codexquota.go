@@ -9,20 +9,12 @@ import (
 )
 
 func (a Account) codexQuota(ctx context.Context) (json.RawMessage, error) {
-	cmd := a.Command(ctx, []string{executable(a.Env["CODEX_PATH"], "codex"), "app-server", "--listen", "stdio://"})
-	in, err := cmd.StdinPipe()
+	cmd := a.Command(ctx, []string{providerCLI("codex", a.Env), "app-server", "--listen", "stdio://"})
+	in, out, cleanup, err := startQuotaProcess(ctx, cmd)
 	if err != nil {
 		return nil, err
 	}
-	defer in.Close()
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err = cmd.Start(); err != nil {
-		return nil, err
-	}
-	defer func() { in.Close(); cmd.Process.Kill(); cmd.Wait() }()
+	defer cleanup()
 	scan := bufio.NewScanner(out)
 	scan.Buffer(make([]byte, 4096), 4<<20)
 	read := func(id int) (json.RawMessage, error) {

@@ -228,12 +228,24 @@ func (c Config) Scores(ctx context.Context) []Quota {
 	}
 	result := make([]Quota, 0, count)
 	for range count {
-		result = append(result, <-pending)
+		select {
+		case q := <-pending:
+			result = append(result, q)
+		case <-ctx.Done():
+			for {
+				select {
+				case q := <-pending:
+					result = append(result, q)
+				default:
+					return result
+				}
+			}
+		}
 	}
 	return result
 }
 func (a Account) inspectQuota(ctx context.Context, model string) Quota {
-	if a.Provider == "codex" && len(a.Usage) == 0 && executable(a.Env["CODEX_PATH"], "codex") != "" {
+	if a.Provider == "codex" && len(a.Usage) == 0 && providerCLI("codex", a.Env) != "" {
 		data, err := a.codexQuota(ctx)
 		if err != nil {
 			return Quota{Err: err}
@@ -251,7 +263,7 @@ func (a Account) inspectQuota(ctx context.Context, model string) Quota {
 	if len(a.Usage) != 0 {
 		q.Remaining, q.Err = a.probeRemaining(ctx)
 	} else if a.Provider == "claude" {
-		if cli := executable(a.Env["CLAUDE_CODE_EXECUTABLE"], "claude"); cli != "" {
+		if cli := providerCLI("claude", a.Env); cli != "" {
 			q.Remaining, q.Err = a.claudeQuota(ctx, cli, model)
 		}
 	}
@@ -270,12 +282,12 @@ func codexTier(data json.RawMessage) string {
 func (a Account) detectTier(ctx context.Context) string {
 	switch a.Provider {
 	case "codex":
-		if executable(a.Env["CODEX_PATH"], "codex") != "" {
+		if providerCLI("codex", a.Env) != "" {
 			data, _ := a.codexQuota(ctx)
 			return codexTier(data)
 		}
 	case "claude":
-		if cli := executable(a.Env["CLAUDE_CODE_EXECUTABLE"], "claude"); cli != "" {
+		if cli := providerCLI("claude", a.Env); cli != "" {
 			cmd := a.Command(ctx, []string{cli, "auth", "status", "--json"})
 			cmd.WaitDelay = 200 * time.Millisecond
 			data, err := cmd.Output()
