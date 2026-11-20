@@ -495,6 +495,12 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	}
 	h.cwd = cwd
 	initialRecord := sessions.Record{ID: h.id, Model: c.Model, Account: parts[0], Opened: time.Now()}
+	if !resume {
+		initialRecord.Placement, err = placementFrom(r)
+		if err != nil {
+			return "", err
+		}
+	}
 	if err := h.prepareSessionRecord(ctx, initialRecord, resume); err != nil {
 		return "", err
 	}
@@ -502,6 +508,16 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 		return c.PinnedAccount, nil
 	}
 	return parts[0], nil
+}
+
+func placementFrom(r proxy.Object) (*routing.Placement, error) {
+	var placement *routing.Placement
+	if raw := r["petalPlacement"]; raw != nil {
+		if err := json.Unmarshal(raw, &placement); err != nil {
+			return nil, fmt.Errorf("read account placement: %w", err)
+		}
+	}
+	return placement, nil
 }
 
 func (h *harness) prepareSessionRecord(ctx context.Context, initial sessions.Record, resume bool) error {

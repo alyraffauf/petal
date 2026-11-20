@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"petal/internal/routing"
+	"petal/internal/sessions"
 )
 
 func TestDelegationAdapterFixture(t *testing.T) {
@@ -173,7 +174,15 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			editor.read()
 			first := request(editor, "session/new", "")
 			parent := stringField(first, "sessionId")
+			record, err := sessions.Lookup(cwd, parent)
+			if err != nil || record.Placement == nil || record.Placement.Reason != routing.OnlyAccount {
+				t.Fatalf("saved parent placement: %+v, %v", record.Placement, err)
+			}
 			second := request(editor, "session/fork", parent)
+			fork, err := sessions.Lookup(cwd, stringField(second, "sessionId"))
+			if err != nil || fork.Placement == nil || fork.Placement.Reason != routing.ForkAccount {
+				t.Fatalf("saved fork placement: %+v, %v", fork.Placement, err)
+			}
 			open := func(result Object) proxyWireTest {
 				t.Helper()
 				var servers []Object

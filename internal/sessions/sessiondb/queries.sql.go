@@ -44,7 +44,7 @@ func (q *Queries) DeleteSession(ctx context.Context, id string) error {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, model, account, parent, title, opened, updated, selections FROM sessions WHERE id = ?
+SELECT id, model, account, parent, title, opened, updated, selections, placement FROM sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (Session, error) {
@@ -59,12 +59,13 @@ func (q *Queries) GetSession(ctx context.Context, id string) (Session, error) {
 		&i.Opened,
 		&i.Updated,
 		&i.Selections,
+		&i.Placement,
 	)
 	return i, err
 }
 
 const latestSession = `-- name: LatestSession :one
-SELECT id, model, account, parent, title, opened, updated, selections FROM sessions WHERE model = ?
+SELECT id, model, account, parent, title, opened, updated, selections, placement FROM sessions WHERE model = ?
 ORDER BY COALESCE(NULLIF(updated, ''), opened) DESC, id LIMIT 1
 `
 
@@ -80,12 +81,13 @@ func (q *Queries) LatestSession(ctx context.Context, model string) (Session, err
 		&i.Opened,
 		&i.Updated,
 		&i.Selections,
+		&i.Placement,
 	)
 	return i, err
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, model, account, parent, title, opened, updated, selections FROM sessions WHERE model IN (/*SLICE:models*/?)
+SELECT id, model, account, parent, title, opened, updated, selections, placement FROM sessions WHERE model IN (/*SLICE:models*/?)
 ORDER BY COALESCE(NULLIF(updated, ''), opened) DESC, id
 `
 
@@ -117,6 +119,7 @@ func (q *Queries) ListSessions(ctx context.Context, models []string) ([]Session,
 			&i.Opened,
 			&i.Updated,
 			&i.Selections,
+			&i.Placement,
 		); err != nil {
 			return nil, err
 		}
@@ -132,12 +135,12 @@ func (q *Queries) ListSessions(ctx context.Context, models []string) ([]Session,
 }
 
 const putSession = `-- name: PutSession :exec
-INSERT INTO sessions (id, model, account, parent, title, opened, updated, selections)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO sessions (id, model, account, parent, title, opened, updated, selections, placement)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     model = excluded.model, account = excluded.account, parent = excluded.parent,
     title = excluded.title, opened = excluded.opened, updated = excluded.updated,
-    selections = excluded.selections
+    selections = excluded.selections, placement = excluded.placement
 `
 
 type PutSessionParams struct {
@@ -149,6 +152,7 @@ type PutSessionParams struct {
 	Opened     string
 	Updated    string
 	Selections string
+	Placement  string
 }
 
 func (q *Queries) PutSession(ctx context.Context, arg PutSessionParams) error {
@@ -161,6 +165,7 @@ func (q *Queries) PutSession(ctx context.Context, arg PutSessionParams) error {
 		arg.Opened,
 		arg.Updated,
 		arg.Selections,
+		arg.Placement,
 	)
 	return err
 }

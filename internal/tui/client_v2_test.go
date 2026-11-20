@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -364,5 +365,67 @@ func TestV2LateCancelResultKeepsDisconnectedStatus(t *testing.T) {
 	m.Update(cancelV2Result{})
 	if m.Busy || m.Status != "disconnected" {
 		t.Fatalf("late cancellation result changed disconnected state: %t, %s", m.Busy, m.Status)
+	}
+}
+
+func TestNewThreadPlacementSurvivesQuotaChange(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"legacy", "new"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			cwd := t.TempDir()
+			quotaPath := filepath.Join(cwd, "quota")
+			if err := os.WriteFile(quotaPath, []byte("30"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			weightedCapacity := 5.0
+			models := map[string][]string{"model": {exe, "-test.run=^TestV2ClientAdapter$"}}
+			cfg := routing.Config{
+				ACPv2: true, Model: "model",
+				Accounts: map[string]routing.Account{
+					"personal": {Models: models, Usage: []string{"printf", "70"}, Env: map[string]string{"PETAL_V2_CLIENT_FIXTURE": mode}},
+					"work":     {Models: models, Capacity: &weightedCapacity, Usage: []string{"cat", quotaPath}, Env: map[string]string{"PETAL_V2_CLIENT_FIXTURE": mode}},
+				},
+			}
+			if mode == "new" {
+				cfg.MCPServers = []routing.MCPServer{
+					{Name: "stdio", Command: exe},
+					{Name: "http", URL: "https://example.test/mcp"},
+				}
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			h := startHarness(ctx, cfg)
+			defer h.close()
+			account, err := h.open(ctx, cfg, cwd, false)
+			if err != nil || account != "work" || h.v2.Load() != (mode == "new") {
+				t.Fatalf("open selected %q (v2=%t): %v", account, h.v2.Load(), err)
+			}
+			if err := os.WriteFile(quotaPath, []byte("0"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := sessions.Update(cwd, h.id, func(record *sessions.Record) bool {
+				record.Title = "Updated title"
+				return true
+			}); err != nil {
+				t.Fatal(err)
+			}
+			records, err := sessions.List(cwd, []string{cfg.Model})
+			if err != nil || len(records) != 1 {
+				t.Fatalf("sessions: %+v, %v", records, err)
+			}
+			got := records[0].Placement
+			if got == nil || got.Account != account || got.Reason != routing.HighestQuota || got.Remaining != 30 || got.Weighted != "1.5" {
+				t.Fatalf("historic placement: %+v", got)
+			}
+			p := &picker{saved: records}
+			details := p.centerDetails(controlNode{kind: "Session"})
+			if !slices.ContainsFunc(details, func(row entry) bool { return strings.Contains(row.Text, "30% remaining × 5 = 1.5") }) {
+				t.Fatalf("thread details: %+v", details)
+			}
+		})
 	}
 }

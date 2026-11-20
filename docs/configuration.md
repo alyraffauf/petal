@@ -35,7 +35,7 @@ Set the account's `capacity` to its size relative to your other subscriptions. C
 
 ### How quota windows affect routing
 
-For a new session, Petal checks each account that offers the model and uses the lowest remaining percentage among the applicable windows.
+When choosing among multiple connected accounts for a new session, Petal uses the lowest remaining percentage among each account's applicable windows.
 
 | Provider | Windows Petal checks |
 | --- | --- |
@@ -44,9 +44,13 @@ For a new session, Petal checks each account that offers the model and uses the 
 
 Suppose a Claude account has 80% left for five hours, 60% for the week, and 5% for Fable. Petal uses **5% for Fable** and **60% for Sonnet**, unless Sonnet has a tighter weekly limit of its own. Missing windows and reset times do not affect the score.
 
-Petal ranks accounts by **capacity × remaining fraction**. A 5× subscription at 30% scores 1.5 and beats a 1× subscription at 90%, which scores 0.9. Petal breaks ties randomly. Resuming a conversation keeps its original account.
+Petal ranks accounts by **capacity × remaining fraction**. A 5× subscription at 30% scores 1.5 and beats a 1× subscription at 90%, which scores 0.9. Petal breaks ties randomly for new top-level sessions. Resuming a conversation preserves its saved placement.
 
 Both probes run in the account's environment. To supply your own percentage, set `usage` to a command array that prints one number from 0 to 100. Auto prefers an account with measured quota over one with unknown quota. If every matching account is exhausted, on cooldown, or has a failed probe, Petal still opens the thread on the first matching account alphabetically. The provider enforces quota when you send a prompt.
+
+Open a thread's details in the control center to see the account decision saved when Petal opened it. Details show why Petal selected the account and whether it was eligible. When the probe supplies a percentage, details include the weighted score and the limiting window if known. A fork inherits the connected account. Older threads and threads discovered from an adapter may have no saved decision.
+
+Delegated threads prefer measured quota. On a tie, Petal prefers the parent account, then sorts by account name. If setup fails, Petal tries the next eligible account. Exhausted accounts and accounts on cooldown are excluded from automatic delegation.
 
 A prompt rate-limit error puts the whole account on a five-minute cooldown for automatic selection. A Fable limit can therefore affect where new Sonnet sessions start. Use `petal --account work` to pin an account and bypass probing.
 

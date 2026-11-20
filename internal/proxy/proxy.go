@@ -201,20 +201,13 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		return Object{}, nil
 	}
 	var name, native, public, delegationParent string
+	var placement *routing.Placement
 	if method == "session/new" {
-		if len(p.accounts) == 0 {
-			return nil, fmt.Errorf("no subscription offers %q", p.Model)
+		chosen, err := p.choosePlacement(ctx)
+		if err != nil {
+			return nil, err
 		}
-		// Opening a thread consumes no model quota. Prefer the best measured
-		// account, but let the provider enforce its limit when the user sends.
-		name = p.accounts[0]
-		if len(p.accounts) > 1 {
-			if chosen, err := p.choose(ctx); err == nil {
-				name = chosen
-			} else if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-		}
+		name, placement = chosen.Account, &chosen
 	} else if _, exists := params["sessionId"]; exists {
 		id, err := SessionID(params)
 		if err != nil {
@@ -341,24 +334,49 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 			session["configOptions"] = opts["configOptions"]
 		}
 	}
+	if method == "session/fork" {
+		placement = forkPlacement(name)
+	}
 	if p.embedded && b.hello.Meta["steering"] != nil {
 		session["petalSteering"] = b.hello.Meta["steering"]
 	}
 	if endpoint != nil {
-		if err := p.bindDelegation(endpoint, name, delegationParent); err != nil {
+		if err := p.bindDelegation(endpoint, name, delegationParent, placement); err != nil {
 			return nil, err
 		}
 	}
+	p.attachPlacement(session, placement)
 	return session, nil
 }
 
-func (p *proxy) choose(ctx context.Context) (string, error) {
+func forkPlacement(account string) *routing.Placement {
+	return &routing.Placement{Account: account, Reason: routing.ForkAccount, Eligibility: "Quota bypassed"}
+}
+
+func (p *proxy) attachPlacement(session Object, placement *routing.Placement) {
+	if p.embedded && placement != nil {
+		session["petalPlacement"], _ = json.Marshal(placement)
+	}
+}
+
+func (p *proxy) choosePlacement(ctx context.Context) (routing.Placement, error) {
+	if len(p.accounts) == 0 {
+		return routing.Placement{}, fmt.Errorf("no subscription offers %q", p.Model)
+	}
+	if p.PinnedAccount != "" {
+		return p.Config.ChoosePlacement(ctx, "")
+	}
+	if len(p.accounts) == 1 {
+		return routing.Placement{Account: p.accounts[0], Reason: routing.OnlyAccount, Eligibility: "Eligible without a quota check"}, nil
+	}
+	// Opening a thread consumes no model quota. The provider enforces its
+	// limits when the user sends a prompt.
 	config := p.Config
 	config.Accounts = make(map[string]routing.Account, len(p.accounts))
 	for _, name := range p.accounts {
 		config.Accounts[name] = p.Accounts[name]
 	}
-	return config.Choose(ctx)
+	return config.ChoosePlacement(ctx, p.accounts[0])
 }
 
 func (p *proxy) publicID(name, native string) string {

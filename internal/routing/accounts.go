@@ -142,15 +142,26 @@ func Load(path, model, accountName string) (Config, error) {
 }
 
 func (c Config) Choose(ctx context.Context) (string, error) {
-	if c.PinnedAccount != "" {
-		return c.PinnedAccount, nil
+	p, err := c.ChoosePlacement(ctx, "")
+	if err != nil {
+		return "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	return p.Account, nil
+}
+
+// ChoosePlacement optionally falls back to the supplied connected account.
+func (c Config) ChoosePlacement(ctx context.Context, fallback string) (Placement, error) {
+	if c.PinnedAccount != "" {
+		return Placement{Account: c.PinnedAccount, Reason: Pinned, Eligibility: "Quota bypassed"}, nil
+	}
 	scores := c.Scores(ctx)
 	best := weightedQuota(-1, 1)
-	var choices []string
+	var choices []Quota
+	var fallbackQuota Quota
 	for _, s := range scores {
+		if s.Name == fallback {
+			fallbackQuota = s
+		}
 		if s.Err != nil || s.Remaining == 0 {
 			continue
 		}
@@ -161,18 +172,44 @@ func (c Config) Choose(ctx context.Context) (string, error) {
 			choices = nil
 		}
 		if order >= 0 {
-			choices = append(choices, s.Name)
+			choices = append(choices, s)
 		}
 	}
 	if len(choices) == 0 {
-		return "", fmt.Errorf("no matching subscription has available quota; check the account probes or choose a subscription manually")
+		if fallback != "" {
+			if err := ctx.Err(); err != nil {
+				return Placement{}, err
+			}
+			return fallbackQuota.placement(fallback, OpeningFallback), nil
+		}
+		return Placement{}, fmt.Errorf("no matching subscription has available quota; check the account probes or choose a subscription manually")
 	}
-	return choices[rand.IntN(len(choices))], nil
+	chosen := choices[rand.IntN(len(choices))]
+	reason := HighestQuota
+	switch {
+	case len(choices) > 1:
+		reason = RandomTie
+	case chosen.Remaining < 0:
+		reason = UnknownQuota
+	}
+	return chosen.placement(chosen.Name, reason), nil
 }
 
 // Rank returns eligible accounts in descending quota order, with unknown quota
 // after measured quota. Affinity breaks ties in favor of the parent account.
 func (c Config) Rank(ctx context.Context, affinity string) ([]string, error) {
+	placements, err := c.RankPlacements(ctx, affinity)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(placements))
+	for _, p := range placements {
+		names = append(names, p.Account)
+	}
+	return names, nil
+}
+
+func (c Config) RankPlacements(ctx context.Context, affinity string) ([]Placement, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -180,7 +217,7 @@ func (c Config) Rank(ctx context.Context, affinity string) ([]string, error) {
 		if len(c.Accounts[c.PinnedAccount].Models[c.Model]) == 0 {
 			return nil, fmt.Errorf("pinned account %q does not offer model %q", c.PinnedAccount, c.Model)
 		}
-		return []string{c.PinnedAccount}, nil
+		return []Placement{{Account: c.PinnedAccount, Reason: Pinned, Eligibility: "Quota bypassed"}}, nil
 	}
 
 	scores := make(map[string]Quota, len(c.Accounts))
@@ -193,6 +230,7 @@ func (c Config) Rank(ctx context.Context, affinity string) ([]string, error) {
 	type candidate struct {
 		name  string
 		score *big.Float
+		quota Quota
 	}
 	var candidates []candidate
 	for name, account := range c.Accounts {
@@ -207,7 +245,7 @@ func (c Config) Rank(ctx context.Context, affinity string) ([]string, error) {
 		if measured && quota.Err == nil {
 			score = weightedQuota(quota.Remaining, quota.Capacity)
 		}
-		candidates = append(candidates, candidate{name, score})
+		candidates = append(candidates, candidate{name, score, quota})
 	}
 	slices.SortFunc(candidates, func(a, b candidate) int {
 		if order := b.score.Cmp(a.score); order != 0 {
@@ -227,11 +265,30 @@ func (c Config) Rank(ctx context.Context, affinity string) ([]string, error) {
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no eligible subscription for model %q has available or unknown quota", c.Model)
 	}
-	names := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		names = append(names, candidate.name)
+	placements := make([]Placement, 0, len(candidates))
+	for i, candidate := range candidates {
+		reason := HighestQuota
+		switch {
+		case i > 0:
+			reason = SetupFallback
+		case len(candidates) > 1 && candidate.score.Cmp(candidates[1].score) == 0:
+			reason = NameTie
+			if candidate.name == affinity {
+				reason = ParentTie
+			}
+		case candidate.score.Sign() < 0:
+			reason = UnknownQuota
+		}
+		p := candidate.quota.placement(candidate.name, reason)
+		switch p.Eligibility {
+		case probeFailed:
+			p.Eligibility = "Eligible with unknown quota (probe failed)"
+		case probeMissing:
+			p.Eligibility = "Eligible with unknown quota (no probe result)"
+		}
+		placements = append(placements, p)
 	}
-	return names, nil
+	return placements, nil
 }
 
 func weightedQuota(remaining, capacity float64) *big.Float {
@@ -246,6 +303,7 @@ func weightedQuota(remaining, capacity float64) *big.Float {
 
 type Quota struct {
 	Tier        string
+	Window      string
 	Capacity    float64
 	Name        string
 	Remaining   float64
@@ -310,8 +368,9 @@ func (a Account) inspectQuota(ctx context.Context, model string) Quota {
 		if err != nil {
 			return Quota{Err: err}
 		}
-		remaining, err := codexRemaining(data)
-		return Quota{Remaining: remaining, Err: err, Tier: codexTier(data)}
+		q := codexQuotaWindow(data)
+		q.Tier = codexTier(data)
+		return q
 	}
 	tier := make(chan string, 1)
 	go func() {
@@ -324,7 +383,7 @@ func (a Account) inspectQuota(ctx context.Context, model string) Quota {
 		q.Remaining, q.Err = a.probeRemaining(ctx)
 	} else if a.Provider == "claude" {
 		if cli := providerCLI("claude", a.Env); cli != "" {
-			q.Remaining, q.Err = a.claudeQuota(ctx, cli, model)
+			q = a.claudeQuota(ctx, cli, model)
 		}
 	}
 	q.Tier = <-tier

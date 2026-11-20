@@ -177,14 +177,14 @@ func (endpoint *delegationEndpoint) closeIfUnbound() {
 	}
 }
 
-func (p *proxy) bindDelegation(endpoint *delegationEndpoint, account, parent string) error {
+func (p *proxy) bindDelegation(endpoint *delegationEndpoint, account, parent string, placement *routing.Placement) error {
 	p.delegationMu.Lock()
 	defer p.delegationMu.Unlock()
 	if cwd := p.delegationCwds[parent]; cwd != "" && cwd != endpoint.cwd {
 		return acp.NewInvalidParams("parent session belongs to a different working directory")
 	}
 	if _, err := sessions.Create(endpoint.cwd, sessions.Record{
-		ID: parent, Model: p.Model, Account: account, Opened: time.Now(),
+		ID: parent, Model: p.Model, Account: account, Opened: time.Now(), Placement: placement,
 	}); err != nil {
 		return fmt.Errorf("record delegation parent session: %w", err)
 	}

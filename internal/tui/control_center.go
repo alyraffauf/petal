@@ -384,6 +384,23 @@ func (p *picker) centerDetails(n controlNode) []entry {
 		if stamp := r.LastActivity(); !stamp.IsZero() {
 			rows = append(rows, entry{"system", stamp.Local().Format("Jan 2 · 15:04")})
 		}
+		if placement := r.Placement; placement != nil {
+			decision := placement.Reason
+			if placement.Skipped > 0 {
+				decision = fmt.Sprintf("Fallback · Previous accounts skipped or failed (%d)", placement.Skipped)
+			}
+			rows = append(rows, entry{"system", "**Account placement** · " + decision})
+			quota := placement.Eligibility
+			if placement.Weighted != "" {
+				quota += fmt.Sprintf(" · %.6g%% remaining × %.6g = %s", placement.Remaining, placement.Capacity, placement.Weighted)
+			}
+			if placement.Window != "" {
+				quota += " · " + strings.ToLower(strings.ReplaceAll(placement.Window, "_", " ")) + " window"
+			}
+			rows = append(rows, entry{"system", quota})
+		} else {
+			rows = append(rows, entry{"system", "**Account placement** · No placement recorded"})
+		}
 		if n.kind == "Delegated" {
 			rows = append(rows, entry{"system", "Parent · " + p.graphName(n.parent)})
 			if r.DelegationStatus != "" {

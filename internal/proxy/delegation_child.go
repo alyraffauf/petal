@@ -120,10 +120,11 @@ func childPageResponse(page delegation.Page, err error) (any, error) {
 }
 
 type delegatedConnection struct {
-	host    *proxy
-	account string
-	backend *backend
-	version uint16
+	host      *proxy
+	account   string
+	backend   *backend
+	version   uint16
+	placement routing.Placement
 }
 
 func (p *proxy) openDelegatedChild(ctx context.Context, model, parentID string, receive delegation.Receive, setup func(delegation.Connection) error) (delegation.Connection, error) {
@@ -138,13 +139,14 @@ func (p *proxy) openDelegatedChild(ctx context.Context, model, parentID string, 
 	if route := decodeRouteID(parentID, 3); route != nil {
 		affinity = route[0]
 	}
-	names, err := config.Rank(ctx, affinity)
+	placements, err := config.RankPlacements(ctx, affinity)
 	if err != nil {
 		return nil, err
 	}
 	host := &proxy{Config: config, lifetime: ctx, embedded: p.embedded}
 	var failures []error
-	for _, name := range names {
+	for i, placement := range placements {
+		name := placement.Account
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -154,6 +156,8 @@ func (p *proxy) openDelegatedChild(ctx context.Context, model, parentID string, 
 		}
 		conn, err := host.startDelegatedAdapter(ctx, name, receive)
 		if err == nil {
+			placement.Skipped = i
+			conn.placement = placement
 			err = setup(conn)
 			if err == nil {
 				return conn, nil
@@ -172,7 +176,7 @@ func (p *proxy) startDelegatedAdapter(ctx context.Context, name string, receive 
 	if p.ACPv2 {
 		backend, err := p.startBackendWithReceiver(ctx, name, json.RawMessage(`{"protocolVersion":2,"info":{"name":"petal","version":"0-unstable"},"capabilities":{}}`), 2, receive)
 		if err == nil {
-			return &delegatedConnection{p, name, backend, 2}, nil
+			return &delegatedConnection{host: p, account: name, backend: backend, version: 2}, nil
 		}
 		if routing.RememberRateLimit(name, err) {
 			return nil, err
@@ -186,7 +190,7 @@ func (p *proxy) startDelegatedAdapter(ctx context.Context, name string, receive 
 		routing.RememberRateLimit(name, err)
 		return nil, err
 	}
-	return &delegatedConnection{p, name, backend, 1}, nil
+	return &delegatedConnection{host: p, account: name, backend: backend, version: 1}, nil
 }
 
 func (p *proxy) routeChildParams(account string, raw json.RawMessage) json.RawMessage {
@@ -198,6 +202,8 @@ func (p *proxy) routeChildParams(account string, raw json.RawMessage) json.RawMe
 	routed, _ := json.Marshal(params)
 	return routed
 }
+
+func (c *delegatedConnection) Placement() *routing.Placement { return &c.placement }
 
 func (c *delegatedConnection) AccountName() string   { return c.account }
 func (c *delegatedConnection) Version() uint16       { return c.version }

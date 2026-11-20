@@ -287,15 +287,13 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 	}
 
 	var name, public, canonical string
+	var placement *routing.Placement
 	if method == "session/new" {
-		name = p.accounts[0]
-		if len(p.accounts) > 1 {
-			if chosen, err := p.choose(ctx); err == nil {
-				name = chosen
-			} else if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
+		chosen, err := p.choosePlacement(ctx)
+		if err != nil {
+			return nil, err
 		}
+		name, placement = chosen.Account, &chosen
 	} else {
 		if !hasString(params, "sessionId") {
 			return nil, acp.NewInvalidParams("sessionId must be a string")
@@ -376,29 +374,35 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			return nil, fmt.Errorf("empty forked sessionId")
 		}
 		routed := p.publicID(name, id)
+		placement := forkPlacement(name)
 		if endpoint != nil {
-			if err := p.bindDelegation(endpoint, name, routed); err != nil {
+			if err := p.bindDelegation(endpoint, name, routed, placement); err != nil {
 				return nil, err
 			}
 		}
 		fork["sessionId"] = encoded(routed)
+		p.attachPlacement(fork, placement)
 		return fork, nil
 	}
 	if method != "session/new" {
 		if endpoint != nil {
-			if err := p.bindDelegation(endpoint, name, canonical); err != nil {
+			if err := p.bindDelegation(endpoint, name, canonical, nil); err != nil {
 				return nil, err
 			}
 		}
 		return result, nil
 	}
 	session, err := p.newSessionV2(ctx, b, name, result)
-	if err == nil && endpoint != nil {
-		if err := p.bindDelegation(endpoint, name, stringField(session, "sessionId")); err != nil {
+	if err != nil {
+		return nil, err
+	}
+	if endpoint != nil {
+		if err := p.bindDelegation(endpoint, name, stringField(session, "sessionId"), placement); err != nil {
 			return nil, err
 		}
 	}
-	return session, err
+	p.attachPlacement(session, placement)
+	return session, nil
 }
 
 func decodeRouteID(id string, size int) []string {

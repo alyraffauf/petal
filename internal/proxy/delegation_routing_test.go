@@ -33,9 +33,13 @@ func TestDelegatedChildRetriesSetupOnEligibleAccounts(t *testing.T) {
 	}}, lifetime: t.Context()}
 	p.configureDelegation()
 
-	child, page := runDelegatedRoutingTest(t, p, `["startup","m","parent"]`)
+	child, page, record := runDelegatedRoutingTest(t, p, `["startup","m","parent"]`)
 	if child.ID != `["unknown","m","child"]` || page.Status != "completed" {
 		t.Fatalf("child %s finished with %+v", child.ID, page)
+	}
+	if got := record.Placement; got == nil || got.Account != record.Account || got.Account != "unknown" ||
+		got.Reason != routing.SetupFallback || got.Skipped != 4 || got.Weighted != "" {
+		t.Fatalf("saved fallback placement: %+v", got)
 	}
 	for _, name := range []string{"initialize", "session", "select"} {
 		if routing.RemainingBackoff(name) <= 0 {
@@ -57,7 +61,7 @@ func TestDelegatedChildRecordsPromptRateLimit(t *testing.T) {
 					"primary": delegationRoutingAccount(exe, "echo 100", failure), "standby": delegationRoutingAccount(exe, "echo 10", ""),
 				}}, lifetime: t.Context()}
 				p.configureDelegation()
-				child, page := runDelegatedRoutingTest(t, p, `["primary","m","parent"]`)
+				child, page, _ := runDelegatedRoutingTest(t, p, `["primary","m","parent"]`)
 				if child.ID != `["primary","m","child"]` || page.Status != "failed" {
 					t.Fatalf("child %s finished with %+v", child.ID, page)
 				}
@@ -80,7 +84,7 @@ func delegationRoutingAccount(exe, quota, failure string) routing.Account {
 	}
 }
 
-func runDelegatedRoutingTest(t *testing.T, p *proxy, parentID string) (delegation.Child, delegation.Page) {
+func runDelegatedRoutingTest(t *testing.T, p *proxy, parentID string) (delegation.Child, delegation.Page, sessions.Record) {
 	t.Helper()
 	cwd := t.TempDir()
 	if _, err := sessions.Create(cwd, sessions.Record{ID: parentID, Model: "m"}); err != nil {
@@ -101,7 +105,11 @@ func runDelegatedRoutingTest(t *testing.T, p *proxy, parentID string) (delegatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	return child, page
+	record, err := sessions.Lookup(cwd, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return child, page, record
 }
 
 func TestDelegationRoutingAdapterFixture(t *testing.T) {

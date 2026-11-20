@@ -4,6 +4,25 @@
 
 package sessiondb
 
+import (
+	"database/sql"
+)
+
+type ChildActivity struct {
+	ChildID  string
+	Sequence int64
+	Kind     string
+	Data     []byte
+}
+
+type ChildBinding struct {
+	ChildID      string
+	ParentID     string
+	Lease        sql.NullString
+	ResultStatus sql.NullString
+	ResultData   []byte
+}
+
 type Message struct {
 	Rowid     int64
 	SessionID string
@@ -24,4 +43,5 @@ type Session struct {
 	Opened     string
 	Updated    string
 	Selections string
+	Placement  string
 }

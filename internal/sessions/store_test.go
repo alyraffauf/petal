@@ -4,7 +4,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/pressly/goose/v3"
 )
 
 func TestListOrdersThreadsWithinProject(t *testing.T) {
@@ -125,5 +128,44 @@ func TestUpdateRejectsTimestampOutsideStorageRange(t *testing.T) {
 	got, err := Lookup(project, original.ID)
 	if err != nil || got.ID != original.ID || !got.Opened.Equal(original.Opened) || !got.Updated.IsZero() {
 		t.Fatalf("failed edit changed the stored record: %+v, %v", got, err)
+	}
+}
+
+func TestPlacementMigrationCanFollowHigherVersion(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	project := t.TempDir()
+	db, err := openStore(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := t.Context()
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.ApplyVersion(ctx, 6, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO sessions (id, model, account, parent, title, opened, updated, selections) VALUES ('legacy', 'm', 'work', '', '', '', '', 'null')"); err != nil {
+		t.Fatal(err)
+	}
+	future := fstest.MapFS{
+		"00007_future.sql": {Data: []byte("-- +goose Up\nALTER TABLE sessions ADD COLUMN future INTEGER NOT NULL DEFAULT 0;")},
+	}
+	provider, err = goose.NewProvider(goose.DialectSQLite3, db, future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.ApplyVersion(ctx, 7, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	row, err := Lookup(project, "legacy")
+	if err != nil || row.ID != "legacy" || row.Placement != nil {
+		t.Fatalf("migrated legacy record: %+v, %v", row, err)
 	}
 }

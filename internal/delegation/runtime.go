@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"petal/internal/routing"
 	"petal/internal/sessions"
 )
 
@@ -123,6 +124,9 @@ func (r *Runtime) Delegate(ctx context.Context, parentID, cwd, model, task strin
 	record := sessions.Record{ID: binding.ChildID, Model: model, Opened: time.Now()}
 	if routed, ok := conn.(interface{ AccountName() string }); ok {
 		record.Account = routed.AccountName()
+	}
+	if routed, ok := conn.(interface{ Placement() *routing.Placement }); ok {
+		record.Placement = routed.Placement()
 	}
 	release, err := sessions.StartChild(work, cwd, binding, record, task)
 	if err != nil {

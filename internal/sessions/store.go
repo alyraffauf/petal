@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"petal/internal/routing"
 	"petal/internal/sessions/sessiondb"
 )
 
@@ -21,10 +22,11 @@ type Selection struct {
 }
 
 type Record struct {
-	DelegatedParent  string      `json:"-"`
-	DelegationStatus string      `json:"-"`
-	Parent           string      `json:",omitempty"`
-	Selections       []Selection `json:",omitempty"`
+	Placement        *routing.Placement `json:",omitempty"`
+	DelegatedParent  string             `json:"-"`
+	DelegationStatus string             `json:"-"`
+	Parent           string             `json:",omitempty"`
+	Selections       []Selection        `json:",omitempty"`
 	ID               string
 	Title            string
 	Model            string
@@ -73,6 +75,9 @@ func decode(row sessiondb.Session) (Record, error) {
 	if err = json.Unmarshal([]byte(row.Selections), &r.Selections); err != nil {
 		return Record{}, err
 	}
+	if err = json.Unmarshal([]byte(row.Placement), &r.Placement); err != nil {
+		return Record{}, err
+	}
 	return r, nil
 }
 
@@ -89,7 +94,11 @@ func put(ctx context.Context, q *sessiondb.Queries, r Record) error {
 	if err != nil {
 		return err
 	}
-	return q.PutSession(ctx, sessiondb.PutSessionParams{ID: r.ID, Parent: r.Parent, Title: r.Title, Model: r.Model, Account: r.Account, Opened: opened, Updated: updated, Selections: string(selections)})
+	placement, err := json.Marshal(r.Placement)
+	if err != nil {
+		return err
+	}
+	return q.PutSession(ctx, sessiondb.PutSessionParams{ID: r.ID, Parent: r.Parent, Title: r.Title, Model: r.Model, Account: r.Account, Opened: opened, Updated: updated, Selections: string(selections), Placement: string(placement)})
 }
 
 func Lookup(cwd, id string) (Record, error) {
