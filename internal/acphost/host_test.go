@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -178,8 +179,8 @@ func TestTerminalOutputFitsACPFrame(t *testing.T) {
 }
 
 func TestTerminalExitWithInheritedOutput(t *testing.T) {
-	for _, cleanup := range []string{"release", "close"} {
-		t.Run(cleanup, func(t *testing.T) {
+	for _, mode := range []string{"exit", "release", "close", "drain"} {
+		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			// The helper inherits the terminal's pipes and keeps this extra
@@ -204,8 +205,11 @@ func TestTerminalExitWithInheritedOutput(t *testing.T) {
 			}
 			raw, err := json.Marshal(map[string]any{
 				"sessionId": "s", "command": "sh",
-				"args": []string{"-c", `"$1" -test.run='^TestTerminalOutputHelper$' & printf out; printf err >&2; exit 7`, "sh", exe},
-				"env":  []acp.EnvVariable{{Name: "ACPHOST_TEST_HELPER_ADDR", Value: listener.Addr().String()}},
+				"args": []string{"-c", `ACPHOST_TEST_HELPER_MODE="$2" "$1" -test.run='^TestTerminalOutputHelper$' &
+while [ ! -e helper-ready ]; do sleep 0.01; done
+if [ "$2" = release ] || [ "$2" = close ]; then wait; fi
+printf out; printf err >&2; exit 7`, "sh", exe, mode},
+				"env": []acp.EnvVariable{{Name: "ACPHOST_TEST_HELPER_ADDR", Value: listener.Addr().String()}},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -227,23 +231,30 @@ func TestTerminalExitWithInheritedOutput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := h.Call(ctx, "terminal/wait_for_exit", params); err != nil {
-				t.Fatal(err)
-			}
-			view := h.OutputView("s", string(id))
-			if out := view(); out.Output != "outerr" || out.ExitStatus == nil ||
-				out.ExitStatus.ExitCode == nil || *out.ExitStatus.ExitCode != 7 || out.ExitStatus.Signal != nil {
-				t.Fatalf("unexpected terminal output: %+v", out)
-			}
-			if cleanup == "release" {
+			switch mode {
+			case "exit", "drain":
+				if _, err := h.Call(ctx, "terminal/wait_for_exit", params); err != nil {
+					t.Fatal(err)
+				}
+				view := h.OutputView("s", string(id))
+				if out := view(); out.Output != "outerr" || out.ExitStatus == nil ||
+					out.ExitStatus.ExitCode == nil || *out.ExitStatus.ExitCode != 7 || out.ExitStatus.Signal != nil {
+					t.Fatalf("unexpected terminal output: %+v", out)
+				}
+			case "release":
 				if _, err := h.Call(ctx, "terminal/release", params); err != nil {
 					t.Fatal(err)
 				}
-			} else {
+			case "close":
 				h.Close()
 			}
+			if mode == "drain" {
+				// The helper's live connection kept the inherited pipe open
+				// through wait_for_exit. Closing the fixture socket ends it.
+				return
+			}
 			if n, err := conn.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
-				t.Fatalf("%s did not stop the helper: read %d bytes, %v", cleanup, n, err)
+				t.Fatalf("%s did not stop the helper: read %d bytes, %v", mode, n, err)
 			}
 		})
 	}
@@ -254,11 +265,19 @@ func TestTerminalOutputHelper(t *testing.T) {
 	if addr == "" {
 		return
 	}
+	if os.Getenv("ACPHOST_TEST_HELPER_MODE") == "drain" {
+		if _, err := syscall.Setsid(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	conn, err := net.Dial("tcp4", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	if err := os.WriteFile("helper-ready", nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := io.Copy(io.Discard, conn); err != nil {
 		t.Fatal(err)
 	}

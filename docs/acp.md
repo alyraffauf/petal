@@ -6,7 +6,9 @@ Petal speaks ACP v1 over stdio. As an agent, `petal acp` routes editor requests 
 
 Editors see the capabilities shared by eligible accounts. After routing, each session keeps its original adapter. Pinning one account exposes that adapter's capabilities. Petal forwards reply chunks to editors. Its own TUI waits for the completed reply.
 
-The TUI asks before writing files or running commands. Terminal output stays available to an attached tool result after release. Attachments use the negotiated content type up to 7 MiB when the encoded request fits. Larger files and unsupported inline types use a file reference.
+The TUI asks before writing files or running commands. When a command exits, Petal stops processes still in its terminal process group, preserves the command's exit status, and gives the output streams up to one second to drain. Killing or releasing a running terminal also stops its process group. Terminal output stays available to an attached tool result after release.
+
+Attachments use the negotiated content type up to 7 MiB when the encoded request fits. Larger files and unsupported inline types use a file reference.
 
 ## Reproduce the checks
 

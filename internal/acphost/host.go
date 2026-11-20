@@ -244,10 +244,18 @@ func (t *terminal) stop() error {
 	if t.groupDone {
 		return nil
 	}
+	err := t.killGroup()
+	if err == nil {
+		t.groupDone = true
+	}
+	return err
+}
+
+// Call under groupMu while the group leader's PID is still reserved.
+func (t *terminal) killGroup() error {
 	if err := syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}
-	t.groupDone = true
 	return nil
 }
 
@@ -289,13 +297,15 @@ func (t *terminal) output() string {
 	return strings.ToValidUTF8(s, "�")
 }
 func (t *terminal) wait() {
-	_ = t.cmd.Wait()
-	// Once the group is gone, never signal this numeric ID again.
+	observeTerminalExit(t.cmd.Process.Pid)
+	// Clean up while the unreaped leader still reserves the numeric group ID.
 	t.groupMu.Lock()
-	if !t.groupDone && errors.Is(syscall.Kill(-t.cmd.Process.Pid, 0), syscall.ESRCH) {
-		t.groupDone = true
+	if !t.groupDone {
+		_ = t.killGroup()
 	}
+	t.groupDone = true
 	t.groupMu.Unlock()
+	_ = t.cmd.Wait()
 	status := &acp.TerminalExitStatus{}
 	if s, ok := t.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && s.Signaled() {
 		signal := s.Signal().String()
