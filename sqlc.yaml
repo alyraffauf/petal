@@ -1,0 +1,9 @@
+version: '2'
+sql:
+  - engine: sqlite
+    schema: internal/sessions/migrations
+    queries: internal/sessions/queries.sql
+    gen:
+      go:
+        package: sessiondb
+        out: internal/sessions/sessiondb

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"strings"
 	"sync/atomic"
@@ -361,14 +360,11 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	method := "session/new"
 	if resume {
 		if h.id == "" {
-			records, err := sessions.List(cwd, []string{c.Model})
+			record, err := sessions.Latest(cwd, c.Model)
 			if err != nil {
 				return "", err
 			}
-			if len(records) == 0 {
-				return "", os.ErrNotExist
-			}
-			h.id = records[0].ID
+			h.id = record.ID
 		}
 		root := h.id
 		h.activeID.Store(&root)

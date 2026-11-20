@@ -2,18 +2,16 @@
 package sessions
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"slices"
-	"strings"
-	"syscall"
 	"time"
 
-	"petal/internal/paths"
+	"petal/internal/sessions/sessiondb"
 )
 
 // Selection is an option the user explicitly applied to this session.
@@ -42,182 +40,160 @@ func (r Record) LastActivity() time.Time {
 
 func key(s string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(s))) }
 
-func recordPath(cwd, id string) (string, error) {
-	return paths.XDG("STATE", filepath.Join("conversations", key(cwd), key(id)+".json"))
+// Fixed-width UTC timestamps preserve chronological order in a SQLite TEXT index.
+const timestampLayout = "2006-01-02T15:04:05.000000000Z"
+
+func timestamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(timestampLayout)
+}
+func parseTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(timestampLayout, value)
+}
+func decode(row sessiondb.Session) (Record, error) {
+	r := Record{ID: row.ID, Parent: row.Parent, Title: row.Title, Model: row.Model, Account: row.Account}
+	var err error
+	if r.Opened, err = parseTime(row.Opened); err != nil {
+		return Record{}, err
+	}
+	if r.Updated, err = parseTime(row.Updated); err != nil {
+		return Record{}, err
+	}
+	if err = json.Unmarshal([]byte(row.Selections), &r.Selections); err != nil {
+		return Record{}, err
+	}
+	return r, nil
+}
+
+func put(ctx context.Context, q *sessiondb.Queries, r Record) error {
+	selections, err := json.Marshal(r.Selections)
+	if err != nil {
+		return err
+	}
+	return q.PutSession(ctx, sessiondb.PutSessionParams{ID: r.ID, Parent: r.Parent, Title: r.Title, Model: r.Model, Account: r.Account, Opened: timestamp(r.Opened), Updated: timestamp(r.Updated), Selections: string(selections)})
 }
 
 func Lookup(cwd, id string) (Record, error) {
-	path, err := recordPath(cwd, id)
+	db, err := openStore(cwd)
 	if err != nil {
 		return Record{}, err
 	}
-	return readRecord(path)
-}
-
-func readRecord(path string) (Record, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	defer db.Close()
+	row, err := sessiondb.New(db).GetSession(context.Background(), id)
+	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, nil
 	}
 	if err != nil {
 		return Record{}, err
 	}
+	return decode(row)
+}
+
+// Create keeps the first record for an ID, including when two clients see it at once.
+func Create(cwd string, record Record) (Record, error) {
+	return editRecord(cwd, record.ID, func(saved *Record) bool {
+		if saved.ID != "" {
+			return false
+		}
+		*saved = record
+		return true
+	}, true)
+}
+
+// Update applies edit to the current record while holding a SQLite write transaction.
+func Update(cwd, id string, edit func(*Record) bool) (Record, error) {
+	return editRecord(cwd, id, edit, false)
+}
+
+func editRecord(cwd, id string, edit func(*Record) bool, allowCreate bool) (Record, error) {
+	db, err := openStore(cwd)
+	if err != nil {
+		return Record{}, err
+	}
+	defer db.Close()
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return Record{}, err
+	}
+	defer tx.Rollback()
+	q := sessiondb.New(tx)
+	row, err := q.GetSession(ctx, id)
 	var record Record
-	err = json.Unmarshal(data, &record)
-	return record, err
-}
-
-// Create records a session the first time Petal sees it.
-func Create(cwd string, record Record) (saved Record, err error) {
-	err = lockRecord(cwd, record.ID, func(path string) error {
-		var err error
-		saved, err = readRecord(path)
-		if err != nil || saved.ID != "" {
-			return err
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if !allowCreate {
+			return Record{}, os.ErrNotExist
 		}
-		saved = record
-		return writeRecord(path, saved)
-	})
-	return saved, err
-}
-
-// Update applies an edit to the latest record and writes it when edit reports a change.
-func Update(cwd, id string, edit func(*Record) bool) (record Record, err error) {
-	err = lockRecord(cwd, id, func(path string) error {
-		var err error
-		record, err = readRecord(path)
+	case err != nil:
+		return Record{}, err
+	default:
+		record, err = decode(row)
 		if err != nil {
-			return err
-		}
-		if record.ID == "" {
-			return os.ErrNotExist
-		}
-		if !edit(&record) {
-			return nil
-		}
-		return writeRecord(path, record)
-	})
-	return record, err
-}
-
-func lockRecord(cwd, id string, edit func(string) error) error {
-	path, err := recordPath(cwd, id)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	// Keep the lock file in place so every process locks the same inode.
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	for {
-		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
-		if err == nil {
-			return edit(path)
-		}
-		if !errors.Is(err, syscall.EINTR) {
-			return err
+			return Record{}, err
 		}
 	}
-}
-
-func writeRecord(path string, r Record) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".pending-")
-	if err != nil {
-		return err
+	if edit(&record) {
+		if record.ID != id || id == "" {
+			return Record{}, errors.New("session edit requires an unchanged, non-empty ID")
+		}
+		if err := put(ctx, q, record); err != nil {
+			return Record{}, err
+		}
 	}
-	defer os.Remove(f.Name())
-	err = json.NewEncoder(f).Encode(r)
-	closeErr := f.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return os.Rename(f.Name(), path)
+	return record, tx.Commit()
 }
 
 func List(cwd string, models []string) ([]Record, error) {
-	dir, err := paths.XDG("STATE", filepath.Join("conversations", key(cwd)))
+	if len(models) == 0 {
+		return nil, nil
+	}
+	db, err := openStore(cwd)
 	if err != nil {
 		return nil, err
 	}
-	files, err := os.ReadDir(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	defer db.Close()
+	rows, err := sessiondb.New(db).ListSessions(context.Background(), models)
+	if err != nil {
 		return nil, err
 	}
-	var result []Record
-	seen := make(map[string]bool)
-	for _, file := range files {
-		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, file.Name()))
+	records := make([]Record, 0, len(rows))
+	for _, row := range rows {
+		r, err := decode(row)
 		if err != nil {
 			return nil, err
 		}
-		var r Record
-		if err := json.Unmarshal(data, &r); err != nil {
-			return nil, fmt.Errorf("read saved conversation %s: %w", file.Name(), err)
-		}
-		if slices.Contains(models, r.Model) {
-			result = append(result, r)
-			seen[r.ID] = true
-		}
+		records = append(records, r)
 	}
-	// Older Petal releases saved a single raw ID per directory and model.
-	for _, model := range models {
-		path, err := paths.XDG("STATE", filepath.Join("sessions", key(cwd+"\x00"+model)))
-		if err != nil {
-			return nil, err
-		}
-		data, err := os.ReadFile(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		var parts []string
-		id := string(data)
-		if seen[id] || json.Unmarshal(data, &parts) != nil || len(parts) != 3 || parts[1] != model {
-			continue
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, Record{ID: id, Account: parts[0], Model: model, Opened: info.ModTime()})
-	}
-	slices.SortStableFunc(result, func(a, b Record) int { return b.LastActivity().Compare(a.LastActivity()) })
-	return result, nil
+	return records, nil
 }
 
-// Forget removes local resume information after the adapter confirms deletion.
-func Forget(cwd, model, id string) error {
-	return lockRecord(cwd, id, func(path string) error {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		legacy, err := paths.XDG("STATE", filepath.Join("sessions", key(cwd+"\x00"+model)))
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(legacy)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if string(data) == id {
-			return os.Remove(legacy)
-		}
-		return nil
-	})
+func Latest(cwd, model string) (Record, error) {
+	db, err := openStore(cwd)
+	if err != nil {
+		return Record{}, err
+	}
+	defer db.Close()
+	row, err := sessiondb.New(db).LatestSession(context.Background(), model)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Record{}, os.ErrNotExist
+	}
+	if err != nil {
+		return Record{}, err
+	}
+	return decode(row)
+}
+
+func Forget(cwd, _, id string) error {
+	db, err := openStore(cwd)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return sessiondb.New(db).DeleteSession(context.Background(), id)
 }

@@ -8,12 +8,13 @@
         root = ../..;
         fileset = pkgs.lib.fileset.unions [
           ../../internal/tui/testdata
+          ../../internal/sessions/migrations
           (pkgs.lib.fileset.fileFilter (file:
             file.hasExt "go" || builtins.elem file.name [ "go.mod" "go.sum" "LICENSE" ]
           ) ../..)
         ];
       };
-      vendorHash = "sha256-fOeoJ/TtJzH6+BHZTm2wHCEwbdkd57CxnHNUO9sAcE4=";
+      vendorHash = "sha256-lJ8+MVvmAgh8iuOA5LnXPXytCXbWJl1xvNVpFxWoTYM=";
       # The Claude bridge uses the user's installed CLI, discovered at runtime.
       ldflags = [
         "-X petal/internal/routing.bundledCodex=${pkgs.lib.getExe pkgs.codex-acp}"

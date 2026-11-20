@@ -202,11 +202,11 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	write("Alternate")
 	await("Alternate")
 	write("\r")
-	await("Ask alternate")
+	await("alternate…")
 	write("/config\r")
 	await("Model · Alternate")
 	write("\x1b")
-	await("Ask alternate")
+	await("alternate…")
 	write("\x1b[200~first line\nsecond line\x1b[201~")
 	await("second line")
 	if err := pty.Setsize(tty, &pty.Winsize{Rows: 14, Cols: 54}); err != nil {
@@ -222,7 +222,7 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	write("/sessions\r")
 	await("Conversation turns")
 	write("\x1b")
-	await("Ask alternate")
+	await("alternate…")
 	write("/new\r")
 	await("Choose a model")
 	write("\x1bOQ") // F2 opens the control center from the model picker.
