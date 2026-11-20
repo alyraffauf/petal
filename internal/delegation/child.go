@@ -83,7 +83,7 @@ func (r *run) execute(conn Connection, task string, closeTransport context.Cance
 		switch stop.Reason {
 		case "cancelled":
 			result.Status = "cancelled"
-		case "error", "refusal", "max_tokens", "max_turn_requests":
+		case "rate_limit", "error", "refusal", "max_tokens", "max_turn_requests":
 			result.Status = "failed"
 		}
 	}

@@ -141,6 +141,9 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				if err := json.Unmarshal(result["fixtureMCP"], &servers); err != nil || len(servers) != 1 {
 					t.Fatalf("expected just the Petal MCP server: %s", result["fixtureMCP"])
 				}
+				if version == 1 && string(servers[0]["env"]) != "[]" {
+					t.Fatalf("stdio MCP requires an env array: %s", servers[0]["env"])
+				}
 				server := servers[0]
 				if stringField(server, "name") != delegationServerName || !filepath.IsAbs(stringField(server, "command")) || (version == 2 && stringField(server, "type") != "stdio") {
 					t.Fatalf("invalid stdio definition: %s", jsonValue(server))
