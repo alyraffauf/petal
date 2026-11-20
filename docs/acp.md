@@ -1,6 +1,18 @@
 # ACP support and verification
 
-Petal speaks ACP v1 over stdio. As an agent, `petal acp` routes editor requests to the selected account's ACP server and translates session IDs. Petal includes integrations for Claude Code and Codex. You can also [configure a custom server](configuration.md#run-a-custom-acp-server). As a client, the TUI handles prompts, permissions, project files, terminals, elicitation, session controls, and history. Petal stores session IDs, titles, activity, fork relationships, and settings in `$XDG_STATE_HOME/petal/conversations/<project-hash>/index.sqlite`. The TUI also stores message text and its SQLite FTS5 index there. Search covers messages Petal has recorded locally, including tool output. Opening a session that supports ACP history replay indexes the replayed messages. Deleting a session removes its local messages and search entries.
+Petal speaks ACP v1 over stdio by default. As an agent, `petal acp` routes editor requests to the selected account's ACP server and translates session IDs. Petal includes integrations for Claude Code and Codex. You can also [configure a custom server](configuration.md#run-a-custom-acp-server). As a client, the TUI handles prompts, permissions, project files, terminals, elicitation, session controls, and history. Petal stores session IDs, titles, activity, fork relationships, and settings in `$XDG_STATE_HOME/petal/conversations/<project-hash>/index.sqlite`. The TUI also stores message text and its SQLite FTS5 index there. Search covers messages Petal has recorded locally, including tool output. Opening a session that supports ACP history replay indexes the replayed messages. Deleting a session removes its local messages and search entries.
+
+## Opt in to ACP v2
+
+Put this before the first table in `config.toml`.
+
+```toml
+acp_v2 = true
+```
+
+The TUI requests v2. When an editor requests v2, `petal acp` checks the adapters that offer the selected model. If any negotiate v2, Petal routes among those accounts. If none do, it opens fresh v1 connections. An editor that requests v1 continues to use v1.
+
+On v2, the prompt response acknowledges the user's message. The TUI keeps the session busy until the adapter reports idle. Reopening requests a full replay. Petal replaces the local search index after the replay and resume succeed.
 
 ## Capability negotiation
 
@@ -16,11 +28,14 @@ Attachments use the negotiated content type up to 7 MiB when the encoded request
 CGO_ENABLED=0 go test ./...
 FUZZ_TIME=10s scripts/check-properties
 ACP_TCK_DIR=/path/to/acp-tck scripts/check-acp /tmp/petal-acp.json matrix
+ACP_TCK_DIR=/path/to/acp-tck scripts/check-acp /tmp/petal-v2.json v2-full
 ```
+
+The pinned v2 kit reported **CONFORMANT** for the baseline and full fixture profiles. The full profile passed 252 checks and skipped 63. Those results cover Petal as a proxy with the reference adapter. A separate live check exercised a tool call and full replay with bundled Claude ACP 0.100.0 over v2, and with Codex ACP 2.1.1 over v1.
 
 Session queries live in `internal/sessions/queries.sql`. Add schema changes as versioned Goose migrations in `internal/sessions/migrations/`, then run `nix shell --inputs-from . nixpkgs#sqlc -c sqlc generate` at the repository root and commit the generated Go files. Keep version 2 reserved for databases created by the earlier importer.
 
-Use Go with a C compiler for `go test -race ./...`. The matrix also needs `uv` and the pinned kit checkout. It runs five adapter fixtures, writes per-fixture reports, and checks that every registered requirement passed somewhere in the matrix. All 134 requirement IDs passed, with zero failures. Some optional checks pass when the adapter emits no corresponding traffic. The upstream kit tests the agent role. Client evidence comes from Petal's wire, PTY, and property tests. [Pinned ACP test kit](https://github.com/agentclientprotocol/acp-tck/tree/7c71c4d1af0994e73bdc100c9f7f6b98f2319cda) · [Upstream coverage limits](https://agentclientprotocol.com/libraries/testing)
+Use Go with a C compiler for `go test -race ./...`. The v1 matrix and v2 profiles also need `uv` and the pinned kit checkout. The v1 matrix runs five adapter fixtures, writes per-fixture reports, and checks that every registered requirement passed somewhere in the matrix. All 134 requirement IDs passed, with zero failures. Some optional checks pass when the adapter emits no corresponding traffic. The upstream kit tests the agent role. Client evidence comes from Petal's wire, PTY, and property tests. [Pinned ACP test kit](https://github.com/agentclientprotocol/acp-tck/tree/7c71c4d1af0994e73bdc100c9f7f6b98f2319cda) · [Upstream coverage limits](https://agentclientprotocol.com/libraries/testing)
 
 ## Live comparisons
 

@@ -22,6 +22,8 @@ In the Agent Panel, start a new thread and choose **Petal**. Send a prompt in th
 
 If Zed cannot launch Petal, run `command -v petal` in your terminal. Set `command` to the absolute path it prints. [Zed external agents](https://zed.dev/docs/ai/external-agents#custom-agents)
 
+Zed 1.28.1 tries ACP v2 when Zed enables its `acp-beta` feature flag. Release builds restrict local flag overrides to staff. Petal's `acp_v2` setting enables v2 on the Petal side. [Zed's connection logic](https://github.com/zed-industries/zed/blob/v1.28.1/crates/agent_servers/src/acp.rs) · [Zed's flag rules](https://github.com/zed-industries/zed/blob/v1.28.1/crates/feature_flags/src/store.rs#L99-L107) · [Enable v2 in Petal](acp.md#opt-in-to-acp-v2)
+
 ## Choose a model or account
 
 Set `args` to `["acp", "codex/default"]` to use the default Codex model and balance new sessions across your Codex accounts. Use `["acp", "claude/default"]` for Claude Code. To pin a configured account, use `["acp", "codex/default", "--account", "work"]`.
