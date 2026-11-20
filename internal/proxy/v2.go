@@ -89,6 +89,15 @@ func (p *proxy) initializeV2(ctx context.Context, raw json.RawMessage, names []s
 		}
 		return nil, false, err
 	}
+	// A connection-wide query has no unique answer across multiple accounts.
+	if len(available) > 1 {
+		if authCaps, ok := capabilities["auth"].(map[string]any); ok {
+			delete(authCaps, "status")
+		}
+		if sessionCaps, ok := capabilities["session"].(map[string]any); ok {
+			delete(sessionCaps, "options")
+		}
+	}
 	caps, _ := json.Marshal(capabilities)
 	var negotiated Object
 	_ = json.Unmarshal(caps, &negotiated)
@@ -132,6 +141,14 @@ var v2CapabilityShape = map[string]any{
 
 func decodeV2Capabilities(raw json.RawMessage) map[string]any {
 	capabilities := decodeMap(raw)
+	// These draft methods require proxy handlers before clients can use them.
+	delete(capabilities, "providers")
+	if session, ok := capabilities["session"].(map[string]any); ok {
+		delete(session, "status")
+		if mcp, ok := session["mcp"].(map[string]any); ok {
+			delete(mcp, "acp")
+		}
+	}
 	normalizeV2Capabilities(capabilities, v2CapabilityShape)
 	return capabilities
 }
@@ -217,6 +234,11 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 	}
 	sessionCaps := p.v2Capabilities.member("session")
 	switch method {
+	case "auth/status":
+		if len(p.accounts) != 1 || p.v2Capabilities.member("auth").member("status") == nil {
+			return nil, acp.NewMethodNotFound(method)
+		}
+		return p.relayV2Backend(ctx, p.backends[p.accounts[0]], method, params, false)
 	case "auth/login", "auth/logout":
 		if !p.hasV2Auth {
 			return nil, acp.NewMethodNotFound(method)
@@ -225,9 +247,19 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			return p.loginV2(ctx, params)
 		}
 		return p.logoutV2(ctx, params)
-	case "session/delete":
-		if sessionCaps.member("delete") == nil {
+	case "session/options", "session/delete", "session/fork", "session/archive", "session/unarchive", "session/set_title":
+		capability := strings.TrimPrefix(method, "session/")
+		switch method {
+		case "session/unarchive":
+			capability = "archive"
+		case "session/set_title":
+			capability = "title"
+		}
+		if sessionCaps.member(capability) == nil {
 			return nil, acp.NewMethodNotFound(method)
+		}
+		if method == "session/options" && params["sessionId"] == nil {
+			return p.relayV2Backend(ctx, p.backends[p.accounts[0]], method, params, false)
 		}
 	case "session/new", "session/list", "session/resume", "session/close", "session/prompt",
 		"session/set_config_option", "session/cancel", "tool_call/cancel", "terminal/cancel":
@@ -248,7 +280,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 	if method == "session/list" {
 		return p.list(ctx, params)
 	}
-	if method == "session/new" || method == "session/resume" {
+	if method == "session/new" || method == "session/resume" || method == "session/fork" {
 		if err := validateV2SessionSetup(params, sessionCaps); err != nil {
 			return nil, err
 		}
@@ -284,7 +316,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 	}
 
 	b := p.backends[name]
-	if method == "session/new" || method == "session/resume" {
+	if method == "session/new" || method == "session/resume" || method == "session/fork" {
 		var err error
 		params, err = mergeMCPServersV2(params, p.MCPServers, sessionCaps.member("mcp"), b.raw.member("capabilities").member("session").member("mcp"))
 		if err != nil {
@@ -312,6 +344,14 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			routing.RememberRateLimit(name, err)
 		}
 		return nil, err
+	}
+	if method == "session/fork" {
+		var fork Object
+		if json.Unmarshal(result, &fork) != nil || !hasString(fork, "sessionId") {
+			return nil, fmt.Errorf("adapter did not return forked sessionId")
+		}
+		fork["sessionId"] = encoded(p.publicID(name, stringField(fork, "sessionId")))
+		return fork, nil
 	}
 	if method != "session/new" {
 		return result, nil

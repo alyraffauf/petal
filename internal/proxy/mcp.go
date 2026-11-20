@@ -76,7 +76,7 @@ func mergeMCPServersV2(params Object, configured []routing.MCPServer, sharedCaps
 		if json.Unmarshal(raw, &server) != nil || !hasString(server, "name") || !hasString(server, "type") {
 			return nil, acp.NewInvalidParams("MCP servers require name and type")
 		}
-		if kind := stringField(server, "type"); (kind == "http" || kind == "stdio") && sharedCaps.member(kind) == nil {
+		if kind := stringField(server, "type"); (kind == "http" || kind == "stdio" || kind == "acp") && sharedCaps.member(kind) == nil {
 			return nil, acp.NewInvalidParams(fmt.Sprintf("unsupported MCP transport %q", kind))
 		}
 		names[stringField(server, "name")] = true

@@ -96,6 +96,9 @@ func decodeInitializeV2(raw proxy.Object) (acp.InitializeResponse, error) {
 			},
 		},
 	}
+	if v2Object(session["fork"]) != nil {
+		hello.AgentCapabilities.SessionCapabilities.Fork = &acp.SessionForkCapabilities{}
+	}
 	if v2Object(session["delete"]) != nil {
 		hello.AgentCapabilities.SessionCapabilities.Delete = &acp.SessionDeleteCapabilities{}
 	}
