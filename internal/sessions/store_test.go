@@ -1,27 +1,15 @@
 package sessions
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"testing"
 	"time"
 )
 
-func TestListKeepsOlderThreadsAndLegacySession(t *testing.T) {
-	state := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", state)
+func TestListOrdersThreadsWithinProject(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	project := t.TempDir()
-	legacyDir := filepath.Join(state, "petal", "sessions")
-	if err := os.MkdirAll(legacyDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	const legacy = `["work","m","legacy"]`
-	if err := os.WriteFile(filepath.Join(legacyDir, key(project+"\x00m")), []byte(legacy), 0600); err != nil {
-		t.Fatal(err)
-	}
 	for i, id := range []string{"older", "newer"} {
 		r := Record{ID: id, Account: "work", Model: "m", Opened: time.Unix(int64(i+1), 0)}
 		if _, err := Create(project, r); err != nil {
@@ -29,58 +17,12 @@ func TestListKeepsOlderThreadsAndLegacySession(t *testing.T) {
 		}
 	}
 	got, err := List(project, []string{"m"})
-	if err != nil || len(got) != 3 || got[0].ID != legacy || got[1].ID != "newer" || got[2].ID != "older" {
+	if err != nil || len(got) != 2 || got[0].ID != "newer" || got[1].ID != "older" {
 		t.Fatalf("conversations: %+v, %v", got, err)
 	}
 	got, err = List(t.TempDir(), []string{"m"})
 	if err != nil || len(got) != 0 {
 		t.Fatalf("other project: %+v, %v", got, err)
-	}
-}
-
-func TestImportRetriesAndDoesNotResurrectForgottenSessions(t *testing.T) {
-	state := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", state)
-	project := t.TempDir()
-	dir := filepath.Join(state, "petal", "conversations", key(project))
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	record := Record{ID: `["work","m","first"]`, Model: "m", Title: "Saved", Account: "work", Parent: "root", Updated: time.Now().UTC(), Selections: []Selection{{ID: "mode", Value: "read"}}}
-	data, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(dir, "a.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	corrupt := filepath.Join(dir, "b.json")
-	if err = os.WriteFile(corrupt, []byte("{"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = List(project, []string{"m"}); err == nil {
-		t.Fatal("incomplete import reported success")
-	}
-	record.Title = "Repaired during retry"
-	data, err = json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(dir, "a.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.Remove(corrupt); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Latest(project, "m")
-	if err != nil || !reflect.DeepEqual(got, record) {
-		t.Fatalf("imported %#v, want %#v (%v)", got, record, err)
-	}
-	if err = Forget(project, record.Model, record.ID); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := List(project, []string{"m"}); err != nil || len(got) != 0 {
-		t.Fatalf("forgotten record reappeared: %v %v", got, err)
 	}
 }
 

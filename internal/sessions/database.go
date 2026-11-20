@@ -29,7 +29,7 @@ func openStore(cwd string) (*sql.DB, error) {
 		return nil, err
 	}
 	// Goose checks and applies migrations across multiple transactions. Serialize
-	// initial opens from independent Petal processes until the import commits.
+	// initial opens from independent Petal processes during schema setup.
 	lock, err := os.Open(dir)
 	if err != nil {
 		return nil, err
@@ -58,10 +58,7 @@ func openStore(cwd string) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations, goose.WithGoMigrations(
-		goose.NewGoMigration(2, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
-			return importLegacy(ctx, tx, cwd, dir)
-		}}, nil)))
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
 	if err == nil {
 		_, err = provider.Up(context.Background())
 	}

@@ -1,6 +1,6 @@
 # ACP support and verification
 
-Petal speaks ACP v1 over stdio. As an agent, `petal acp` routes editor requests to Claude or Codex and translates session IDs. As a client, the TUI handles prompts, permissions, project files, terminals, elicitation, session controls, and history. Petal stores session IDs, titles, activity, fork relationships, and settings in `$XDG_STATE_HOME/petal/conversations/<project-hash>/index.sqlite`. The first open imports the project’s older JSON records and raw resume IDs into SQLite. The adapter stores and replays the transcript.
+Petal speaks ACP v1 over stdio. As an agent, `petal acp` routes editor requests to Claude or Codex and translates session IDs. As a client, the TUI handles prompts, permissions, project files, terminals, elicitation, session controls, and history. Petal stores session IDs, titles, activity, fork relationships, and settings in `$XDG_STATE_HOME/petal/conversations/<project-hash>/index.sqlite`. The adapter stores and replays the transcript.
 
 ## Capability negotiation
 
@@ -18,7 +18,7 @@ FUZZ_TIME=10s scripts/check-properties
 ACP_TCK_DIR=/path/to/acp-tck scripts/check-acp /tmp/petal-acp.json matrix
 ```
 
-Session queries live in `internal/sessions/queries.sql`. Add schema changes as versioned Goose migrations in `internal/sessions/migrations/`, then run `nix shell --inputs-from . nixpkgs#sqlc -c sqlc generate` at the repository root and commit the generated Go files. Migration version 2 imports legacy session files in Go.
+Session queries live in `internal/sessions/queries.sql`. Add schema changes as versioned Goose migrations in `internal/sessions/migrations/`, then run `nix shell --inputs-from . nixpkgs#sqlc -c sqlc generate` at the repository root and commit the generated Go files. Keep version 2 reserved for databases created by the earlier importer.
 
 Use Go with a C compiler for `go test -race ./...`. The matrix also needs `uv` and the pinned kit checkout. It runs five adapter fixtures, writes per-fixture reports, and checks that every registered requirement passed somewhere in the matrix. All 134 requirement IDs passed, with zero failures. Some optional checks pass when the adapter emits no corresponding traffic. The upstream kit tests the agent role. Client evidence comes from Petal's wire, PTY, and property tests. [Pinned ACP test kit](https://github.com/agentclientprotocol/acp-tck/tree/7c71c4d1af0994e73bdc100c9f7f6b98f2319cda) · [Upstream coverage limits](https://agentclientprotocol.com/libraries/testing)
 
