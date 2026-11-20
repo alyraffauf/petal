@@ -197,8 +197,8 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	aw := 0
 	actionLabel := ""
 	if w >= 38 && action != "" && action != chatRun {
-		actionLabel = " ↵ " + string(action) + " "
-		aw = ansi.StringWidth(actionLabel)
+		actionLabel = "↵ " + string(action)
+		aw = 16 // Fixed width prevents wrapping changes between Send, Steer and Follow up.
 	}
 	room := max(1, w-aw-4)
 	inputHeight := 1
@@ -233,8 +233,10 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	if paddedInput {
 		rows = append(rows, richBand("", w, petalText, petalSurface, false))
 	}
-	if menuHeight == 0 {
-		hits.action = image.Rect(w-aw, len(rows), w, len(rows)+1)
+	buttonRow := inputHeight / 2
+	activeButton := strings.TrimSpace(hits.actionInput) != ""
+	if aw > 0 && activeButton {
+		hits.action = image.Rect(w-aw, len(rows)+buttonRow, w-2, len(rows)+buttonRow+1)
 	}
 	hits.question = v.question
 	if v.editor != nil && v.connection != connectionFailed && room+4 <= w {
@@ -247,11 +249,20 @@ func renderChat(v screen, hits *chatHitTargets) string {
 		}
 	}
 	for i, line := range strings.Split(input, "\n") {
-		prefix, button := "    ", ""
+		prefix := "    "
 		if i == 0 {
-			prefix, button = "  › ", actionLabel
+			prefix = "  › "
 		}
-		rows = append(rows, richBand(prefix+line, w-aw, petalText, petalSurface, false)+richBand(button, aw, petalInk, petalRose, button != ""))
+		button := richBand("", aw, petalText, petalSurface, false)
+		if aw > 0 && i == buttonRow {
+			fg, bg := petalMuted, petalSurface
+			if activeButton {
+				fg, bg = petalRose, selectionBand
+			}
+			pad := (aw - 2 - ansi.StringWidth(actionLabel)) / 2
+			button = richBand(strings.Repeat(" ", pad)+actionLabel, aw-2, fg, bg, activeButton) + richBand("", 2, petalText, petalSurface, false)
+		}
+		rows = append(rows, richBand(prefix+line, w-aw, petalText, petalSurface, false)+button)
 	}
 	if paddedInput {
 		rows = append(rows, richBand("", w, petalText, petalSurface, false), richBand("", w, petalText, v.background, false))
