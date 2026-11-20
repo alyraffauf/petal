@@ -56,12 +56,17 @@ func chatHelp(v screen) string {
 	switch {
 	case v.question != nil:
 		return shortHelp(v.Width, confirmChoice, declineRequest)
-	case v.backlog != nil && v.backlog.browsing:
+	case v.backlog != nil && v.backlog.browsing && len(v.commands) == 0:
+		if v.Busy {
+			return shortHelp(v.Width, cancelTurn, jumpLatest, pageEarlier, pageLater)
+		}
 		return shortHelp(v.Width, jumpLatest, pageEarlier, pageLater)
 	case v.connection == connectionFailed:
 		return shortHelp(v.Width, newThread, quitPetal)
 	case len(v.commands) > 0:
 		return shortHelp(v.Width, selectPrevious, selectNext, runSelected, dismissMenu)
+	case v.Busy && v.hasAgents:
+		return shortHelp(v.Width, cancelTurn, inspectAgents, readHistory, pageEarlier, pageLater)
 	case v.hasAgents:
 		return shortHelp(v.Width, inspectAgents, readHistory, pageEarlier, pageLater)
 	case v.Busy:
