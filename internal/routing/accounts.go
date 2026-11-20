@@ -1,0 +1,309 @@
+package routing
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"math/big"
+	"math/rand/v2"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/pelletier/go-toml/v2"
+
+	"petal/internal/paths"
+)
+
+type Account struct {
+	Provider    string
+	Home        string
+	Capacity    *float64
+	SelectModel map[string]bool `toml:"-" json:"-"`
+	Env         map[string]string
+	Models      map[string][]string
+	Usage       []string
+}
+
+func (a *Account) configureHome(configDir string) error {
+	var key string
+	switch a.Provider {
+	case "claude":
+		key = "CLAUDE_CONFIG_DIR"
+	case "codex":
+		key = "CODEX_HOME"
+	case "":
+		if a.Home == "" {
+			return nil // Explicit ACP command without a managed provider.
+		}
+		return fmt.Errorf("home requires provider claude or codex")
+	default:
+		return fmt.Errorf("unsupported provider %q (expected claude or codex)", a.Provider)
+	}
+	if a.Home == "" {
+		return nil
+	}
+	dir := a.Home
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		dir = filepath.Join(home, dir[1:])
+	} else if !filepath.IsAbs(dir) {
+		dir = filepath.Join(configDir, dir)
+	}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if a.Env == nil {
+		a.Env = make(map[string]string)
+	}
+	a.Env[key] = dir
+	return nil
+}
+
+func (a Account) capacity() float64 {
+	if a.Capacity == nil {
+		return 1
+	}
+	return *a.Capacity
+}
+
+func (a Account) Command(ctx context.Context, argv []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = os.Environ()
+	for k, v := range a.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	return cmd
+}
+
+type Config struct {
+	TransparentBackground bool   `toml:"transparent_background" json:"transparent_background"`
+	BusyInput             string `toml:"busy_input" json:"busy_input"`
+	Accounts              map[string]Account
+	Tiers                 map[string]map[string]float64
+	Model, PinnedAccount  string   `toml:"-" json:"-"`
+	Hints                 []string `toml:"-" json:"-"`
+}
+
+func Load(path, model, accountName string) (Config, error) {
+	c := Config{TransparentBackground: true, Model: model, PinnedAccount: accountName}
+	optional := path == ""
+	if optional {
+		defaultPath, err := paths.XDG("CONFIG", "config.toml")
+		if err != nil {
+			return c, err
+		}
+		path = defaultPath
+	}
+	data, err := os.ReadFile(path)
+	switch {
+	case optional && errors.Is(err, os.ErrNotExist):
+		// Discovery also runs without a configuration file.
+	case err != nil:
+		return c, err
+	default:
+		// Decode provider model IDs and environment keys with their original case.
+		if filepath.Ext(path) == ".json" {
+			err = json.Unmarshal(data, &c)
+		} else {
+			err = toml.Unmarshal(data, &c)
+		}
+		if err != nil {
+			return c, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if c.BusyInput != "" && c.BusyInput != "steer" && c.BusyInput != "follow_up" {
+		return c, fmt.Errorf("busy_input must be steer or follow_up")
+	}
+	for provider, tiers := range c.Tiers {
+		for tier, size := range tiers {
+			if size <= 0 || math.IsNaN(size) || math.IsInf(size, 0) {
+				return c, fmt.Errorf("tiers.%s.%s must be a positive finite number", provider, tier)
+			}
+		}
+	}
+	for name, a := range c.Accounts {
+		if err := a.configureHome(filepath.Dir(path)); err != nil {
+			return c, fmt.Errorf("accounts.%s: %w", name, err)
+		}
+		c.Accounts[name] = a
+		if size := a.capacity(); size <= 0 || math.IsNaN(size) || math.IsInf(size, 0) {
+			return c, fmt.Errorf("accounts.%s.capacity must be a positive finite number", name)
+		}
+	}
+	c.discover()
+	if c.Model == "" {
+		return c, nil
+	}
+	return c, c.validate()
+}
+
+func (c Config) Choose(ctx context.Context) (string, error) {
+	if c.PinnedAccount != "" {
+		return c.PinnedAccount, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	scores := c.Scores(ctx)
+	// A product of two float64 significands fits in 106 bits.
+	const scorePrecision = 106
+	var best big.Float
+	best.SetPrec(scorePrecision).SetInt64(-1)
+	var choices []string
+	for _, s := range scores {
+		if s.Err != nil || s.Remaining == 0 {
+			continue
+		}
+		var score big.Float
+		score.SetPrec(scorePrecision).SetFloat64(s.Remaining)
+		if s.Remaining > 0 {
+			// Compare exact products of two float64 values. The common
+			// divisor of 100 cannot change their order.
+			score.Mul(&score, big.NewFloat(s.Capacity))
+		}
+		order := score.Cmp(&best)
+		if order > 0 {
+			best.Set(&score)
+			choices = nil
+		}
+		if order >= 0 {
+			choices = append(choices, s.Name)
+		}
+	}
+	if len(choices) == 0 {
+		return "", fmt.Errorf("no matching subscription has available quota; check the account probes or choose a subscription manually")
+	}
+	return choices[rand.IntN(len(choices))], nil
+}
+
+type Quota struct {
+	Tier      string
+	Capacity  float64
+	Name      string
+	Remaining float64
+	Err       error
+}
+
+func (c Config) Scores(ctx context.Context) []Quota {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	pending := make(chan Quota, len(c.Accounts))
+	count := 0
+	for name, a := range c.Accounts {
+		if len(a.Models[c.Model]) == 0 {
+			continue
+		}
+		count++
+		go func() {
+			if d := RemainingBackoff(name); d > 0 {
+				pending <- Quota{Name: name, Err: fmt.Errorf("rate limited; retry in %s", d.Round(time.Second))}
+				return
+			}
+			q := a.inspectQuota(ctx, c.Model)
+			q.Name = name
+			q.Capacity = a.capacity()
+			if a.Capacity == nil {
+				if size := c.Tiers[a.Provider][q.Tier]; q.Tier != "" && size > 0 {
+					q.Capacity = size
+				} else if a.Provider == "claude" {
+					switch q.Tier {
+					case "max_5x":
+						q.Capacity = 5
+					case "max_20x":
+						q.Capacity = 20
+					}
+				}
+			}
+			pending <- q
+		}()
+	}
+	result := make([]Quota, 0, count)
+	for range count {
+		result = append(result, <-pending)
+	}
+	return result
+}
+func (a Account) inspectQuota(ctx context.Context, model string) Quota {
+	if a.Provider == "codex" && len(a.Usage) == 0 && executable(a.Env["CODEX_PATH"], "codex") != "" {
+		data, err := a.codexQuota(ctx)
+		if err != nil {
+			return Quota{Err: err}
+		}
+		remaining, err := codexRemaining(data)
+		return Quota{Remaining: remaining, Err: err, Tier: codexTier(data)}
+	}
+	tier := make(chan string, 1)
+	go func() {
+		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		tier <- a.detectTier(probe)
+	}()
+	q := Quota{Remaining: -1}
+	if len(a.Usage) != 0 {
+		q.Remaining, q.Err = a.probeRemaining(ctx)
+	} else if a.Provider == "claude" {
+		if cli := executable(a.Env["CLAUDE_CODE_EXECUTABLE"], "claude"); cli != "" {
+			q.Remaining, q.Err = a.claudeQuota(ctx, cli, model)
+		}
+	}
+	q.Tier = <-tier
+	return q
+}
+
+func codexTier(data json.RawMessage) string {
+	var status struct{ RateLimits struct{ PlanType string } }
+	if json.Unmarshal(data, &status) != nil {
+		return ""
+	}
+	return status.RateLimits.PlanType
+}
+
+func (a Account) detectTier(ctx context.Context) string {
+	switch a.Provider {
+	case "codex":
+		if executable(a.Env["CODEX_PATH"], "codex") != "" {
+			data, _ := a.codexQuota(ctx)
+			return codexTier(data)
+		}
+	case "claude":
+		if cli := executable(a.Env["CLAUDE_CODE_EXECUTABLE"], "claude"); cli != "" {
+			cmd := a.Command(ctx, []string{cli, "auth", "status", "--json"})
+			cmd.WaitDelay = 200 * time.Millisecond
+			data, err := cmd.Output()
+			var status struct {
+				LoggedIn                               bool
+				AuthMethod, PlanTier, SubscriptionType string
+			}
+			if err == nil && json.Unmarshal(data, &status) == nil && status.LoggedIn && status.AuthMethod == "claude.ai" {
+				if status.PlanTier != "" && status.PlanTier != "other" && status.PlanTier != "unknown" {
+					return status.PlanTier
+				}
+				return status.SubscriptionType
+			}
+		}
+	}
+	return ""
+}
+
+func (a Account) probeRemaining(ctx context.Context) (float64, error) {
+	cmd := a.Command(ctx, a.Usage)
+	cmd.WaitDelay = time.Second
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
+	if err != nil || math.IsNaN(n) || n < 0 || n > 100 {
+		return 0, fmt.Errorf("expected a percentage from 0 to 100")
+	}
+	return n, nil
+}

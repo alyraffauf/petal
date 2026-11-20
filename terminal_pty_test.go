@@ -40,6 +40,16 @@ func runPTYAdapter(t *testing.T) {
 		}
 	}
 	var activePrompt int
+	model := "baseline"
+	modelSettings := func() []any {
+		return []any{map[string]any{
+			"id": "model", "name": "Model", "type": "select", "category": "model", "currentValue": model,
+			"options": []any{
+				map[string]string{"value": "baseline", "name": "Baseline"},
+				map[string]string{"value": "alternate", "name": "Alternate", "description": "Second model"},
+			},
+		}}
+	}
 	for scanner.Scan() {
 		var request struct {
 			ID     int
@@ -47,6 +57,8 @@ func runPTYAdapter(t *testing.T) {
 			Params struct {
 				Prompt    []struct{ Text string }
 				SessionID string
+				ConfigID  string
+				Value     string
 			}
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
@@ -56,10 +68,34 @@ func runPTYAdapter(t *testing.T) {
 		switch request.Method {
 		case "initialize":
 			result["protocolVersion"] = 1
+			result["agentCapabilities"] = map[string]bool{"loadSession": true}
 			result["_meta"] = map[string]any{"steering": map[string]bool{"supported": true}}
 		case "session/new":
+			send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{
+				"sessionUpdate": "available_commands_update", "availableCommands": []any{
+					map[string]any{"name": "status-report", "description": "Inspect status", "input": map[string]string{"hint": "subject"}},
+				},
+			}}})
 			result["sessionId"] = "pty-thread"
+			result["configOptions"] = modelSettings()
+		case "session/set_config_option":
+			if request.Params.SessionID != "pty-thread" || request.Params.ConfigID != "model" || request.Params.Value != "alternate" {
+				t.Fatalf("expected an in-session model change, got %+v", request.Params)
+			}
+			model = request.Params.Value
+			result["configOptions"] = modelSettings()
+		case "session/load":
+			result["configOptions"] = modelSettings()
+			if request.Params.SessionID != "pty-thread" {
+				t.Fatalf("wrong resume ID %q", request.Params.SessionID)
+			}
+			send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "restored transcript"}}}})
 		case "session/prompt":
+			if request.Params.Prompt[0].Text == "/status-report build" {
+				send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "status-command-confirmed"}}}})
+				send(map[string]any{"id": request.ID, "result": map[string]string{"stopReason": "end_turn"}})
+				continue
+			}
 			activePrompt = request.ID
 			if request.Params.Prompt[0].Text != "first line\nsecond line" {
 				t.Fatal("multiline paste changed")
@@ -146,9 +182,31 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	await("fixture")
+	await("Control center")
+	write("\r")
+	await("Choose a model")
 	write("\r")
 	await("Ready")
+	write("/stat")
+	await("Inspect status")
+	write("\r")
+	await("↵ Send")
+	write("build\r")
+	await("status-command-confirmed")
+	write("/model\r")
+	await("Baseline (current)")
+	write("\x1b")
+	await("Ask baseline")
+	write("/model\r")
+	await("Second model")
+	write("Alternate")
+	await("Alternate")
+	write("\r")
+	await("Ask alternate")
+	write("/config\r")
+	await("Model · Alternate")
+	write("\x1b")
+	await("Ask alternate")
 	write("\x1b[200~first line\nsecond line\x1b[201~")
 	await("second line")
 	if err := pty.Setsize(tty, &pty.Winsize{Rows: 14, Cols: 54}); err != nil {
@@ -160,4 +218,21 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	await("steering-confirmed")
 	write("\x1bOR") // xterm F3
 	await("Conversation")
+	write("\x1bOR")
+	write("/sessions\r")
+	await("Conversation turns")
+	write("\x1b")
+	await("Ask alternate")
+	write("/new\r")
+	await("Choose a model")
+	write("\x1bOQ") // F2 opens the control center from the model picker.
+	await("New session")
+	write("/status-report")
+	await("status-report")
+	write("\r")
+	await("Restore alternate")
+	write("1\r")
+	await("Ready")
+	write("\x1b[5~") // Page up past the settings confirmation in the short viewport.
+	await("restored transcript")
 }

@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Run Petal's local regressions and the official v1 kit against reference adapters.
+set -euo pipefail
+pin=7c71c4d1af0994e73bdc100c9f7f6b98f2319cda
+: "${ACP_TCK_DIR:?Set ACP_TCK_DIR to the pinned acp-tck checkout}"
+kit=$(realpath "$ACP_TCK_DIR")
+if [[ $(git -C "$kit" rev-parse HEAD) != "$pin" ]]; then
+  echo "Expected acp-tck $pin in $kit" >&2
+  exit 2
+fi
+root=$(cd "$(dirname "$0")/.." && pwd)
+report=$(realpath -m "${1:-acp-report.json}")
+profile=${2:-full}
+testdir=$(mktemp -d)
+trap 'rm -rf -- "$testdir"' EXIT
+(cd "$root" && CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -o "$testdir/petal" .)
+cd "$kit"
+python=$(uv run --frozen --no-dev python -c 'import sys; print(sys.executable)')
+
+run_profile() {
+  local name=$1 output=$2 fixture work="$testdir/$1"
+  local -a options=()
+  case "$name" in
+    full) fixture=conforming_full
+      options=(--allow-logout --cancel-prompt __hang__ --auth-method '["fixture","tck"]') ;;
+    baseline) fixture=conforming ;;
+    auth) fixture=gated_by_auth
+      options=(--auth-method '["fixture","tck"]') ;;
+    subagents) fixture=exposes_subagent_full
+      options=(--cancel-prompt __hang__) ;;
+    child-cancel) fixture=cancellable_subagent
+      options=(--cancel-prompt __hang__) ;;
+    *) echo "Unknown fixture profile: $name" >&2; return 2 ;;
+  esac
+  mkdir "$work"
+  "$python" - "$kit/tests/fixtures/agents/v1/$fixture.py" > "$work/config.toml" <<'PY'
+import json, sys
+print("[accounts.fixture.models]")
+print("fixture = " + json.dumps([sys.executable, sys.argv[1]], ensure_ascii=False))
+PY
+  uv run --frozen --no-dev acp-tck --protocol-version 1 --timeout 5 --test-timeout 30 \
+    "${options[@]}" --agent-cwd "$work" --report-json "$output" -- \
+    "$testdir/petal" acp fixture --account fixture --config "$work/config.toml"
+}
+
+if [[ $profile != matrix ]]; then
+  run_profile "$profile" "$report"
+  exit
+fi
+profiles=(full baseline auth subagents child-cancel)
+pids=()
+for profile in "${profiles[@]}"; do
+  run_profile "$profile" "${report%.json}-$profile.json" > "${report%.json}-$profile.log" 2>&1 &
+  pids+=("$!")
+done
+failed=0
+for pid in "${pids[@]}"; do
+  wait "$pid" || failed=1
+done
+"$python" - "$report" "$pin" "${profiles[@]}" <<'PY'
+import json, sys
+from pathlib import Path
+
+summary, revision, *profiles = sys.argv[1:]
+reports = {}
+requirements = {}
+for profile in profiles:
+    path = Path(summary.removesuffix(".json") + "-" + profile + ".json")
+    report = json.loads(path.read_text())
+    reports[profile] = path.name
+    for row in report["requirements"]:
+        requirements.setdefault(row["id"], {})[profile] = row["status"]
+
+uncovered = [key for key, results in requirements.items() if "PASS" not in results.values()]
+failures = [key for key, results in requirements.items() if "FAIL" in results.values()]
+Path(summary).write_text(json.dumps(dict(tck_commit=revision, reports=reports,
+    requirements=requirements, uncovered=uncovered, failures=failures), indent=2) + "\n")
+print(f"{len(requirements) - len(uncovered)}/{len(requirements)} requirement IDs passed; {len(failures)} failed")
+if uncovered or failures or not requirements:
+    sys.exit(1)
+PY
+exit "$failed"

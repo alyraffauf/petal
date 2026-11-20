@@ -7,20 +7,23 @@
       src = pkgs.lib.fileset.toSource {
         root = ../..;
         fileset = pkgs.lib.fileset.unions [
-          ../../testdata
+          ../../internal/tui/testdata
           (pkgs.lib.fileset.fileFilter (file:
-            file.hasExt "go" || builtins.elem file.name [ "go.mod" "go.sum" ]
+            file.hasExt "go" || builtins.elem file.name [ "go.mod" "go.sum" "LICENSE" ]
           ) ../..)
         ];
       };
-      vendorHash = "sha256-Qgfvd5mNSW8GmU4X8DgqnR5K1nGCobxV2gazV+HQ6oM=";
-      subPackages = [ "." ];
+      vendorHash = "sha256-fOeoJ/TtJzH6+BHZTm2wHCEwbdkd57CxnHNUO9sAcE4=";
       # The Claude bridge uses the user's installed CLI, discovered at runtime.
       ldflags = [
-        "-X main.bundledCodex=${pkgs.lib.getExe pkgs.codex-acp}"
-        "-X main.bundledClaude=${pkgs.lib.getExe (pkgs.claude-agent-acp.overrideAttrs (_: { postInstall = ""; }))}"
+        "-X petal/internal/routing.bundledCodex=${pkgs.lib.getExe pkgs.codex-acp}"
+        "-X petal/internal/routing.bundledClaude=${pkgs.lib.getExe (pkgs.claude-agent-acp.overrideAttrs (_: { postInstall = ""; }))}"
       ];
       env.CGO_ENABLED = "0";
+      postInstall = ''
+        install -Dm444 LICENSE "$out/share/licenses/petal/LICENSE"
+      '';
+      meta.license = pkgs.lib.licenses.mit;
       meta.mainProgram = "petal";
     };
   };
