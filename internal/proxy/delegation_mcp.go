@@ -29,6 +29,7 @@ const delegationServerName = routing.DelegationMCPServerName
 
 // The bridge encodes runtime results without coupling the wire format to their Go types.
 type delegationTools struct {
+	catalog  func(string) any
 	delegate func(context.Context, string, string, string, string) (any, error)
 	read     func(context.Context, string, string, string, int64) (any, error)
 	wait     func(context.Context, string, string, string, int64, time.Duration) (any, error)
@@ -304,6 +305,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 			response.Result = map[string]any{
 				"protocolVersion": params.ProtocolVersion,
 				"capabilities":    map[string]any{"tools": struct{}{}},
+				"instructions":    "Call petal_capabilities before choosing a child model. Use its exact model ID. Give the child a self-contained task with the context, file scope and output you need. The child shares your working directory and starts with fresh conversation history. Keep childId and follow next on each response.",
 				"serverInfo":      map[string]string{"name": delegationServerName, "version": "1.0.0"},
 			}
 		case req.Method == "ping":
@@ -343,9 +345,10 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 }
 
 const delegationToolList = `{"tools":[
-{"name":"petal_delegate","description":"Start a child agent with the selected model in this session's working directory.","inputSchema":{"type":"object","properties":{"model":{"type":"string","minLength":1},"task":{"type":"string","minLength":1}},"required":["model","task"],"additionalProperties":false}},
-{"name":"petal_read","description":"Read child events after a cursor. Use 0 to start at the beginning.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0}},"required":["child_id"],"additionalProperties":false}},
-{"name":"petal_wait","description":"Wait for new child events or completion. Timeout is in seconds, with a default of 30.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0},"timeout":{"type":"integer","minimum":1,"maximum":60,"default":30}},"required":["child_id"],"additionalProperties":false}}
+{"name":"petal_capabilities","description":"Discover configured child models before delegating. Search by model ID, label or provider if a target is missing. IDs respect the current account pin. Quota is checked at routing time when needed.","inputSchema":{"type":"object","properties":{"search":{"type":"string"}},"additionalProperties":false}},
+{"name":"petal_delegate","description":"Use a model ID from petal_capabilities. Start an independent child in your working directory. Its only prompt is task, so include context, edit scope and expected output. Keep childId and follow next.","inputSchema":{"type":"object","properties":{"model":{"type":"string","minLength":1},"task":{"type":"string","minLength":1}},"required":["model","task"],"additionalProperties":false}},
+{"name":"petal_read","description":"Read available child activity immediately. Start at 0 and pass nextAfter as after on subsequent calls. Follow next.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0}},"required":["child_id"],"additionalProperties":false}},
+{"name":"petal_wait","description":"Wait for activity, a permission request, completion or timeout (default 30 seconds). Follow next. A running child may return an empty page.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0},"timeout":{"type":"integer","minimum":1,"maximum":60,"default":30}},"required":["child_id"],"additionalProperties":false}}
 ]}`
 
 type mcpText struct {
@@ -392,6 +395,14 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 		return decoder.Decode(dest)
 	}
 	switch name {
+	case "petal_capabilities":
+		var args struct{ Search string }
+		if len(arguments) > 0 {
+			if err := decode(&args); err != nil {
+				return nil, err
+			}
+		}
+		return tools.catalog(args.Search), nil
 	case "petal_delegate":
 		var args struct{ Model, Task string }
 		if err := decode(&args); err != nil {

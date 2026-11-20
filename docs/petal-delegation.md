@@ -1,6 +1,6 @@
 # Proposal: Petal delegation over MCP
 
-Petal can expose three tools to a parent agent through a Petal-managed stdio MCP server. The parent chooses a configured model, starts a child in the same project directory, and reads the child's activity and final result. Petal routes the model through its configured accounts, including any account pin.
+Petal can expose four tools to a parent agent through a Petal-managed stdio MCP server. The parent chooses a configured model, starts a child in the same project directory, and reads the child's activity and final result. Petal routes the model through its configured accounts, including any account pin.
 
 ## Enable delegation
 
@@ -16,9 +16,12 @@ Delegation defaults to off. The parent adapter must support stdio MCP servers. P
 
 | Tool | Arguments | Response |
 | --- | --- | --- |
+| `petal_capabilities` | Optional `search` | Configured model IDs, labels and providers for the current account selection. The initial list shows up to 32 models. Search returns all matches. |
 | `petal_delegate` | `model`, `task` | `childId` and `model` after Petal binds the child to the parent and schedules its prompt. |
 | `petal_read` | `child_id`, optional `after` | A page of journal entries after the cursor. |
 | `petal_wait` | `child_id`, optional `after` and `timeout` | The same page as `petal_read`. Waits for new activity, a final result, or the timeout. The timeout is in seconds, defaults to 30, and ranges from 1 to 60. |
+
+Look up a model before delegating. Send its exact ID and a self-contained brief. The child shares the project directory and receives only the task as its prompt. Keep the returned `childId` and follow the `next` instruction in delegate, read and wait responses.
 
 Start with `after: 0`. Read responses contain up to 100 entries in ascending `sequence` order. Each entry has a `kind` and may include JSON `data`. Pass `nextAfter` as the next cursor. When `hasMore` is true, call `petal_read` to drain the remaining entries, even if the response already contains a final result. An empty page keeps the cursor unchanged.
 

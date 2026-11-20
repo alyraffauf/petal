@@ -183,10 +183,15 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			}
 			firstMCP := open(first)
 			secondMCP := open(second)
+			catalog := call(firstMCP, "petal_capabilities", `{"search":"child"}`, false)
+			var found struct{ Models []delegationTarget }
+			if json.Unmarshal([]byte(catalog), &found) != nil || len(found.Models) != 1 || found.Models[0].ID != "child" {
+				t.Fatalf("unexpected targets %s", catalog)
+			}
 			call(firstMCP, "petal_delegate", `{"model":"child","task":"echo","cwd":"/","parent_id":"forged"}`, true)
 			child := call(firstMCP, "petal_delegate", `{"model":"child","task":"echo"}`, false)
-			var handle struct{ ChildID string }
-			if json.Unmarshal([]byte(child), &handle) != nil || handle.ChildID != `["child","child","child"]` {
+			var handle struct{ ChildID, Next string }
+			if json.Unmarshal([]byte(child), &handle) != nil || !strings.Contains(handle.Next, "petal_wait") || handle.ChildID != `["child","child","child"]` {
 				t.Fatalf("unexpected routed child: %s", child)
 			}
 			args := fmt.Sprintf(`{"child_id":%q}`, handle.ChildID)

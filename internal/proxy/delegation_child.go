@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-
+	"strings"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -22,16 +22,80 @@ func (p *proxy) configureDelegation() {
 	runtime := delegation.New(p.lifetime, p.openDelegatedChild, p.requestDelegatedPermission)
 	p.delegationRuntime = runtime
 	p.delegation = &delegationTools{
+		catalog: p.delegationCatalog,
 		delegate: func(ctx context.Context, parent, cwd, model, task string) (any, error) {
-			return runtime.Delegate(ctx, parent, cwd, model, task)
+			child, err := runtime.Delegate(ctx, parent, cwd, model, task)
+			return struct {
+				delegation.Child
+				Next string `json:"next"`
+			}{child, "Continue independent work. When you need the result, call petal_wait with child_id set to childId and after set to 0."}, err
 		},
 		read: func(ctx context.Context, parent, cwd, child string, after int64) (any, error) {
-			return runtime.Read(ctx, parent, cwd, child, after)
+			return childPageResponse(runtime.Read(ctx, parent, cwd, child, after))
 		},
 		wait: func(ctx context.Context, parent, cwd, child string, after int64, timeout time.Duration) (any, error) {
-			return runtime.Wait(ctx, parent, cwd, child, after, timeout)
+			return childPageResponse(runtime.Wait(ctx, parent, cwd, child, after, timeout))
 		},
 	}
+}
+
+type delegationTarget struct {
+	ID        string   `json:"id"`
+	Label     string   `json:"label"`
+	Providers []string `json:"providers"`
+}
+
+func (p *proxy) delegationCatalog(search string) any {
+	targets := []delegationTarget{}
+	omitted := 0
+	search = strings.ToLower(strings.TrimSpace(search))
+	for _, id := range p.Config.ModelNames() {
+		providers := map[string]bool{}
+		for name, account := range p.Accounts {
+			if (p.PinnedAccount == "" || p.PinnedAccount == name) && len(account.Models[id]) > 0 {
+				provider := account.Provider
+				if provider == "" {
+					provider = "custom"
+				}
+				providers[provider] = true
+			}
+		}
+		target := delegationTarget{id, p.Config.ModelLabel(id), slices.Sorted(maps.Keys(providers))}
+		if !strings.Contains(strings.ToLower(strings.Join([]string{id, target.Label, strings.Join(target.Providers, " ")}, " ")), search) {
+			continue
+		}
+		if len(targets) == 32 && search == "" {
+			omitted++
+			continue
+		}
+		targets = append(targets, target)
+	}
+	return struct {
+		Models      []delegationTarget `json:"models"`
+		Omitted     int                `json:"omitted"`
+		ParentModel string             `json:"parentModel"`
+	}{targets, omitted, p.Model}
+}
+
+func childPageResponse(page delegation.Page, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
+	next := "Call petal_wait with the same child_id and after set to nextAfter when you need more activity."
+	switch {
+	case page.HasMore:
+		next = "Call petal_read with after set to nextAfter to read the rest of the journal."
+	case page.Status == "completed":
+		next = "Use result.data.answer as the child's final reply."
+	case page.Result != nil:
+		next = "The child stopped. Inspect result.status and result.data before deciding whether to retry."
+	case page.Status == "needs_input":
+		next = "A child permission request needs the user's decision. Surface it to the user."
+	}
+	return struct {
+		delegation.Page
+		Next string `json:"next"`
+	}{page, next}, nil
 }
 
 type delegatedConnection struct {
@@ -54,7 +118,7 @@ func (p *proxy) openDelegatedChild(ctx context.Context, model string, receive de
 		}
 	}
 	if len(config.Accounts) == 0 {
-		return nil, fmt.Errorf("no configured account offers model %q", model)
+		return nil, fmt.Errorf("no configured account offers model %q; use petal_capabilities to find model IDs", model)
 	}
 	names := slices.Sorted(maps.Keys(config.Accounts))
 	name := names[0]
