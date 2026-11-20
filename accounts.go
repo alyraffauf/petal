@@ -82,6 +82,7 @@ func (a account) command(ctx context.Context, argv []string) *exec.Cmd {
 }
 
 type config struct {
+	BusyInput     string `toml:"busy_input" json:"busy_input"`
 	quiet         bool
 	Accounts      map[string]account
 	Tiers         map[string]map[string]float64
@@ -105,6 +106,9 @@ func readConfig(args []string) (config, error) {
 	}
 	if err != nil {
 		return c, err
+	}
+	if c.BusyInput != "" && c.BusyInput != "steer" && c.BusyInput != "follow_up" {
+		return c, fmt.Errorf("busy_input must be steer or follow_up")
 	}
 	for provider, tiers := range c.Tiers {
 		for tier, size := range tiers {

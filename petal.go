@@ -127,6 +127,8 @@ func petal(v screen) string {
 	switch {
 	case v.Status == "Connection failed":
 		input, action = "Enter retry   Tab subscription", ""
+	case v.busyAction != "" && len(v.commands) == 0:
+		action = " ↵ " + v.busyAction + " "
 	case v.Status == "Connecting" || v.Busy:
 		action = ""
 	case len(v.commands) > 0:
@@ -150,6 +152,9 @@ func petal(v screen) string {
 			hint = " ↑↓ select   Enter run   Esc dismiss "
 		} else if v.Busy {
 			hint = " Pg↑↓ history   F3 read   Esc cancel "
+		}
+		if v.queued > 0 {
+			hint = fmt.Sprintf(" %d pending  ", v.queued) + hint
 		}
 		if v.backlog != nil && v.backlog.browsing {
 			hint = fmt.Sprintf(" ↓ %d lines   Ctrl+End latest ", v.backlog.limit-v.backlog.top)

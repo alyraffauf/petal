@@ -25,11 +25,12 @@ type event struct {
 	chunk          bool
 }
 type harness struct {
-	conn        *acp.Connection
-	events      chan tea.Msg
-	permissions chan struct{}
-	id          string
-	close       func()
+	supportsSteering bool
+	conn             *acp.Connection
+	events           chan tea.Msg
+	permissions      chan struct{}
+	id               string
+	close            func()
 }
 
 func (h *harness) callback(ctx context.Context, method string, raw json.RawMessage) (any, *acp.RequestError) {
@@ -155,6 +156,9 @@ func (h *harness) open(ctx context.Context, c config, cwd string, resume bool) (
 	if err != nil {
 		return "", err
 	}
+	var steering struct{ Supported bool }
+	_ = json.Unmarshal(r["petalSteering"], &steering)
+	h.supportsSteering = steering.Supported
 	if !resume {
 		h.id, err = sessionID(r)
 		if err != nil {

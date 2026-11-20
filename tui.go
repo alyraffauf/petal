@@ -19,6 +19,8 @@ import (
 
 type entry struct{ Role, Text string }
 type screen struct {
+	busyAction                         string
+	queued                             int
 	backlog                            *backlogViewport
 	markdown                           *markdownCache
 	Width, Height, Frame, cursorColumn int
@@ -84,13 +86,18 @@ func nextFrame() tea.Cmd {
 }
 
 type terminal struct {
-	launch        *picker
-	next          *sessionStart
-	tools         map[string]toolEvent
-	reader        anim.Presence
-	readerBacklog backlogViewport
-	animating     bool
-	replay        bool
+	outbox                []string
+	steering, waitForTurn bool
+	lateFinish            *finished
+	permissionDraft       []rune
+	permissionCursor      int
+	launch                *picker
+	next                  *sessionStart
+	tools                 map[string]toolEvent
+	reader                anim.Presence
+	readerBacklog         backlogViewport
+	animating             bool
+	replay                bool
 	screen
 	root          *bloom.Root
 	h             *harness
@@ -191,6 +198,16 @@ func (m *terminal) View() tea.View {
 		return m.launch.View()
 	}
 	v := m.screen
+	if m.Busy && m.ready && m.h != nil {
+		v.busyAction = "Follow up"
+		if m.canSteer() {
+			v.busyAction = "Steer"
+		}
+		if m.ask != nil {
+			v.busyAction = "Choose"
+		}
+		v.queued = len(m.outbox)
+	}
 	v.commands = m.commandMatches()
 	v.commandIndex = min(m.commandIndex, max(0, len(v.commands)-1))
 	v.backlog = &m.chatBacklog
@@ -228,34 +245,26 @@ func (m *terminal) submit() tea.Cmd {
 		m.ask.reply <- i - 1
 		m.ask = nil
 		m.Status = "Working"
-	} else {
-		if m.Busy || !m.ready {
-			return nil
-		}
-		m.Messages = append(m.Messages, entry{"user", text})
-		m.turnStart = len(m.Messages)
-		m.chatBacklog.browsing = false
-		if m.h == nil {
-			m.Messages = append(m.Messages, entry{"system", "Demo session. Launch petal tui MODEL to send this prompt to your agent."})
-		} else {
-			m.Busy = true
-			m.Status = "Working"
-			m.draft = nil
-			m.cursor = 0
-			return func() tea.Msg {
-				result, err := acp.SendRequest[acp.PromptResponse](m.h.conn, m.ctx, "session/prompt", map[string]any{"sessionId": m.h.id, "prompt": []any{map[string]string{"type": "text", "text": text}}})
-				select {
-				case m.h.events <- finished{err, string(result.StopReason)}:
-				case <-m.ctx.Done():
-				}
-				return nil
-			}
-		}
+		m.restorePermissionDraft()
+		return m.deliver()
 	}
-	m.draft = nil
-	m.cursor = 0
-	return nil
+	if !m.ready {
+		return nil
+	}
+	m.draft, m.cursor = nil, 0
+	if m.h == nil {
+		m.Messages = append(m.Messages, entry{"user", text}, entry{"system", "Demo session. Launch petal tui MODEL to send this prompt to your agent."})
+		return nil
+	}
+	m.outbox = append(m.outbox, text)
+	return m.deliver()
 }
+
+func (m *terminal) restorePermissionDraft() {
+	m.draft, m.cursor = m.permissionDraft, m.permissionCursor
+	m.permissionDraft, m.permissionCursor = nil, 0
+}
+
 func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.launch != nil {
 		switch t := msg.(type) {
@@ -314,7 +323,39 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Account = t.account
 			m.Status = "Ready"
 		}
+	case steerResult:
+		m.steering = false
+		text := m.outbox[0]
+		switch {
+		case t.err == nil && t.outcome == "promptRequired":
+			m.waitForTurn = true
+		case t.err == nil && t.outcome == "injected":
+			m.outbox = m.outbox[1:]
+			e := event{role: "user", text: text}
+			m.pending.push(e)
+			m.Messages = append(m.Messages, entry{e.role, e.text})
+		default:
+			m.outbox = m.outbox[1:]
+			note := "Steer delivery unconfirmed"
+			if t.err != nil {
+				note += " · " + terminalError(t.err)
+			} else {
+				note += " · " + t.outcome
+			}
+			m.recordNote(note + "\n\n" + text)
+		}
+		if m.lateFinish != nil {
+			done := *m.lateFinish
+			m.lateFinish = nil
+			return m.Update(done)
+		}
+		cmd = m.deliver()
 	case finished:
+		if m.steering {
+			m.lateFinish = &t
+			return m, ui
+		}
+		m.waitForTurn = false
 		clear(m.tools)
 		cmd = m.listen
 		m.Busy = false
@@ -330,10 +371,12 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ask != nil {
 			m.ask.reply <- -1
 			m.ask = nil
+			m.restorePermissionDraft()
 		}
 		if t.err != nil {
 			m.Messages = append(m.Messages, entry{"system", terminalError(t.err)})
 		}
+		cmd = tea.Batch(cmd, m.deliver())
 	case cancelFailed:
 		m.Status = "Cancellation failed"
 		m.recordNote(terminalError(t.err))
@@ -349,6 +392,8 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t.ask != nil {
 			m.chatBacklog.browsing = false
 			ui = tea.Batch(ui, m.reader.Hide())
+			m.permissionDraft, m.permissionCursor = m.draft, m.cursor
+			m.draft, m.cursor = nil, 0
 			m.ask = t.ask
 			m.Status = "Permission required"
 		}
@@ -454,7 +499,9 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.recordNote("Permission declined.")
 				m.ask.reply <- -1
 				m.ask = nil
+				m.restorePermissionDraft()
 				m.Status = "Working"
+				cmd = m.deliver()
 			} else if m.Busy && m.h == nil {
 				m.replay = false
 				m.pending = turnLog{}

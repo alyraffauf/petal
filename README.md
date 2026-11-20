@@ -34,6 +34,16 @@ Press **Ctrl+R** to replay a sample turn in demo mode.
 
 The transcript is a continuous Markdown conversation. It includes user prompts, completed replies, tool results, permission decisions, and session notes. While the agent works, the TUI buffers text and shows its status. A successful turn publishes the reply in one update. Interrupted turns discard unfinished text. **F3** opens the whole conversation in a scrollable reader. Escape returns to the composer.
 
+### Send a message during a turn
+
+Enter steers the running turn when the adapter advertises ACP steering. If steering is unavailable, Petal queues the message as a follow-up on the same session. To always let the current turn finish first, set this top-level option in `petal/config.toml` before any account tables:
+
+```toml
+busy_input = "follow_up" # default: "steer"
+```
+
+The composer shows the active action. Follow-ups run in submission order. A permission prompt temporarily takes over the composer and restores your draft afterward.
+
 ## Connect an agent
 
 Run `petal` or `petal tui` in the project directory. Type to filter the model list and press **Enter** to start with automatic routing. To pick the subscription yourself, highlight a model, press **Tab**, then select an account. **Ctrl+N** opens the picker for a new thread when the current turn is idle. Escape returns to your draft. Type **/** in the composer to discover commands, filter by name, and press Enter to run the highlighted action. After a connection failure, press **Enter** to retry or **Tab** to choose another subscription for the same model. Retrying a resume attempts to load the same conversation.

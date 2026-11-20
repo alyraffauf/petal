@@ -208,6 +208,14 @@ func (p *proxy) open(ctx context.Context, init json.RawMessage, method string, p
 		public = wrap(native)
 		result["sessionId"] = encoded(public)
 	}
+	// The embedded client learns the capabilities of the selected backend
+	// only after the proxy has routed this session.
+	if p.quiet && hello.Meta["steering"] != nil {
+		if result == nil {
+			result = object{}
+		}
+		result["petalSteering"] = hello.Meta["steering"]
+	}
 	s := &session{name, conn, native, stop}
 	p.mu.Lock()
 	old := p.sessions[public]
