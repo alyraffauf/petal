@@ -433,6 +433,9 @@ func (m *picker) resultRow(i, w int) string {
 			detail := m.usage[label]
 			if detail == "" {
 				detail = "checking quota…"
+				if m.usage != nil {
+					detail = "probe unavailable"
+				}
 			}
 
 			label += "   ·   " + detail
