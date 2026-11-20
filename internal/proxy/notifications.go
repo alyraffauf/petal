@@ -21,6 +21,7 @@ import (
 // before writing to a peer. The SDK still owns cancellation, ordering and replies.
 const notificationPrefix = "\x00petal/notification/"
 const requestPrefix = "\x00petal/request/"
+const wakePrefix = "\x00petal/wake/"
 const v2RequestPrefix = "\x00petal/v2-request/"
 
 type editorRequestID struct{}
@@ -90,6 +91,7 @@ type adapterWire struct {
 	nativeV2    bool
 	conn        *acp.Connection
 	nextRequest atomic.Uint64
+	wakes       sync.Map // wake request token -> guarded submission
 	requests    sync.Map
 	io.Writer
 	ids sync.Map // adapter request ID -> originating editor request ID
@@ -98,7 +100,7 @@ type adapterWire struct {
 func (w *adapterWire) Write(line []byte) (int, error) {
 	w.outputMu.Lock()
 	defer w.outputMu.Unlock()
-	if !bytes.Contains(line, []byte(`\u0000petal/request/`)) && !bytes.Contains(line, []byte(`\u0000petal/v2-request/`)) {
+	if !bytes.Contains(line, []byte(`\u0000petal/wake/`)) && !bytes.Contains(line, []byte(`\u0000petal/request/`)) && !bytes.Contains(line, []byte(`\u0000petal/v2-request/`)) {
 		return w.Writer.Write(line)
 	}
 	var frame Object
@@ -107,6 +109,13 @@ func (w *adapterWire) Write(line []byte) (int, error) {
 	}
 	var method string
 	_ = json.Unmarshal(frame["method"], &method)
+	if token, ok := strings.CutPrefix(method, wakePrefix); ok {
+		pending, ok := w.wakes.Load(token)
+		if !ok {
+			return 0, context.Canceled
+		}
+		return pending.(*wakeSubmission).write(w.Writer, frame, len(line))
+	}
 	name, editorID := untag(method)
 	var request *v2Request
 	if tag, ok := strings.CutPrefix(method, v2RequestPrefix); ok {
