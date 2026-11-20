@@ -52,7 +52,7 @@ func openStore(cwd string) (*sql.DB, error) {
 	if err = file.Close(); err != nil {
 		return nil, err
 	}
-	uri := url.URL{Scheme: "file", Path: path, RawQuery: "_pragma=busy_timeout(5000)&_txlock=immediate"}
+	uri := url.URL{Scheme: "file", Path: path, RawQuery: "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"}
 	db, err := sql.Open("sqlite", uri.String())
 	if err != nil {
 		return nil, err

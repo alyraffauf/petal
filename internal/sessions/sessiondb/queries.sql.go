@@ -10,6 +10,30 @@ import (
 	"strings"
 )
 
+const appendMessage = `-- name: AppendMessage :exec
+INSERT INTO messages (session_id, role, body) VALUES (?, ?, ?)
+`
+
+type AppendMessageParams struct {
+	SessionID string
+	Role      string
+	Body      string
+}
+
+func (q *Queries) AppendMessage(ctx context.Context, arg AppendMessageParams) error {
+	_, err := q.db.ExecContext(ctx, appendMessage, arg.SessionID, arg.Role, arg.Body)
+	return err
+}
+
+const clearTranscript = `-- name: ClearTranscript :exec
+DELETE FROM messages WHERE session_id = ?
+`
+
+func (q *Queries) ClearTranscript(ctx context.Context, sessionID string) error {
+	_, err := q.db.ExecContext(ctx, clearTranscript, sessionID)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE id = ?
 `
@@ -139,4 +163,37 @@ func (q *Queries) PutSession(ctx context.Context, arg PutSessionParams) error {
 		arg.Selections,
 	)
 	return err
+}
+
+const readTranscript = `-- name: ReadTranscript :many
+SELECT rowid, role, body FROM messages WHERE session_id = ? ORDER BY rowid
+`
+
+type ReadTranscriptRow struct {
+	Rowid int64
+	Role  string
+	Body  string
+}
+
+func (q *Queries) ReadTranscript(ctx context.Context, sessionID string) ([]ReadTranscriptRow, error) {
+	rows, err := q.db.QueryContext(ctx, readTranscript, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadTranscriptRow
+	for rows.Next() {
+		var i ReadTranscriptRow
+		if err := rows.Scan(&i.Rowid, &i.Role, &i.Body); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

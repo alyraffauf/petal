@@ -312,13 +312,13 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if t.String() == "ctrl+c" {
 				return m, tea.Quit
 			}
-			if t.String() == "esc" && !m.launch.fromCenter && (!m.launch.history || (!m.launch.center.finding && m.launch.center.graphID == "" && !m.launch.center.inspect && m.launch.search.Value() == "")) && (!m.launch.choosingRoute || m.launch.routeOnly) {
+			if t.String() == "esc" && m.launch.transcripts == nil && !m.launch.fromCenter && (!m.launch.history || (!m.launch.center.finding && m.launch.center.graphID == "" && !m.launch.center.inspect && m.launch.search.Value() == "")) && (!m.launch.choosingRoute || m.launch.routeOnly) {
 				m.launch = nil
 				return m, nil
 			}
 		}
 		switch msg.(type) {
-		case tea.MouseClickMsg, tea.MouseWheelMsg, tea.WindowSizeMsg, tea.KeyPressMsg, tea.PasteMsg, routeBalances, remoteSessions:
+		case tea.MouseClickMsg, tea.MouseWheelMsg, tea.WindowSizeMsg, tea.KeyPressMsg, tea.PasteMsg, routeBalances, remoteSessions, transcriptResults:
 			_, cmd := m.launch.Update(msg)
 			if m.launch == nil {
 				return m, cmd
@@ -382,11 +382,15 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.listen
 	case childAnnouncement:
 		m.agents.update(t.parent, t.update)
+		if m.connection == connected && !m.Busy {
+			m.indexMessages(m.agents.completedEntries(nil), false)
+		}
 		cmd = m.listen
 	case acp.SessionMessage:
 		m.agents.updateMessage(t)
 		if !m.Busy && m.connection == connected {
 			m.agents.publish()
+			m.indexMessages(m.agents.completedEntries(nil), false)
 		}
 		cmd = m.listen
 	case acp.SessionMessageChunk:
@@ -440,6 +444,8 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Messages = m.pending.commit(m.Messages[:m.turnStart])
 			m.connection = connected
 			if m.h != nil {
+				replay := m.agents.completedEntries(slices.Clip(m.Messages[m.turnStart:]))
+				m.indexMessages(replay, m.h.replayed && len(m.Messages) > m.turnStart)
 				m.agentSettings = m.h.initialSettings
 				m.saveSessionInfo()
 			}
@@ -501,6 +507,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t.err != nil {
 			m.Messages = append(m.Messages, entry{"system", terminalError(t.err)})
 		}
+		m.indexMessages(m.agents.completedEntries(slices.Clip(m.Messages[m.turnStart:])), false)
 		cmd = tea.Batch(cmd, m.deliver())
 	case acp.SessionUsageUpdate:
 		m.usage = &t

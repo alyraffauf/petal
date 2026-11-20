@@ -35,6 +35,7 @@ func (m *terminal) deliver() tea.Cmd {
 	}
 	m.outbox = m.outbox[1:]
 	m.Messages = append(m.Messages, entry{"user", message.text})
+	m.indexMessages(m.Messages[len(m.Messages)-1:], false)
 	m.turnStart = len(m.Messages)
 	m.chatBacklog.browsing = false
 	m.Busy = true

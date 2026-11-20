@@ -25,6 +25,7 @@ import (
 
 type balances []routing.Quota
 type picker struct {
+	transcripts                             *transcriptSearch
 	pointerPane, pointerRows, pointerDetail image.Rectangle
 	pointerFirst                            int
 	center                                  controlCenter
@@ -152,6 +153,12 @@ type routeBalances struct {
 }
 
 func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.transcripts != nil {
+		switch msg.(type) {
+		case tea.KeyPressMsg, tea.PasteMsg, tea.MouseWheelMsg, tea.MouseClickMsg, transcriptResults:
+			return m, m.transcriptInput(msg)
+		}
+	}
 	switch t := msg.(type) {
 	case tea.MouseClickMsg:
 		if t.Button != tea.MouseLeft || !image.Pt(t.X, t.Y).In(m.pointerRows) {
@@ -313,6 +320,9 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m *picker) View() tea.View {
+	if m.transcripts != nil {
+		return m.transcriptView()
+	}
 	if m.history {
 		return m.centerView()
 	}

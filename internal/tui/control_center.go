@@ -170,6 +170,10 @@ func (p *picker) selectNode(n controlNode) {
 }
 
 func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
+	if k.String() == "ctrl+f" {
+		p.openTranscriptSearch()
+		return nil
+	}
 	if p.center.graphID != "" {
 		return p.graphKey(k)
 	}
@@ -460,9 +464,9 @@ func (p *picker) centerView() tea.View {
 		}
 		rows = append(rows, row)
 	}
-	hint := "↑↓ Select  ←→ Fold  / Find  Enter Open  ^N New  ⇧Tab Filter  Esc Back"
+	hint := "↑↓ Select  ←→ Fold  ^F Search  / Find  Enter Open  ^N New  ⇧Tab Filter  Esc Back"
 	if p.hasGraph() {
-		hint = "↑↓ Select  ←→ Fold  / Find  Enter Open  Esc Back  ^G Graph  Tab Details"
+		hint = "↑↓ Select  ←→ Fold  ^F Search  / Find  Enter Open  Esc Back  ^G Graph  Tab Details"
 	}
 	if p.center.inspect {
 		hint = " ↑↓ Scroll  Pg↑ Pg↓ Page  Tab Tree  Esc Back"

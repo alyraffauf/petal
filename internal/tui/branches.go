@@ -54,12 +54,14 @@ type childOutput struct {
 }
 
 type agentDetail struct {
+	indexed                               int
 	pending                               turnLog
 	transcript                            []entry
 	id, parent, title, description, state string
 }
 
 type agentMailbox struct {
+	indexed           string
 	id                acp.MessageId
 	sender, recipient acp.SessionId
 	body              strings.Builder

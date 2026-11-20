@@ -53,3 +53,53 @@ func TestConcurrentRecordEditsSurviveReopen(t *testing.T) {
 		t.Fatalf("lost update: %+v, %v", r, err)
 	}
 }
+
+func TestTranscriptSearchFollowsSessionLifecycle(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	project := t.TempDir()
+	for _, account := range []string{"work", "personal"} {
+		if _, err := Create(project, Record{ID: account, Account: account, Model: "codex"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := SaveTranscript(project, account, []Message{{"user", "Measure cache miss frequency"}, {"agent", "Cache hits outnumber misses"}}, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(cwd, account, query string, offset int) []Hit {
+		t.Helper()
+		hits, err := Search(cwd, account, query, offset, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return hits
+	}
+	first := search(project, "work", `"cache miss"`, 0)
+	if len(first) != 1 || first[0].Role != "user" || first[0].Account != "work" {
+		t.Fatal(first)
+	}
+	rows, err := Transcript(project, first[0].Session)
+	if err != nil || len(rows) != 2 || rows[0].Rowid != first[0].Row {
+		t.Fatal(rows, err)
+	}
+	if hits := search(project, "", `"cache miss"`, 1); len(hits) != 1 {
+		t.Fatal(hits)
+	}
+	if hits := search(t.TempDir(), "", "cache", 0); len(hits) != 0 {
+		t.Fatal(hits)
+	}
+	if err := SaveTranscript(project, "work", []Message{{"tool", "Rotated credentials"}}, true); err != nil {
+		t.Fatal(err)
+	}
+	if hits := search(project, "work", "cache", 0); len(hits) != 0 {
+		t.Fatal(hits)
+	}
+	if hits := search(project, "work", "credentials", 0); len(hits) != 1 || hits[0].Role != "tool" {
+		t.Fatal(hits)
+	}
+	if err := Forget(project, "codex", "work"); err != nil {
+		t.Fatal(err)
+	}
+	if hits := search(project, "", "credentials", 0); len(hits) != 0 {
+		t.Fatal(hits)
+	}
+}

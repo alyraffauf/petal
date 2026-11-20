@@ -34,6 +34,7 @@ type event struct {
 	chunk          bool
 }
 type harness struct {
+	replayed             bool
 	activeID             atomic.Pointer[string]
 	promptCaps           acp.PromptCapabilities
 	canDelete, canLogout bool
@@ -374,6 +375,7 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 			method = "session/resume"
 		}
 	}
+	h.replayed = method == "session/load"
 	r, err := acp.SendRequest[proxy.Object](h.conn, ctx, method, p)
 	var authErr *acp.RequestError
 	if errors.As(err, &authErr) && authErr.Code == -32000 {

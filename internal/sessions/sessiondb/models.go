@@ -4,6 +4,17 @@
 
 package sessiondb
 
+type Message struct {
+	Rowid     int64
+	SessionID string
+	Role      string
+	Body      string
+}
+
+type MessageSearch struct {
+	Body string
+}
+
 type Session struct {
 	ID         string
 	Model      string

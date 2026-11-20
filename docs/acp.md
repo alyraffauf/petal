@@ -1,6 +1,6 @@
 # ACP support and verification
 
-Petal speaks ACP v1 over stdio. As an agent, `petal acp` routes editor requests to Claude or Codex and translates session IDs. As a client, the TUI handles prompts, permissions, project files, terminals, elicitation, session controls, and history. Petal stores session IDs, titles, activity, fork relationships, and settings in `$XDG_STATE_HOME/petal/conversations/<project-hash>/index.sqlite`. The adapter stores and replays the transcript.
+Petal speaks ACP v1 over stdio. As an agent, `petal acp` routes editor requests to Claude or Codex and translates session IDs. As a client, the TUI handles prompts, permissions, project files, terminals, elicitation, session controls, and history. Petal stores session IDs, titles, activity, fork relationships, and settings in `$XDG_STATE_HOME/petal/conversations/<project-hash>/index.sqlite`. The TUI also stores message text and its SQLite FTS5 index there. Search covers messages Petal has recorded locally, including tool output. Opening a session that supports ACP history replay indexes the replayed messages. Deleting a session removes its local messages and search entries.
 
 ## Capability negotiation
 

@@ -73,6 +73,7 @@ func (m *terminal) commandMatches() []chatCommand {
 	if m.notice != nil {
 		add("/dismiss", "Dismiss the current agent notice")
 	}
+	add("/search", "Search project transcripts")
 	add("/history", "Read the conversation")
 	add("/quit", "Exit Petal")
 	for _, c := range m.agentCommands {
@@ -155,6 +156,10 @@ func (m *terminal) runCommand(command chatCommand) tea.Cmd {
 		m.notice = nil
 	case "/usage":
 		m.recordNote(usageDetails(m.usage))
+	case "/search":
+		cmd := m.browseSessions()
+		m.launch.openTranscriptSearch()
+		return cmd
 	case "/history":
 		m.readerBacklog.browsing = false
 		m.reading = true
