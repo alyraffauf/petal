@@ -6,6 +6,8 @@ Run `petal` in your project directory. Select **new session** to choose a model,
 
 Send a prompt to start the turn. Petal displays the completed reply in the transcript. If you send another message while the agent works, Petal steers the turn when the adapter supports it. Otherwise, Petal queues a follow-up. Press **Escape** to cancel a running turn. Type `/` for commands from Petal and the agent.
 
+![Slash commands above the composer, with the selected command and its Run action](screenshots/commands.png)
+
 ## Find a conversation or message
 
 Press **F2** or type `/sessions` to open the control center. Type to filter threads by title, model, or account. Press **Shift+Tab** to filter by status. To select your most recent saved thread at startup, run `petal --resume`. Petal keeps each thread's unsent draft until you exit.

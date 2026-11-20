@@ -171,6 +171,13 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	menuHeading := 0
 	if len(v.commands) > 1 && h-header-footer-menuHeight >= 3 && w >= 32 {
 		menuHeading = 1
+		if h >= 22 {
+			menuHeading++
+		}
+	}
+	menuGap := 0
+	if menuHeight > 0 && paddedInput {
+		menuGap = 1
 	}
 	model := v.Model
 	if v.activeModel != "" {
@@ -203,7 +210,7 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	room := max(1, w-aw-4)
 	inputHeight := 1
 	if v.editor != nil && v.connection != connectionFailed {
-		limit := max(1, min(4, h-header-footer-menuHeight-menuHeading, h/4))
+		limit := max(1, min(4, h-header-footer-menuHeight-menuHeading-menuGap, h/4))
 		if v.editor.Width() != room || v.editor.MaxHeight != limit {
 			v.editor.MaxHeight = limit
 			v.editor.SetWidth(room)
@@ -215,7 +222,7 @@ func renderChat(v screen, hits *chatHitTargets) string {
 			inputHeight = v.editor.Height()
 		}
 	}
-	available := h - header - footer - menuHeight - menuHeading - (inputHeight - 1)
+	available := h - header - footer - menuHeight - menuHeading - menuGap - (inputHeight - 1)
 	gap := min(2, max(0, available-1), h/8)
 	body := transcript(v, col, available-gap)
 	previous := ""
@@ -223,12 +230,15 @@ func renderChat(v screen, hits *chatHitTargets) string {
 		rows = append(rows, transcriptRow(line, line.Role != previous, w, gutter, v.background))
 		previous = line.Role
 	}
-	for len(rows) < h-footer-menuHeight-menuHeading-(inputHeight-1) {
+	for len(rows) < h-footer-menuHeight-menuHeading-menuGap-(inputHeight-1) {
 		rows = append(rows, richBand("", w, petalText, v.background, false))
 	}
 	hits.actionKind = action
 	if menuHeight > 0 {
 		rows = appendCommandMenu(rows, v, hits, menuHeight, menuHeading > 0)
+		if menuGap > 0 {
+			rows = append(rows, richBand("", w, petalText, v.background, false))
+		}
 	}
 	if paddedInput {
 		rows = append(rows, richBand("", w, petalText, petalSurface, false))
