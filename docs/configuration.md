@@ -116,3 +116,22 @@ With the Petal flake in `inputs.petal`, add this module:
 ```
 
 Home Manager merges declared settings into the writable TOML file on activation. A declared accounts or tiers list replaces that entire list in the file. Set `programs.petal.mutableSettings = false` for a store-backed file. Keep credentials in the provider's profile.
+
+### Use shared Home Manager MCP servers
+
+Enable the integration to use the same stdio servers in Petal and other Home Manager programs.
+
+```nix
+{
+  programs.mcp.enable = true;
+  programs.mcp.servers.project-tools = {
+    command = "/opt/project-tools/bin/mcp-server";
+    args = [ "--stdio" ];
+  };
+
+  programs.petal.enable = true;
+  programs.petal.enableMcpIntegration = true;
+}
+```
+
+Petal imports enabled local servers. It skips disabled servers and remote URL definitions. An entry in `programs.petal.settings.mcp_servers` overrides a shared server with the same name. Home Manager reads file-backed environment variables when the adapter starts the server. With mutable settings, activation replaces the MCP server list with the declared entries while the integration is enabled.

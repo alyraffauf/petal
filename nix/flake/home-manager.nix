@@ -14,8 +14,11 @@
           home.username = "petal-test";
           home.homeDirectory = if pkgs.stdenv.hostPlatform.isDarwin then "/Users/petal-test" else "/home/petal-test";
           home.stateVersion = "26.05";
+          programs.mcp.enable = true;
+          programs.mcp.servers.test.command = "test-mcp";
           programs.petal = {
             enable = true;
+            enableMcpIntegration = true;
             settings.accounts = [ { name = "test"; usage = [ "test-quota" ]; } ];
           };
         }
