@@ -131,10 +131,12 @@ func TestConfiguredHomesReachProviderCommands(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("PATH", dir)
-	const profiles = `[accounts.work]
+	const profiles = `[[accounts]]
+name = "work"
 provider = "claude"
 home = "~/.claude-work"
-[accounts.personal]
+[[accounts]]
+name = "personal"
 provider = "codex"
 home = "profiles/codex"
 `
@@ -162,11 +164,15 @@ func TestConfigPreservesProviderKeys(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
 	for ext, data := range map[string]string{
-		".toml": `[accounts.Work.env]
-MODE_SWITCH="enabled"
-[accounts.Work.models]
-"Vendor/Model-V2"=["agent"]`,
-		".json": `{"accounts":{"Work":{"env":{"MODE_SWITCH":"enabled"},"models":{"Vendor/Model-V2":["agent"]}}}}`,
+		".toml": `[[accounts]]
+name="Work"
+[[accounts.env]]
+name="MODE_SWITCH"
+value="enabled"
+[[accounts.models]]
+id="Vendor/Model-V2"
+command=["agent"]`,
+		".json": `{"accounts":[{"name":"Work","env":[{"name":"MODE_SWITCH","value":"enabled"}],"models":[{"id":"Vendor/Model-V2","command":["agent"]}]}]}`,
 	} {
 		path := filepath.Join(dir, "profile"+ext)
 		if err := os.WriteFile(path, []byte(data), 0600); err != nil {

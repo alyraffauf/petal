@@ -35,8 +35,8 @@ run_profile() {
   mkdir "$work"
   "$python" - "$kit/tests/fixtures/agents/v1/$fixture.py" > "$work/config.toml" <<'PY'
 import json, sys
-print("[accounts.fixture.models]")
-print("fixture = " + json.dumps([sys.executable, sys.argv[1]], ensure_ascii=False))
+print("[[accounts]]\nname = 'fixture'\n[[accounts.models]]\nid = 'fixture'")
+print("command = " + json.dumps([sys.executable, sys.argv[1]], ensure_ascii=False))
 PY
   uv run --frozen --no-dev acp-tck --protocol-version 1 --timeout 5 --test-timeout 30 \
     "${options[@]}" --agent-cwd "$work" --report-json "$output" -- \

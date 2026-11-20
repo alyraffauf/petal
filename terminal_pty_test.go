@@ -132,7 +132,7 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "config.toml")
-	config := fmt.Sprintf("[accounts.local.env]\nPETAL_PTY_ROLE='adapter'\n[accounts.local.models]\nfixture=[%q, '-test.run=^TestPTYChild$']\n", exe)
+	config := fmt.Sprintf("[[accounts]]\nname='local'\n[[accounts.env]]\nname='PETAL_PTY_ROLE'\nvalue='adapter'\n[[accounts.models]]\nid='fixture'\ncommand=[%q, '-test.run=^TestPTYChild$']\n", exe)
 	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 func TestACPCLIRejectsUnrunnableDefaultAccount(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(configPath, []byte("[accounts.local.models]\nfixture=['unused']\n"), 0600); err != nil {
+	if err := os.WriteFile(configPath, []byte("[[accounts]]\nname='local'\n[[accounts.models]]\nid='fixture'\ncommand=['unused']\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	exe, err := os.Executable()

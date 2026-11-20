@@ -15,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pelletier/go-toml/v2"
-
 	"petal/internal/paths"
 )
 
@@ -105,22 +103,9 @@ func Load(path, model, accountName string) (Config, error) {
 		}
 		path = defaultPath
 	}
-	data, err := os.ReadFile(path)
-	switch {
-	case optional && errors.Is(err, os.ErrNotExist):
-		// Discovery also runs without a configuration file.
-	case err != nil:
-		return c, err
-	default:
-		// Decode provider model IDs and environment keys with their original case.
-		if filepath.Ext(path) == ".json" {
-			err = json.Unmarshal(data, &c)
-		} else {
-			err = toml.Unmarshal(data, &c)
-		}
-		if err != nil {
-			return c, fmt.Errorf("%s: %w", path, err)
-		}
+	err := c.readSettings(path)
+	if err != nil && !(optional && errors.Is(err, os.ErrNotExist)) {
+		return c, fmt.Errorf("%s: %w", path, err)
 	}
 	if c.BusyInput != "" && c.BusyInput != "steer" && c.BusyInput != "follow_up" {
 		return c, fmt.Errorf("busy_input must be steer or follow_up")

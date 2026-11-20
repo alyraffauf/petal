@@ -16,7 +16,7 @@
           home.stateVersion = "26.05";
           programs.petal = {
             enable = true;
-            settings.accounts.test.usage = [ "test-quota" ];
+            settings.accounts = [ { name = "test"; usage = [ "test-quota" ]; } ];
           };
         }
       ];
