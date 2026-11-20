@@ -103,3 +103,27 @@ func TestTranscriptSearchFollowsSessionLifecycle(t *testing.T) {
 		t.Fatal(hits)
 	}
 }
+
+func TestUpdateRejectsTimestampOutsideStorageRange(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	project := t.TempDir()
+	original := Record{ID: "thread", Model: "m", Opened: time.Unix(10, 0)}
+	if _, err := Create(project, original); err != nil {
+		t.Fatal(err)
+	}
+	// This valid RFC3339 time rolls over to the year 10000 in UTC.
+	stamp, err := time.Parse(time.RFC3339, "9999-12-31T23:30:00-01:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Update(project, original.ID, func(record *Record) bool {
+		record.Updated = stamp
+		return true
+	}); err == nil {
+		t.Error("saved a timestamp that the store cannot read")
+	}
+	got, err := Lookup(project, original.ID)
+	if err != nil || got.ID != original.ID || !got.Opened.Equal(original.Opened) || !got.Updated.IsZero() {
+		t.Fatalf("failed edit changed the stored record: %+v, %v", got, err)
+	}
+}

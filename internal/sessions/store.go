@@ -43,11 +43,15 @@ func key(s string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(s))) }
 // Fixed-width UTC timestamps preserve chronological order in a SQLite TEXT index.
 const timestampLayout = "2006-01-02T15:04:05.000000000Z"
 
-func timestamp(t time.Time) string {
+func timestamp(t time.Time) (string, error) {
 	if t.IsZero() {
-		return ""
+		return "", nil
 	}
-	return t.UTC().Format(timestampLayout)
+	utc := t.UTC()
+	if year := utc.Year(); year < 0 || year > 9999 {
+		return "", fmt.Errorf("session timestamp year %d is outside the storage range", year)
+	}
+	return utc.Format(timestampLayout), nil
 }
 func parseTime(value string) (time.Time, error) {
 	if value == "" {
@@ -71,11 +75,19 @@ func decode(row sessiondb.Session) (Record, error) {
 }
 
 func put(ctx context.Context, q *sessiondb.Queries, r Record) error {
+	opened, err := timestamp(r.Opened)
+	if err != nil {
+		return err
+	}
+	updated, err := timestamp(r.Updated)
+	if err != nil {
+		return err
+	}
 	selections, err := json.Marshal(r.Selections)
 	if err != nil {
 		return err
 	}
-	return q.PutSession(ctx, sessiondb.PutSessionParams{ID: r.ID, Parent: r.Parent, Title: r.Title, Model: r.Model, Account: r.Account, Opened: timestamp(r.Opened), Updated: timestamp(r.Updated), Selections: string(selections)})
+	return q.PutSession(ctx, sessiondb.PutSessionParams{ID: r.ID, Parent: r.Parent, Title: r.Title, Model: r.Model, Account: r.Account, Opened: opened, Updated: updated, Selections: string(selections)})
 }
 
 func Lookup(cwd, id string) (Record, error) {
