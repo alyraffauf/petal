@@ -13,6 +13,9 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 )
 
+// Leave room for JSON-RPC metadata within the SDK's 10 MiB frame limit.
+const acpPayloadBudget = 9 << 20
+
 func (h *Host) readText(ctx context.Context, path string, p acp.ReadTextFileRequest) (any, error) {
 	start := int64(1)
 	if p.Line != nil {
@@ -41,7 +44,6 @@ func (h *Host) readText(ctx context.Context, path string, p acp.ReadTextFileRequ
 	}
 	// Return a protocol error while the connection can still carry it. The
 	// SDK's 10 MiB limit applies to the encoded frame, including JSON escapes.
-	const budget = 9 << 20
 	tooLarge := func() error {
 		return acp.NewInvalidParams("read exceeds the ACP frame budget; request a smaller line range")
 	}
@@ -53,7 +55,7 @@ func (h *Host) readText(ctx context.Context, path string, p acp.ReadTextFileRequ
 		}
 		chunk, err := r.ReadSlice('\n')
 		if line >= start {
-			if content.Len()+len(chunk) > budget {
+			if content.Len()+len(chunk) > acpPayloadBudget {
 				return nil, tooLarge()
 			}
 			content.Write(chunk)
@@ -70,12 +72,12 @@ func (h *Host) readText(ctx context.Context, path string, p acp.ReadTextFileRequ
 	}
 done:
 	value := content.String()
-	if len(value) > budget/6 {
+	if len(value) > acpPayloadBudget/6 {
 		wire, err := json.Marshal(value)
 		if err != nil {
 			return nil, err
 		}
-		if len(wire) > budget {
+		if len(wire) > acpPayloadBudget {
 			return nil, tooLarge()
 		}
 	}

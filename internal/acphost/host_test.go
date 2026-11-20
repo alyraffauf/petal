@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +103,163 @@ func TestKillRetainsTerminalUntilRelease(t *testing.T) {
 		t.Fatalf("expected signal exit, got %+v", status)
 	}
 	if _, err := h.Call(ctx, "terminal/release", params); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCanceledApprovalPreventsWorkspaceMutation(t *testing.T) {
+	for _, method := range []string{"fs/write_text_file", "terminal/create"} {
+		t.Run(method, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			dir := t.TempDir()
+			approved := false
+			h, err := Open(t.Context(), dir, func(context.Context, string) error {
+				approved = true
+				cancel()
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+
+			params := map[string]any{"path": filepath.Join(dir, "created", "file"), "content": "content", "command": "mkdir", "args": []string{"created"}}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.Call(ctx, method, raw); !errors.Is(err, context.Canceled) || !approved {
+				t.Fatalf("expected cancellation after approval, got %v (approved %v)", err, approved)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "created")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("canceled request touched workspace: %v", err)
+			}
+		})
+	}
+}
+
+func TestTerminalOutputFitsACPFrame(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	h, err := Open(ctx, t.TempDir(), func(context.Context, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+
+	created, err := h.Call(ctx, "terminal/create", json.RawMessage(`{"sessionId":"s","command":"head","args":["-c","2097152","/dev/zero"],"outputByteLimit":9223372036854775807}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, err := json.Marshal(map[string]any{"sessionId": "s", "terminalId": created.(acp.CreateTerminalResponse).TerminalId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Call(ctx, "terminal/wait_for_exit", params); err != nil {
+		t.Fatal(err)
+	}
+	result, err := h.Call(ctx, "terminal/output", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := result.(acp.TerminalOutputResponse)
+	if !out.Truncated || len(out.Output) < 1<<20 || strings.Trim(out.Output, "\x00") != "" ||
+		out.ExitStatus == nil || out.ExitStatus.ExitCode == nil || *out.ExitStatus.ExitCode != 0 {
+		t.Fatalf("unexpected output: %d bytes, truncated %v, exit %+v", len(out.Output), out.Truncated, out.ExitStatus)
+	}
+	frame, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frame)+1 >= 10<<20 {
+		t.Fatalf("encoded terminal response exceeds the SDK frame limit: %d bytes", len(frame))
+	}
+}
+
+func TestTerminalExitWithInheritedOutput(t *testing.T) {
+	for _, cleanup := range []string{"release", "close"} {
+		t.Run(cleanup, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			// The helper inherits the terminal's pipes and keeps this extra
+			// connection open so the test can observe its death without PID polling.
+			listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			deadline, _ := ctx.Deadline()
+			if err := listener.SetDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			h, err := Open(ctx, t.TempDir(), func(context.Context, string) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+			exe, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(map[string]any{
+				"sessionId": "s", "command": "sh",
+				"args": []string{"-c", `"$1" -test.run='^TestTerminalOutputHelper$' & printf out; printf err >&2; exit 7`, "sh", exe},
+				"env":  []acp.EnvVariable{{Name: "ACPHOST_TEST_HELPER_ADDR", Value: listener.Addr().String()}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := h.Call(ctx, "terminal/create", raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := created.(acp.CreateTerminalResponse).TerminalId
+			conn, err := listener.AcceptTCP()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if err := conn.SetDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			params, err := json.Marshal(map[string]any{"sessionId": "s", "terminalId": id})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.Call(ctx, "terminal/wait_for_exit", params); err != nil {
+				t.Fatal(err)
+			}
+			view := h.OutputView("s", string(id))
+			if out := view(); out.Output != "outerr" || out.ExitStatus == nil ||
+				out.ExitStatus.ExitCode == nil || *out.ExitStatus.ExitCode != 7 || out.ExitStatus.Signal != nil {
+				t.Fatalf("unexpected terminal output: %+v", out)
+			}
+			if cleanup == "release" {
+				if _, err := h.Call(ctx, "terminal/release", params); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				h.Close()
+			}
+			if n, err := conn.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
+				t.Fatalf("%s did not stop the helper: read %d bytes, %v", cleanup, n, err)
+			}
+		})
+	}
+}
+
+func TestTerminalOutputHelper(t *testing.T) {
+	addr := os.Getenv("ACPHOST_TEST_HELPER_ADDR")
+	if addr == "" {
+		return
+	}
+	conn, err := net.Dial("tcp4", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := io.Copy(io.Discard, conn); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -37,7 +38,13 @@ func Open(ctx context.Context, cwd string, approve func(context.Context, string)
 	return &Host{root: root, ctx: ctx, cancel: cancel, approve: approve, terminals: map[string]*terminal{}}, nil
 }
 func (h *Host) Close() {
+	h.mu.Lock()
+	for id, t := range h.terminals {
+		_ = t.stop()
+		delete(h.terminals, id)
+	}
 	h.cancel()
+	h.mu.Unlock()
 	h.root.Close()
 }
 func (h *Host) path(path string) (string, error) {
@@ -75,6 +82,9 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 		if err = h.approve(ctx, "Write "+p.Path); err != nil {
 			return nil, err
 		}
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err = h.root.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return nil, err
 		}
@@ -100,6 +110,9 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 			if limit < 0 {
 				return nil, acp.NewInvalidParams("invalid output limit")
 			}
+			// A raw byte can expand to six bytes in JSON. Leave room for
+			// the response and JSON-RPC envelope inside the SDK frame.
+			limit = min(limit, acpPayloadBudget/6)
 		}
 		argv, _ := json.Marshal(append([]string{p.Command}, p.Args...))
 		action := fmt.Sprintf("Run %s in %s", argv, dir)
@@ -108,6 +121,9 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 			action += "\n\nEnvironment overrides: " + string(overrides)
 		}
 		if err := h.approve(ctx, action); err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if p.Cwd != nil {
@@ -128,18 +144,23 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 			cmd.Env = append(cmd.Env, e.Name+"="+e.Value)
 		}
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+		// Descendants can keep the output pipe open after the command exits.
+		cmd.WaitDelay = time.Second
 		t := &terminal{cmd: cmd, session: string(p.SessionId), limit: limit, done: make(chan struct{})}
+		cmd.Cancel = t.stop
 		cmd.Stdout = t
 		cmd.Stderr = t
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
-		h.mu.Lock()
 		h.next++
 		id := strconv.Itoa(h.next)
 		h.terminals[id] = t
-		h.mu.Unlock()
 		go t.wait()
 		return acp.CreateTerminalResponse{TerminalId: acp.TerminalId(id)}, nil
 	case "terminal/output", "terminal/wait_for_exit", "terminal/kill", "terminal/release":
@@ -154,7 +175,12 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 			return nil, acp.NewRequestError(-32002, "Terminal not found", nil)
 		}
 		if method == "terminal/release" {
-			delete(h.terminals, p.TerminalID)
+			err := t.stop()
+			if err == nil {
+				delete(h.terminals, p.TerminalID)
+			}
+			h.mu.Unlock()
+			return struct{}{}, err
 		}
 		h.mu.Unlock()
 		switch method {
@@ -173,11 +199,7 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 				return struct{}{}, nil
 			default:
 			}
-			err := t.cmd.Cancel()
-			if errors.Is(err, syscall.ESRCH) {
-				err = nil
-			}
-			return struct{}{}, err
+			return struct{}{}, t.stop()
 		}
 	}
 	return nil, acp.NewMethodNotFound(method)
@@ -207,11 +229,26 @@ type terminal struct {
 	session   string
 	limit     int64
 	done      chan struct{}
+	groupMu   sync.Mutex
+	groupDone bool
 	mu        sync.Mutex
 	buf       []byte
 	start     int
 	truncated bool
 	exit      *acp.TerminalExitStatus
+}
+
+func (t *terminal) stop() error {
+	t.groupMu.Lock()
+	defer t.groupMu.Unlock()
+	if t.groupDone {
+		return nil
+	}
+	if err := syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	t.groupDone = true
+	return nil
 }
 
 func (t *terminal) Write(data []byte) (int, error) {
@@ -253,6 +290,12 @@ func (t *terminal) output() string {
 }
 func (t *terminal) wait() {
 	_ = t.cmd.Wait()
+	// Once the group is gone, never signal this numeric ID again.
+	t.groupMu.Lock()
+	if !t.groupDone && errors.Is(syscall.Kill(-t.cmd.Process.Pid, 0), syscall.ESRCH) {
+		t.groupDone = true
+	}
+	t.groupMu.Unlock()
 	status := &acp.TerminalExitStatus{}
 	if s, ok := t.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && s.Signaled() {
 		signal := s.Signal().String()
