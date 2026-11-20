@@ -36,6 +36,8 @@ type delegationTools struct {
 }
 
 type delegationEndpoint struct {
+	ctx    context.Context
+	wakes  wakeQueue
 	cancel context.CancelFunc
 	ready  chan struct{}
 	parent string // published by closing ready
@@ -61,7 +63,7 @@ func newDelegationEndpoint(lifetime context.Context, cwd string, tools delegatio
 	ctx, cancel := context.WithCancel(lifetime)
 	token := rand.Text()
 	endpoint := &delegationEndpoint{
-		cancel: cancel, ready: make(chan struct{}), cwd: cwd,
+		ctx: ctx, cancel: cancel, ready: make(chan struct{}), cwd: cwd,
 		server: routing.MCPServer{Name: delegationServerName, Command: command, Args: []string{"delegation-mcp", socket}, Env: []routing.MCPEnvVariable{{Name: delegationTokenEnv, Value: token}}},
 	}
 	context.AfterFunc(ctx, func() {
@@ -217,6 +219,9 @@ func (p *proxy) handleDelegationLifecycle(method, parent string) {
 	p.delegationMu.Lock()
 	cwd := p.delegationCwds[parent]
 	p.delegationMu.Unlock()
+	if endpoint := p.endpoint(parent); endpoint != nil {
+		endpoint.wakes.interrupt(true)
+	}
 	p.delegationRuntime.CancelParent(parent, cwd)
 }
 
@@ -305,7 +310,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 			response.Result = map[string]any{
 				"protocolVersion": params.ProtocolVersion,
 				"capabilities":    map[string]any{"tools": struct{}{}},
-				"instructions":    "Call petal_capabilities before choosing a child model. Use its exact model ID. Give the child a self-contained task with the context, file scope and output you need. The child shares your working directory and starts with fresh conversation history. Keep childId and follow next on each response.",
+				"instructions":    "Call petal_capabilities before choosing a child model. Use its exact model ID. Give the child a self-contained task with the context, file scope and output you need. The child shares your working directory and starts with fresh conversation history. Keep childId. Finish your turn when you have no independent work. Petal wakes the connected parent for unread child results. Follow next on each response.",
 				"serverInfo":      map[string]string{"name": delegationServerName, "version": "1.0.0"},
 			}
 		case req.Method == "ping":

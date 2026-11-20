@@ -71,7 +71,28 @@ func TestDelegationAdapterFixture(t *testing.T) {
 		case "session/close":
 			reply(Object{})
 		case "session/prompt":
-			if role != "child" || stringField(params, "sessionId") != "child" {
+			if role == "parent" {
+				native := stringField(params, "sessionId")
+				var prompt []struct{ Text string }
+				if err := json.Unmarshal(params["prompt"], &prompt); err != nil || native != "parent-1" || len(prompt) != 1 {
+					t.Fatalf("invalid parent prompt %s", params["prompt"])
+				}
+				if prompt[0].Text != "finish independent work" {
+					wantID, _ := json.Marshal(`["child","child","child"]`)
+					if !strings.Contains(prompt[0].Text, string(wantID)) || !strings.Contains(prompt[0].Text, "petal_read") {
+						t.Fatal("missing child completion context")
+					}
+					write(Object{"jsonrpc": encoded("2.0"), "method": encoded("session/update"), "params": jsonValue(Object{"sessionId": encoded(native), "update": json.RawMessage(`{"sessionUpdate":"agent_message_chunk","messageId":"response","content":{"type":"text","text":"parent resumed"}}`)})})
+				}
+				if version == 2 {
+					reply(json.RawMessage(`{"messageId":"inserted"}`))
+					write(Object{"jsonrpc": encoded("2.0"), "method": encoded("session/update"), "params": jsonValue(Object{"sessionId": encoded(native), "update": json.RawMessage(`{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn"}`)})})
+				} else {
+					reply(json.RawMessage(`{"stopReason":"end_turn"}`))
+				}
+				continue
+			}
+			if stringField(params, "sessionId") != "child" {
 				t.Fatalf("wrong child prompt target: %s", jsonValue(params))
 			}
 			var prompt []Object
@@ -196,7 +217,23 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			}
 			args := fmt.Sprintf(`{"child_id":%q}`, handle.ChildID)
 			call(secondMCP, "petal_read", args, true)
-			if page := call(firstMCP, "petal_wait", args, false); !strings.Contains(page, "receipt: echo") {
+			editor.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":%q,"prompt":[{"type":"text","text":"finish independent work"}]}}`, parent))
+			// Neither parent calls read/wait before the continuation. Observe its
+			// response through the same editor connection as the original turn.
+			for {
+				frame := editor.read()
+				if frame["error"] != nil {
+					t.Fatalf("parent turn failed: %s", frame["error"])
+				}
+				params := frame.member("params")
+				if stringField(params.member("update").member("content"), "text") == "parent resumed" {
+					if stringField(params, "sessionId") != parent {
+						t.Fatal("woke wrong parent")
+					}
+					break
+				}
+			}
+			if page := call(firstMCP, "petal_read", args, false); !strings.Contains(page, "receipt: echo") {
 				t.Fatalf("child output missing: %s", page)
 			}
 			newEditor := connectWireTest(t, config)

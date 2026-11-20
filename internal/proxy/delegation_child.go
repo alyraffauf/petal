@@ -24,17 +24,37 @@ func (p *proxy) configureDelegation() {
 	p.delegation = &delegationTools{
 		catalog: p.delegationCatalog,
 		delegate: func(ctx context.Context, parent, cwd, model, task string) (any, error) {
+			endpoint := p.endpoint(parent)
+			if endpoint == nil || endpoint.cwd != cwd {
+				return nil, fmt.Errorf("parent session is no longer connected")
+			}
 			child, err := runtime.Delegate(ctx, parent, cwd, model, task)
+			if err != nil {
+				return nil, err
+			}
+			endpoint.track(child)
 			return struct {
 				delegation.Child
 				Next string `json:"next"`
-			}{child, "Continue independent work. When you need the result, call petal_wait with child_id set to childId and after set to 0."}, err
+			}{child, "Continue independent work or finish your turn. Petal will prompt this connected session when the child finishes. Use petal_read or petal_wait if you need activity sooner."}, err
 		},
 		read: func(ctx context.Context, parent, cwd, child string, after int64) (any, error) {
-			return childPageResponse(runtime.Read(ctx, parent, cwd, child, after))
+			page, err := runtime.Read(ctx, parent, cwd, child, after)
+			if err == nil && page.Result != nil {
+				if e := p.endpoint(parent); e != nil {
+					e.wakes.forget(child)
+				}
+			}
+			return childPageResponse(page, err)
 		},
 		wait: func(ctx context.Context, parent, cwd, child string, after int64, timeout time.Duration) (any, error) {
-			return childPageResponse(runtime.Wait(ctx, parent, cwd, child, after, timeout))
+			page, err := runtime.Wait(ctx, parent, cwd, child, after, timeout)
+			if err == nil && page.Result != nil {
+				if e := p.endpoint(parent); e != nil {
+					e.wakes.forget(child)
+				}
+			}
+			return childPageResponse(page, err)
 		},
 	}
 }

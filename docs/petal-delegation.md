@@ -23,6 +23,8 @@ Delegation defaults to off. The parent adapter must support stdio MCP servers. P
 
 Look up a model before delegating. Send its exact ID and a self-contained brief. The child shares the project directory and receives only the task as its prompt. Keep the returned `childId` and follow the `next` instruction in delegate, read and wait responses.
 
+When the parent finishes its turn, Petal sends a follow-up prompt as soon as a child result is ready. The prompt identifies the child and asks the parent to read its result. If a read or wait already returned the final result, Petal skips the wake-up. This runs on the live parent connection. After disconnecting, reopen the parent and read the stored result. Cancelling the parent clears pending wake-ups.
+
 Start with `after: 0`. Read responses contain up to 100 entries in ascending `sequence` order. Each entry has a `kind` and may include JSON `data`. Pass `nextAfter` as the next cursor. When `hasMore` is true, call `petal_read` to drain the remaining entries, even if the response already contains a final result. An empty page keeps the cursor unchanged.
 
 While the child runs, `status` is `running` or `needs_input`. A permission request wakes a waiting parent. Petal collects assistant text before publishing it to the journal.

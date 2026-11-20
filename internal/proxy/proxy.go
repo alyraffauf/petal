@@ -279,7 +279,22 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	if strings.HasPrefix(method, notificationPrefix) {
 		return relay(ctx, b.conn, method, params)
 	}
+	var promptEndpoint *delegationEndpoint
+	var wakeCtx context.Context
+	if p.delegation != nil && method == "session/prompt" {
+		promptEndpoint = p.endpoint(p.publicID(name, native))
+		if promptEndpoint != nil {
+			var cancel context.CancelFunc
+			wakeCtx, cancel = promptEndpoint.waitContext()
+			defer cancel()
+			stop := context.AfterFunc(ctx, cancel)
+			defer stop()
+		}
+	}
 	result, err := forward[json.RawMessage](b.conn, ctx, method, params)
+	if promptEndpoint != nil && err == nil {
+		result, err = promptEndpoint.continueV1(wakeCtx, b, native, result)
+	}
 	if err != nil {
 		var re *acp.RequestError
 		if public != "" && errors.As(err, &re) && re.Code == -32002 {

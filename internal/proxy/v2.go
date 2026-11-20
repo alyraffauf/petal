@@ -334,6 +334,11 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 	}
+	if method == "session/prompt" && p.delegation != nil {
+		if e := p.endpoint(canonical); e != nil {
+			e.wakes.interrupt(false)
+		}
+	}
 	p.handleDelegationLifecycle(method, canonical)
 	result, err := p.relayV2Backend(ctx, b, method, params, notification)
 	if err != nil {

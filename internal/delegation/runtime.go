@@ -29,8 +29,9 @@ type OpenChild func(ctx context.Context, model string, receive Receive) (Connect
 type Permission func(ctx context.Context, parentID, childID string, version uint16, params json.RawMessage) (json.RawMessage, error)
 
 type Child struct {
-	ID    string `json:"childId"`
-	Model string `json:"model"`
+	Done  <-chan struct{} `json:"-"`
+	ID    string          `json:"childId"`
+	Model string          `json:"model"`
 }
 
 type Page = sessions.ChildActivityPage
@@ -138,14 +139,16 @@ func (r *Runtime) Delegate(ctx context.Context, parentID, cwd, model, task strin
 	child.binding, child.version = binding, version
 	close(child.ready)
 	started = true
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer r.remove(child)
 		defer release()
 		defer closeTransport()
 		defer conn.Close()
 		child.execute(conn, task, closeTransport)
 	}()
-	return Child{ID: binding.ChildID, Model: model}, nil
+	return Child{ID: binding.ChildID, Model: model, Done: done}, nil
 }
 
 func (r *Runtime) remove(child *run) {
