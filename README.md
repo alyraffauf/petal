@@ -7,11 +7,11 @@ Petal is a meta-harness and implementing both the client and server sides of the
 
 Open Petal, pick a model. Petal checks the accounts that offer it and chooses the one with the most estimated quota left, weighted by subscription size. Each conversation stays on its account when you resume it. You can also pick the account yourself.
 
+![Petal control center showing a thread, its subagents, and the selected subagent's activity](docs/screenshots/control-center.png)
+
 Petal is not a harness. Models run in their native, first-pary harnesses and are controlled via standard, supported APIs, so there's no ToS violation for using it.
 
 Run `petal` for the terminal UI or `petal acp` to use the same load balancer from Zed or any other Agent Client Protocol (ACP) client.
-
-![Petal control center showing a thread, its subagents, and the selected subagent's activity](docs/screenshots/control-center.png)
 
 ## Start a session
 
