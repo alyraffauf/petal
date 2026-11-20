@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      # buildGoModule runs the Go test suite during checkPhase.
+      - name: Build Petal and run Go tests
+        run: nix build --print-build-logs --no-link .#petal
