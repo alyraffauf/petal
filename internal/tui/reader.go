@@ -17,7 +17,7 @@ func readerBodyHeight(w, h int) int {
 
 func (m *terminal) scene(v screen) bloom.Child {
 	if !m.reading {
-		return bloom.Text(petal(v))
+		return bloom.Text(renderChat(v, &m.chatHits))
 	}
 	w, h := max(1, v.Width), max(1, v.Height)
 	v.backlog = &m.readerBacklog

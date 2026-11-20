@@ -98,9 +98,11 @@ type terminal struct {
 	ctx                context.Context
 	cfg                routing.Config
 	resumeID           string
+	draftSessionID     string
 	resume, cancelling bool
 	ask                *permission
 	chatBacklog        backlogViewport
+	chatHits           chatHitTargets
 	pending            turnLog
 	turnStart          int
 }
@@ -117,15 +119,16 @@ func Run(parent context.Context, c routing.Config, resume bool) error {
 	if err != nil || !ok {
 		return err
 	}
+	drafts := make(sessionDrafts)
 	for {
-		next, err := runSession(parent, start)
+		next, err := runSession(parent, start, drafts)
 		if err != nil || next == nil {
 			return err
 		}
 		start = *next
 	}
 }
-func runSession(parent context.Context, start sessionStart) (*sessionStart, error) {
+func runSession(parent context.Context, start sessionStart, drafts sessionDrafts) (*sessionStart, error) {
 	c := start.cfg
 	ctx, stop := context.WithCancel(parent)
 	defer stop()
@@ -138,12 +141,13 @@ func runSession(parent context.Context, start sessionStart) (*sessionStart, erro
 	m.h = startHarness(ctx, c)
 	m.h.id = start.id
 	defer m.h.close()
-	m.editor = start.editor
-	if m.editor == nil {
-		m.editor = newComposer()
-	}
+	m.draftSessionID = start.id
+	m.editor = drafts.take(cwd, start)
 	m.markdown = &markdownCache{}
 	_, err = tea.NewProgram(m).Run()
+	if m.next != nil {
+		drafts.remember(m)
+	}
 	if m.h != nil && m.connection == connected && m.h.canClose {
 		closeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		_, _ = acp.SendRequest[proxy.Object](m.h.conn, closeCtx, "session/close", map[string]string{"sessionId": m.h.id})
@@ -181,6 +185,7 @@ func (m *terminal) Init() tea.Cmd {
 	})
 }
 func (m *terminal) View() tea.View {
+	m.chatHits = chatHitTargets{}
 	if m.launch != nil {
 		return m.launch.View()
 	}
@@ -323,7 +328,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.selectSetting(m.launch)
 				}
 				m.next = &sessionStart{cfg: m.launch.cfg, resume: m.launch.resume, id: m.launch.id}
-				if m.connection == connectionFailed {
+				if m.connection == connectionFailed && m.launch.routeOnly && m.next.resume == m.resume && m.next.id == m.resumeID {
 					m.next.editor = m.editor
 				}
 				return m, tea.Quit
@@ -340,6 +345,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = t.Width
 		m.Height = t.Height
+		m.chatHits = chatHitTargets{}
 	case terminalSignIn:
 		cmd = tea.Batch(m.listen, tea.ExecProcess(t.cmd, func(err error) tea.Msg { t.done <- err; return nil }))
 	case dismissedQuestion:
@@ -415,6 +421,12 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.deliver()
 	case opened:
 		m.agents.publish()
+		if m.h != nil && (m.resume || t.err == nil) {
+			m.draftSessionID = m.h.id
+			if m.resume {
+				m.resumeID = m.h.id
+			}
+		}
 		if t.err == signedIn {
 			m.next = &sessionStart{cfg: m.cfg, resume: m.resume, id: m.resumeID, editor: m.editor}
 			return m, tea.Quit
@@ -569,6 +581,8 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Messages = append(m.Messages, entry{t.role, t.text})
 		}
 		cmd = m.listen
+	case tea.MouseClickMsg:
+		cmd = m.handleChatClick(t)
 	case tea.MouseWheelMsg:
 		target := &m.chatBacklog
 		if m.reading {

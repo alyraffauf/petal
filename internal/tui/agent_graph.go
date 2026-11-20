@@ -86,16 +86,9 @@ func (p *picker) graphKey(k tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+c":
 		return tea.Quit
 	case "esc", "ctrl+g", "f2", "f4":
-		id := p.center.graphID
 		p.center.graphID = ""
-		p.center.inspect = false
-		p.search.Reset()
-		// Reveal the focus in the tree, including a previously folded ancestor.
-		for _, c := range m.agents.children {
-			delete(p.center.folded, c.parent)
-		}
-		p.center.selected = id
-		p.center.filter = 0
+	case "r":
+		p.revealGraphFocus()
 	case "down", "up", "pgup", "pgdown":
 		step := 1
 		if strings.HasPrefix(k.String(), "pg") {
@@ -121,6 +114,32 @@ func (p *picker) graphKey(k tea.KeyPressMsg) tea.Cmd {
 	}
 	return nil
 }
+
+func (p *picker) revealGraphFocus() {
+	parents := make(map[string]string)
+	for _, record := range p.saved {
+		parents[record.ID] = record.Parent
+	}
+	for _, child := range p.center.owner.agents.children {
+		parents[child.id] = child.parent
+	}
+	focus := p.center.graphID
+	if _, ok := parents[focus]; !ok {
+		return
+	}
+	ancestors := map[string]bool{focus: true}
+	for id := parents[focus]; id != "" && !ancestors[id]; id = parents[id] {
+		ancestors[id] = true
+		delete(p.center.folded, id)
+	}
+	p.center.graphID = ""
+	p.center.inspect = false
+	p.center.finding = false
+	p.search.Reset()
+	p.center.filter = 0
+	p.selectNode(controlNode{id: focus})
+}
+
 func (p *picker) graphView() tea.View {
 	w, h := max(1, p.width), max(1, p.height)
 	m := p.center.owner
@@ -196,7 +215,8 @@ func (p *picker) graphView() tea.View {
 		rows = append(rows, row)
 	}
 	if len(rows) < h {
-		rows = appendNavFooter(rows, w, h, styledHint("↑↓ Select link  Enter Follow  ← Parent  Esc Tree", p.background), p.background)
+		hint := "Esc Back  r Reveal in Threads  ↑↓ Select link  Enter Follow  ← Parent"
+		rows = appendNavFooter(rows, w, h, styledHint(hint, p.background), p.background)
 	}
 	v := tea.NewView(strings.Join(rows, "\n"))
 	v.AltScreen = true

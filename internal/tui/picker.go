@@ -239,7 +239,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.PasteMsg:
 		if m.history {
-			if !m.center.inspect {
+			if m.center.graphID == "" && !m.center.inspect {
 				t.Content = petalLabel(t.Content)
 				m.search, _ = m.search.Update(t)
 			}

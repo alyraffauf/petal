@@ -9,6 +9,40 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+type sessionDraftKey struct {
+	cwd, id string // The public session ID includes the account and model.
+}
+
+type sessionDrafts map[sessionDraftKey]*textarea.Model
+
+func (drafts sessionDrafts) take(cwd string, start sessionStart) *textarea.Model {
+	if start.resume && start.id != "" {
+		key := sessionDraftKey{cwd, start.id}
+		editor := drafts[key]
+		delete(drafts, key)
+		if start.editor == nil && editor != nil {
+			return editor
+		}
+	}
+	if start.editor != nil {
+		return start.editor
+	}
+	return newComposer()
+}
+
+func (drafts sessionDrafts) remember(m *terminal) {
+	if m.draftSessionID == "" {
+		return
+	}
+	editor := m.editor
+	if m.permissionDraft != nil {
+		editor = m.permissionDraft
+	}
+	if editor.Value() != "" {
+		drafts[sessionDraftKey{m.Cwd, m.draftSessionID}] = editor
+	}
+}
+
 func newComposer() *textarea.Model {
 	editor := textarea.New()
 	editor.Prompt = ""

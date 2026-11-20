@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"image"
 	"math"
 	"strings"
 
@@ -111,6 +112,11 @@ func petalLabel(s string) string {
 }
 
 func petal(v screen) string {
+	return renderChat(v, &chatHitTargets{})
+}
+
+func renderChat(v screen, hits *chatHitTargets) string {
+	*hits = chatHitTargets{}
 	w, h := v.Width, v.Height
 	if w < 1 || h < 1 {
 		return ""
@@ -195,6 +201,11 @@ func petal(v screen) string {
 		rows = append(rows, richBand("", w, petalText, v.background, false))
 	}
 	menuStart := max(0, v.commandIndex-menuHeight+1)
+	if menuHeight > 0 {
+		hits.commands = image.Rect(1, len(rows), w, len(rows)+menuHeight)
+		hits.firstCommand = menuStart
+		hits.visibleCommands = v.commands[menuStart : menuStart+menuHeight]
+	}
 	for i := menuStart; i < menuStart+menuHeight; i++ {
 		c := v.commands[i]
 		bg, mark := v.background, "   "
@@ -229,6 +240,8 @@ func petal(v screen) string {
 	if w >= 38 {
 		aw = ansi.StringWidth(action)
 	}
+	hits.action = image.Rect(w-aw, len(rows), w, len(rows)+1)
+	hits.question = v.question
 	room := max(1, w-aw-4)
 	if v.editor != nil && v.connection != connectionFailed {
 		if v.editor.Width() != room {

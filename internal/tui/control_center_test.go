@@ -15,15 +15,25 @@ import (
 func TestControlCenterFollowsAgentLinksAndJumpsToATurn(t *testing.T) {
 	cfg := routing.Config{Model: "test", Accounts: map[string]routing.Account{"local": {Models: map[string][]string{"test": {"adapter"}}}}}
 	p := newPicker(cfg)
-	parent := sessions.Record{ID: "root", Title: "Routing", Model: "test", Account: "local"}
+	parent := sessions.Record{ID: "root", Parent: "previous", Title: "Routing", Model: "test", Account: "local"}
 	m := &terminal{h: &harness{record: parent}, launch: p, screen: screen{connection: connected, Width: 90, Height: 20, Messages: []entry{{"user", "First question"}, {"assistant", "Answer"}, {"user", "Second question"}}}}
-	m.agents.children = []agentDetail{{id: "a", parent: "root", title: "Checks", state: "running"}, {id: "b", parent: "a", title: "Replay", state: "idle"}}
+	m.agents.children = []agentDetail{
+		{id: "a", parent: "root", title: "Checks", state: "running"},
+		{id: "b", parent: "a", title: "Replay", state: "idle"},
+		{id: "unrelated", parent: "root"},
+		{id: "unrelated-child", parent: "unrelated"},
+	}
 	m.agents.mail = []*agentMailbox{{sender: acp.SessionId("a"), recipient: acp.SessionId("b"), display: "Finished"}}
 	p.history, p.embedded, p.width, p.height = true, true, 90, 20
-	p.saved = []sessions.Record{parent, {ID: "fork", Parent: "root", Title: "Alternate"}}
-	p.center = controlCenter{owner: m, selected: "a", folded: map[string]bool{"turns": true}}
+	p.saved = []sessions.Record{parent, {ID: "previous", Title: "Previous"}}
+	p.center = controlCenter{owner: m, selected: "a", folded: map[string]bool{
+		"previous": true, "root": true, "a": true, "unrelated": true, "turns": true,
+	}, finding: true, inspect: true, filter: 2}
+	p.search.SetValue("Checks")
+	before := p.View().Content
+
 	p.centerKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
-	if frame := ansi.Strip(p.View().Content); !strings.Contains(frame, "Agent graph") || !strings.Contains(frame, "Sent to") {
+	if frame := ansi.Strip(p.View().Content); !strings.Contains(frame, "Agent graph") || !strings.Contains(frame, "Sent to") || !strings.Contains(frame, "r Reveal in Threads") {
 		t.Fatal(frame)
 	}
 	p.centerKey(tea.KeyPressMsg{Code: tea.KeyDown})
@@ -32,9 +42,34 @@ func TestControlCenterFollowsAgentLinksAndJumpsToATurn(t *testing.T) {
 		t.Fatalf("graph followed %q", p.center.graphID)
 	}
 	p.centerKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if p.center.selected != "b" || p.center.graphID != "" {
-		t.Fatal("tree did not retain graph focus")
+	if p.center.graphID != "" || p.center.selected != "a" || !p.center.finding || p.View().Content != before {
+		t.Fatal("Escape did not restore the previous Threads view")
 	}
+	for _, id := range []string{"previous", "root", "a", "unrelated", "turns"} {
+		if !p.center.folded[id] {
+			t.Fatalf("Escape unfolded %q", id)
+		}
+	}
+
+	p.centerKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	p.centerKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	p.centerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	p.centerKey(tea.KeyPressMsg{Code: 'r'})
+	rows := p.nodes()
+	if p.center.graphID != "" || len(rows) == 0 || rows[p.selectedNode(rows)].id != "b" || p.center.inspect || p.center.finding {
+		t.Fatal("Reveal in Threads did not show the focused graph node")
+	}
+	if !p.center.folded["unrelated"] || !p.center.folded["turns"] {
+		t.Fatal("Reveal in Threads unfolded an unrelated branch")
+	}
+
+	p.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	p.Update(tea.PasteMsg{Content: "Unrelated search"})
+	p.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if p.search.Value() != "" {
+		t.Fatal("pasting in the graph changed the Threads search")
+	}
+
 	p.search.SetValue("Second question")
 	p.centerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.launch != nil || m.chatBacklog.first != 2 || !m.chatBacklog.browsing {
