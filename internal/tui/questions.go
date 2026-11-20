@@ -80,8 +80,8 @@ func (inlineSchemaOnly) Load(string) (any, error) {
 
 func (h *harness) elicit(ctx context.Context, raw json.RawMessage) (any, *acp.RequestError) {
 	var p struct {
-		Mode, Message, URL string
-		RequestedSchema    map[string]any
+		Mode, Message, URL, ElicitationID string
+		RequestedSchema                   map[string]any
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, acp.NewInvalidParams(err.Error())
@@ -89,14 +89,14 @@ func (h *harness) elicit(ctx context.Context, raw json.RawMessage) (any, *acp.Re
 	switch p.Mode {
 	case "url":
 		u, err := url.Parse(p.URL)
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || clean(p.URL) != p.URL {
 			return nil, acp.NewInvalidParams("expected a web URL")
 		}
-		id, err := h.choose(ctx, p.Message+"\n\n"+p.URL, []option{{"accept", "Continue after visiting URL"}, {"decline", "Decline"}})
-		if err != nil || id == "" {
-			id = "cancel"
+		if p.ElicitationID == "" {
+			return nil, acp.NewInvalidParams("missing elicitationId")
 		}
-		return map[string]string{"action": id}, nil
+		action := h.requestURL(ctx, &urlRequest{id: p.ElicitationID, message: p.Message, url: p.URL, answer: make(chan string, 1)})
+		return map[string]string{"action": action}, nil
 	case "form":
 		if p.RequestedSchema == nil {
 			return nil, acp.NewInvalidParams("missing form schema")

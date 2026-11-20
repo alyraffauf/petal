@@ -16,6 +16,10 @@
           home.stateVersion = "26.05";
           programs.mcp.enable = true;
           programs.mcp.servers.test.command = "test-mcp";
+          programs.mcp.servers.remote = {
+            url = "https://example.org/mcp";
+            headers.Authorization = "{env:TEST_AUTHORIZATION}";
+          };
           programs.petal = {
             enable = true;
             enableMcpIntegration = true;

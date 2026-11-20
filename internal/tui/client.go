@@ -292,7 +292,7 @@ func (h *harness) callback(ctx context.Context, method string, raw json.RawMessa
 	case "elicitation/create":
 		return h.elicit(ctx, raw)
 	case "elicitation/complete":
-		emit(event{role: "system", text: "External interaction completed."})
+		h.completeURL(ctx, raw)
 		return nil, nil
 	default:
 		return nil, acp.NewMethodNotFound(method)

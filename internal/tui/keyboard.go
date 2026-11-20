@@ -6,6 +6,9 @@ import (
 )
 
 func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
+	if m.urlKey(t) {
+		return nil
+	}
 	var cmd tea.Cmd
 	if m.forking && !key.Matches(t, quitPetal) {
 		return nil

@@ -10,6 +10,8 @@ import (
 )
 
 type MCPServer struct {
+	URL     string           `json:"-"`
+	Headers []MCPHeader      `json:"-"`
 	Name    string           `json:"name"`
 	Command string           `json:"command"`
 	Args    []string         `json:"args"`
@@ -117,13 +119,22 @@ func normalizeMCPServers(servers []MCPServer) error {
 	names := make(map[string]struct{}, len(servers))
 	for i := range servers {
 		server := &servers[i]
-		if strings.TrimSpace(server.Name) == "" || strings.TrimSpace(server.Command) == "" {
-			return fmt.Errorf("mcp_servers entry %d needs a name and command", i+1)
+		if strings.TrimSpace(server.Name) == "" || (server.URL == "" && strings.TrimSpace(server.Command) == "") {
+			return fmt.Errorf("mcp_servers entry %d needs a name and a command or URL", i+1)
 		}
 		if _, exists := names[server.Name]; exists {
 			return fmt.Errorf("duplicate MCP server %q", server.Name)
 		}
 		names[server.Name] = struct{}{}
+		if server.URL != "" {
+			if err := server.validateHTTP(); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(server.Headers) > 0 {
+			return fmt.Errorf("stdio MCP server %q cannot set headers", server.Name)
+		}
 		for _, env := range server.Env {
 			if env.Name == "" {
 				return fmt.Errorf("MCP server %q has an empty environment variable name", server.Name)

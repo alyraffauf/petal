@@ -2,13 +2,14 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 
 	acp "github.com/coder/acp-go-sdk"
 
 	"petal/internal/routing"
 )
 
-func mergeMCPServers(params Object, configured []routing.MCPServer) (Object, error) {
+func mergeMCPServers(params Object, configured []routing.MCPServer, supportsHTTP bool) (Object, error) {
 	if len(configured) == 0 {
 		return params, nil
 	}
@@ -34,7 +35,14 @@ func mergeMCPServers(params Object, configured []routing.MCPServer) (Object, err
 		if editorNames[server.Name] {
 			continue
 		}
-		raw, err := json.Marshal(server)
+		if server.URL != "" && !supportsHTTP {
+			return nil, fmt.Errorf("adapter does not support HTTP MCP server %q", server.Name)
+		}
+		wire, err := server.WireDefinition()
+		if err != nil {
+			return nil, err
+		}
+		raw, err := json.Marshal(wire)
 		if err != nil {
 			return nil, err
 		}

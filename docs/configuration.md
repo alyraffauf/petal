@@ -73,6 +73,24 @@ value = "read-only"
 
 Use the command, arguments, and environment variables that your server supports. You can omit `args` and `env`. Petal passes these definitions when you start, load, resume, or fork a session in the TUI or an editor. If an editor supplies a server with the same case-sensitive name, its definition wins. Reopen the client connection after editing the config.
 
+### Remote MCP servers
+
+For Streamable HTTP, set `url` and omit `command`. Public endpoints and servers that handle OAuth can omit headers.
+
+```toml
+[[mcp_servers]]
+name = "work-tools"
+url = "https://tools.example.org/mcp"
+
+[[mcp_servers.headers]]
+name = "Authorization"
+from_env = "WORK_TOOLS_AUTHORIZATION"
+```
+
+Set the variable in Petal’s environment to the complete header value, including `Bearer ` if required. Use `from_file = "/run/secrets/work-tools-header"` for a file containing that value, or `value` for a literal. Petal reads the value each time it forwards the definition. Keep credentials out of Nix expressions.
+
+The adapter handles OAuth and remembers the login for its profile. Claude Code can request sign-in when you reconnect the server through its MCP command. On first use Codex can ask you to run `codex mcp login <name>`. Use the same Codex home and server URL as the Petal account. If the server exists only in Petal, supply its URL to the CLI with `codex -c 'mcp_servers.work-tools.url="https://tools.example.org/mcp"' mcp login work-tools`.
+
 ## Terminal background
 
 Petal uses a solid dark background by default. To use your terminal’s background, put this before the account tables in `config.toml` and restart Petal.
@@ -119,7 +137,7 @@ Home Manager merges declared settings into the writable TOML file on activation.
 
 ### Use shared Home Manager MCP servers
 
-Enable the integration to use the same stdio servers in Petal and other Home Manager programs.
+Enable the integration to use the same stdio and HTTP servers in Petal and other Home Manager programs.
 
 ```nix
 {
@@ -134,4 +152,4 @@ Enable the integration to use the same stdio servers in Petal and other Home Man
 }
 ```
 
-Petal imports enabled local servers. It skips disabled servers and remote URL definitions. An entry in `programs.petal.settings.mcp_servers` overrides a shared server with the same name. Home Manager reads file-backed environment variables when the adapter starts the server. With mutable settings, activation replaces the MCP server list with the declared entries while the integration is enabled.
+Petal imports enabled stdio and HTTP servers. For an HTTP header, `"{env:VARIABLE}"` reads the entire value from Petal’s environment. An entry in `programs.petal.settings.mcp_servers` overrides a shared server with the same name. Home Manager reads file-backed environment variables when the adapter starts the server. With mutable settings, activation replaces the MCP server list with the declared entries while the integration is enabled.

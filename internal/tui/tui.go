@@ -78,6 +78,9 @@ func nextFrame() tea.Cmd {
 }
 
 type terminal struct {
+	urls                  []*urlRequest
+	showURL               bool
+	urlOffset             int
 	openingPreview        []entry
 	streamSource          *turnBlock
 	streamPreview         string
@@ -258,7 +261,13 @@ func (m *terminal) View() tea.View {
 	if m.launch != nil {
 		return m.launch.View()
 	}
+	if m.showURL && len(m.urls) > 0 && m.ask == nil {
+		return m.urlView()
+	}
 	v := m.screen
+	if len(m.urls) > 0 && m.ask == nil {
+		v.notice = &acp.SessionUpdateNotice{Severity: "info", Title: "External sign-in requested · F6 Review"}
+	}
 	if m.connection == connecting && m.ask == nil && len(m.openingPreview) > 0 {
 		v.Messages = m.openingPreview
 	}
@@ -416,6 +425,12 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		m.transcriptRevision++
 	}
+	if m.showURL && m.ask == nil {
+		switch msg.(type) {
+		case tea.PasteMsg, tea.MouseClickMsg, tea.MouseWheelMsg:
+			return m, nil
+		}
+	}
 	if handled, cmd := m.clipboardEvent(msg); handled {
 		return m, cmd
 	}
@@ -497,6 +512,19 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case terminalSignIn:
 		t.cmd.Stdin = m.inputTTY // The child needs the terminal fd for interactive sign-in.
 		cmd = tea.Batch(m.listen, tea.ExecProcess(t.cmd, func(err error) tea.Msg { t.done <- err; return nil }))
+	case *urlRequest:
+		m.urls = append(m.urls, t)
+		cmd = m.listen
+	case urlCompleted:
+		if i := slices.IndexFunc(m.urls, func(q *urlRequest) bool { return q.id == string(t) }); i >= 0 {
+			m.removeURL(i, "accept")
+		}
+		cmd = m.listen
+	case urlCancelled:
+		if i := slices.Index(m.urls, t.request); i >= 0 {
+			m.removeURL(i, "")
+		}
+		cmd = m.listen
 	case dismissedQuestion:
 		if m.ask == t.q {
 			m.ask = nil

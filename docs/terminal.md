@@ -27,3 +27,9 @@ To send a file, use `/attach path/to/image.png`. The adapter must accept image p
 Use `/fork` to branch if the adapter can reopen forks. Use `/parent` to return.
 
 Press **F4** or type `/agents` to focus a subagent in the thread tree. Use the arrow keys to expand or collapse a branch and **Tab** to view its details. Press **Ctrl+G** to open the agent graph. Select a connection and press **Enter** to follow it. Press **Escape** to return to the tree, or **r** to reveal the focused agent in **threads**.
+
+## MCP sign-in
+
+When an adapter asks you to visit a URL, you can keep typing and sending prompts. Press **F6** to review the link. **Esc** returns to your draft and keeps the request pending. After visiting the link, press **Enter** if the request is still open. A matching completion from the adapter clears it automatically. Press **d** to decline.
+
+Over SSH, a browser on your laptop needs a route to a loopback callback on the host running Petal. If the callback uses port 8765, for example, forward that port with `ssh -L 8765:127.0.0.1:8765 host` before completing sign-in.

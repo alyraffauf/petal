@@ -135,14 +135,6 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		}
 	}
 	switch method {
-	case "session/new", "session/load", "session/resume", "session/fork":
-		var err error
-		params, err = mergeMCPServers(params, p.MCPServers)
-		if err != nil {
-			return nil, err
-		}
-	}
-	switch method {
 	case "session/list":
 		return p.list(ctx, params)
 	case "authenticate":
@@ -222,6 +214,14 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, unknownSession(public)
 		}
 		return nil, acp.NewInvalidParams("session account is unavailable")
+	}
+	switch method {
+	case "session/new", "session/load", "session/resume", "session/fork":
+		var err error
+		params, err = mergeMCPServers(params, p.MCPServers, b.hello.AgentCapabilities.McpCapabilities.Http)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if strings.HasPrefix(method, notificationPrefix) {
 		return relay(ctx, b.conn, method, params)
@@ -350,6 +350,12 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 				return nil, nil
 			}
 			return nil, acp.NewMethodNotFound(native)
+		}
+		if native == "elicitation/create" || native == "elicitation/complete" {
+			var id string
+			if json.Unmarshal(args["elicitationId"], &id) == nil && id != "" {
+				args["elicitationId"] = encoded(p.publicID(name, id))
+			}
 		}
 		if _, ok := args["sessionId"]; ok {
 			id, err := SessionID(args)

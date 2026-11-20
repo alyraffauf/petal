@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"bloomfx.dev/bloom"
 	tea "charm.land/bubbletea/v2"
 	acp "github.com/coder/acp-go-sdk"
 )
@@ -62,5 +63,28 @@ func TestAttachmentUsesNegotiatedBlock(t *testing.T) {
 	p, err := attachment(cwd, "note.txt", acp.PromptCapabilities{EmbeddedContext: true})
 	if err != nil || p.content[0]["resource"].(map[string]any)["text"] != "hello" {
 		t.Fatalf("attachment %+v: %v", p, err)
+	}
+}
+
+func TestURLCompletionLeavesOtherRequestsAndDraftAlone(t *testing.T) {
+	m := terminal{root: bloom.New(), screen: screen{connection: connected, editor: testComposer("draft", 5)}}
+	a := &urlRequest{id: "a", answer: make(chan string, 1)}
+	b := &urlRequest{id: "b", answer: make(chan string, 1)}
+	m.Update(a)
+	m.Update(b)
+	if m.ask != nil || m.showURL {
+		t.Fatal("sign-in took focus from composer")
+	}
+	m.handleKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	m.handleKey(tea.KeyPressMsg{Code: tea.KeyF6})
+	m.Update(urlCompleted("unrelated"))
+	m.Update(urlCompleted("b"))
+	m.Update(urlCompleted("b"))
+	if !m.showURL || len(m.urls) != 1 || m.urls[0] != a || len(b.answer) != 1 || <-b.answer != "accept" {
+		t.Fatal("completion changed the wrong request")
+	}
+	m.Update(urlCompleted("a"))
+	if m.showURL || len(m.urls) != 0 || m.editor.Value() != "draftx" || len(a.answer) != 1 {
+		t.Fatalf("completion left review open or lost draft: %q", m.editor.Value())
 	}
 }

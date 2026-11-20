@@ -7,11 +7,23 @@ let
   explicitServers = cfg.settings.mcp_servers or [ ];
   explicitNames = map (server: server.name) explicitServers;
   sharedServers = lib.filterAttrs (name: server:
-    server.command != null
+    (server.command != null || (server.url != null && (server.type or "http") == "http"))
     && lib.hm.mcp.resolveEnabled server != false
     && !(builtins.elem name explicitNames)
   ) config.programs.mcp.servers;
   importServer = name: definition:
+    if definition.url != null then {
+      inherit name;
+      inherit (definition) url;
+      headers = lib.mapAttrsToList (name: value:
+        let env = builtins.match "[{]env:([A-Za-z_][A-Za-z0-9_]*)[}]" value;
+        in { inherit name; } // (
+          if env != null then { from_env = builtins.head env; }
+          else if lib.hasInfix "{env:" value then throw "Petal MCP header ${name}: use a single {env:VARIABLE} containing the entire header value"
+          else { inherit value; }
+        )
+      ) definition.headers;
+    } else
     let server = lib.hm.mcp.wrapEnvFilesCommand { inherit pkgs name; } definition;
     in {
       inherit name;
@@ -26,7 +38,7 @@ let
 in {
   options.programs.petal = {
     enable = lib.mkEnableOption "Petal";
-    enableMcpIntegration = lib.mkEnableOption "importing enabled stdio servers from programs.mcp.servers";
+    enableMcpIntegration = lib.mkEnableOption "importing enabled stdio and HTTP servers from programs.mcp.servers";
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.petal;

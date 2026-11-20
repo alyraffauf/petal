@@ -77,3 +77,52 @@ command = "two"
 		t.Fatalf("expected an error identifying the duplicate server, got %v", err)
 	}
 }
+
+func TestHTTPHeadersResolveWhenOpeningSession(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "secret")
+	path := filepath.Join(dir, "config.toml")
+	settings := `[[mcp_servers]]
+name = "work"
+url = "https://example.org/mcp"
+[[mcp_servers.headers]]
+name = "Authorization"
+from_file = "` + file + `"
+[[mcp_servers.headers]]
+name = "X-User"
+from_env = "PETAL_TEST_USER"
+`
+	if err := os.WriteFile(path, []byte(settings), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(path, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PETAL_TEST_USER", "Work")
+	server := config.MCPServers[0]
+	for _, token := range []string{"first", "rotated"} {
+		if err := os.WriteFile(file, []byte(token+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		wire, err := server.WireDefinition()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := json.Marshal(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var server struct {
+			Name, Type, URL string
+			Headers         []MCPEnvVariable
+		}
+		if err := json.Unmarshal(got, &server); err != nil {
+			t.Fatal(err)
+		}
+		if server.Name != "work" || server.Type != "http" || server.URL != "https://example.org/mcp" ||
+			!reflect.DeepEqual(server.Headers, []MCPEnvVariable{{"Authorization", token}, {"X-User", "Work"}}) {
+			t.Fatalf("unexpected HTTP definition %s", got)
+		}
+	}
+}
