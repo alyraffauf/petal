@@ -143,10 +143,11 @@ func (w *adapterWire) Write(line []byte) (int, error) {
 }
 
 type wireReader struct {
-	editor  *adapterWire
-	scan    *bufio.Scanner
-	pending []byte
-	adapter *adapterWire
+	editor        *adapterWire
+	scan          *bufio.Scanner
+	pending       []byte
+	adapter       *adapterWire
+	sessionUpdate func(json.RawMessage)
 }
 
 func incoming(r io.Reader, adapter *adapterWire) *wireReader {
@@ -189,6 +190,13 @@ func (r *wireReader) Read(dst []byte) (int, error) {
 					return 0, fmt.Errorf("invalid ACP method name")
 				}
 				if head.ID == nil {
+					if method == "session/update" && r.sessionUpdate != nil {
+						// Journal child updates before a later ACP response can complete.
+						var update struct{ Params json.RawMessage }
+						_ = json.Unmarshal(line, &update)
+						r.sessionUpdate(update.Params)
+						continue
+					}
 					// Bound incoming replay updates before the SDK's notification
 					// queue, which disconnects on overflow. The proxy forwards
 					// these notifications without awaiting a backend response.

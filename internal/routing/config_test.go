@@ -126,3 +126,26 @@ from_env = "PETAL_TEST_USER"
 		}
 	}
 }
+
+func TestDelegationConfigurationReservesBridgeNameOnlyWhenEnabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	write := func(config string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const server = "\n[[mcp_servers]]\nname = \"petal-delegation\"\ncommand = \"tool\"\n"
+	write(server)
+	if config, err := Load(path, "", ""); err != nil || config.Delegation {
+		t.Fatalf("default delegation = %v, error = %v", config.Delegation, err)
+	}
+	write("delegation = true\n" + server)
+	if _, err := Load(path, "", ""); err == nil || !strings.Contains(err.Error(), DelegationMCPServerName) {
+		t.Fatalf("expected reserved name error, got %v", err)
+	}
+	write("delegation = true\n")
+	if config, err := Load(path, "", ""); err != nil || !config.Delegation {
+		t.Fatalf("configured delegation = %v, error = %v", config.Delegation, err)
+	}
+}

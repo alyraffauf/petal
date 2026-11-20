@@ -286,7 +286,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 		}
 	}
 
-	var name, public string
+	var name, public, canonical string
 	if method == "session/new" {
 		name = p.accounts[0]
 		if len(p.accounts) > 1 {
@@ -306,6 +306,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			return missingSessionV2(method, public)
 		}
 		name = parts[0]
+		canonical = p.publicID(name, parts[2])
 		params["sessionId"] = encoded(parts[2])
 	}
 
@@ -316,13 +317,24 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 	}
 
 	b := p.backends[name]
+	var endpoint *delegationEndpoint
 	if method == "session/new" || method == "session/resume" || method == "session/fork" {
+		backendMCP := b.raw.member("capabilities").member("session").member("mcp")
+		var configured []routing.MCPServer
 		var err error
-		params, err = mergeMCPServersV2(params, p.MCPServers, sessionCaps.member("mcp"), b.raw.member("capabilities").member("session").member("mcp"))
+		endpoint, configured, err = p.prepareDelegation(b.wire.lifetime, params, method, canonical, backendMCP.member("stdio") != nil)
+		if err != nil {
+			return nil, err
+		}
+		if endpoint != nil {
+			defer endpoint.closeIfUnbound()
+		}
+		params, err = mergeMCPServersV2(params, configured, sessionCaps.member("mcp"), backendMCP)
 		if err != nil {
 			return nil, err
 		}
 	}
+	p.handleDelegationLifecycle(method, canonical)
 	result, err := p.relayV2Backend(ctx, b, method, params, notification)
 	if err != nil {
 		var rpc *acp.RequestError
@@ -354,9 +366,20 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 		return fork, nil
 	}
 	if method != "session/new" {
+		if endpoint != nil {
+			if err := p.bindDelegation(endpoint, name, canonical); err != nil {
+				return nil, err
+			}
+		}
 		return result, nil
 	}
-	return p.newSessionV2(ctx, b, name, result)
+	session, err := p.newSessionV2(ctx, b, name, result)
+	if err == nil && endpoint != nil {
+		if err := p.bindDelegation(endpoint, name, stringField(session, "sessionId")); err != nil {
+			return nil, err
+		}
+	}
+	return session, err
 }
 
 func decodeRouteID(id string, size int) []string {
@@ -432,7 +455,7 @@ func validateV2Prompt(raw json.RawMessage, caps Object) error {
 	return nil
 }
 
-func (p *proxy) newSessionV2(ctx context.Context, b *backend, name string, result json.RawMessage) (any, error) {
+func (p *proxy) newSessionV2(ctx context.Context, b *backend, name string, result json.RawMessage) (Object, error) {
 	var session Object
 	if json.Unmarshal(result, &session) != nil || !hasString(session, "sessionId") {
 		return nil, fmt.Errorf("adapter did not return sessionId")

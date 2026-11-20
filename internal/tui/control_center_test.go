@@ -113,3 +113,19 @@ func TestWheelOverThreadDetailsScrollsOnlyThatPane(t *testing.T) {
 		t.Fatalf("detail wheel did not scroll the selected child's text:\n%s", after)
 	}
 }
+
+func TestControlCenterFollowsSavedDelegationWithoutLiveSession(t *testing.T) {
+	p := newPicker(routing.Config{})
+	p.saved = []sessions.Record{
+		{ID: "child", Title: "Check ordering", DelegatedParent: "parent", DelegationStatus: "completed"},
+		{ID: "parent", Title: "Review changes"},
+	}
+	p.center = controlCenter{selected: "parent", folded: map[string]bool{"parent": true}}
+	p.openGraph("parent")
+	p.graphKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	p.graphKey(tea.KeyPressMsg{Code: 'r'})
+	nodes := p.nodes()
+	if len(nodes) != 2 || p.center.selected != "child" || nodes[1].id != "child" || nodes[1].depth != 1 || nodes[1].state != "completed" {
+		t.Fatalf("saved delegation was not revealed under its parent: %+v", nodes)
+	}
+}

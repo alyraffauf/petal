@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"image"
+	"petal/internal/sessions"
 	"slices"
 	"strings"
 
@@ -17,24 +18,35 @@ type graphLink struct {
 	incoming, message bool
 }
 
-func (m *terminal) graphName(id string) string {
-	if id == m.h.record.ID {
+func (p *picker) graphName(id string) string {
+	m := p.center.owner
+	if m != nil && m.h != nil && id == m.h.record.ID {
 		if m.h.record.Title != "" {
 			return petalLabel(m.h.record.Title)
 		}
 		return "current session"
 	}
-	for i, c := range m.agents.children {
-		if c.id == id {
-			if c.title != "" {
-				return petalLabel(c.title)
+	if m != nil {
+		for i, c := range m.agents.children {
+			if c.id == id {
+				if c.title != "" {
+					return petalLabel(c.title)
+				}
+				return fmt.Sprintf("agent %d", i+1)
 			}
-			return fmt.Sprintf("agent %d", i+1)
+		}
+	}
+	for _, record := range p.saved {
+		if record.ID == id {
+			if record.Title != "" {
+				return petalLabel(record.Title)
+			}
+			return "untitled conversation"
 		}
 	}
 	return "related session"
 }
-func (m *terminal) graphLinks(id string) []graphLink {
+func (p *picker) graphLinks(id string) []graphLink {
 	var links []graphLink
 	seen := map[graphLink]bool{}
 	add := func(edge graphLink) {
@@ -43,13 +55,17 @@ func (m *terminal) graphLinks(id string) []graphLink {
 			links = append(links, edge)
 		}
 	}
-	for _, c := range m.agents.children {
-		if c.id == id {
-			add(graphLink{c.parent, "Parent", true, false})
+	for _, edge := range p.graphOwnership() {
+		if edge.child == id {
+			add(graphLink{edge.parent, "Parent", true, false})
 		}
-		if c.parent == id {
-			add(graphLink{c.id, "Child", false, false})
+		if edge.parent == id {
+			add(graphLink{edge.child, "Child", false, false})
 		}
+	}
+	m := p.center.owner
+	if m == nil || m.connection != connected {
+		return links
 	}
 	for _, mail := range m.agents.mail {
 		if mail.display == "" {
@@ -64,24 +80,54 @@ func (m *terminal) graphLinks(id string) []graphLink {
 	}
 	return links
 }
-func (p *picker) hasGraph() bool {
-	m := p.center.owner
-	return m != nil && m.connection == connected && len(m.agents.children) > 0
+
+type graphOwnership struct {
+	child, parent string
 }
+
+func (p *picker) graphOwnership() []graphOwnership {
+	var edges []graphOwnership
+	bound := make(map[string]bool)
+	for _, record := range p.saved {
+		if record.DelegatedParent != "" && slices.ContainsFunc(p.saved, func(parent sessions.Record) bool { return parent.ID == record.DelegatedParent }) {
+			edges = append(edges, graphOwnership{record.ID, record.DelegatedParent})
+			bound[record.ID] = true
+		}
+	}
+	if m := p.center.owner; m != nil && m.connection == connected {
+		for _, c := range m.agents.children {
+			if !bound[c.id] {
+				edges = append(edges, graphOwnership{c.id, c.parent})
+			}
+		}
+	}
+	return edges
+}
+
+func (p *picker) hasGraph() bool {
+	return len(p.graphOwnership()) > 0
+}
+
 func (p *picker) openGraph(id string) {
-	if !p.hasGraph() {
+	edges := p.graphOwnership()
+	if len(edges) == 0 {
 		return
 	}
-	m := p.center.owner
-	if !slices.ContainsFunc(m.agents.children, func(c agentDetail) bool { return c.id == id }) {
-		id = m.h.record.ID
+	focus := edges[0].parent
+	if m := p.center.owner; m != nil && m.connection == connected {
+		focus = m.h.record.ID
 	}
-	p.center.graphID = id
+	for _, edge := range edges {
+		if edge.child == id || edge.parent == id {
+			focus = id
+			break
+		}
+	}
+	p.center.graphID = focus
 	p.center.edge = 0
 }
 func (p *picker) graphKey(k tea.KeyPressMsg) tea.Cmd {
-	m := p.center.owner
-	links := m.graphLinks(p.center.graphID)
+	links := p.graphLinks(p.center.graphID)
 	switch k.String() {
 	case "ctrl+c":
 		return tea.Quit
@@ -120,8 +166,8 @@ func (p *picker) revealGraphFocus() {
 	for _, record := range p.saved {
 		parents[record.ID] = record.Parent
 	}
-	for _, child := range p.center.owner.agents.children {
-		parents[child.id] = child.parent
+	for _, edge := range p.graphOwnership() {
+		parents[edge.child] = edge.parent
 	}
 	focus := p.center.graphID
 	if _, ok := parents[focus]; !ok {
@@ -142,10 +188,9 @@ func (p *picker) revealGraphFocus() {
 
 func (p *picker) graphView() tea.View {
 	w, h := max(1, p.width), max(1, p.height)
-	m := p.center.owner
-	focus := m.graphName(p.center.graphID)
-	links := m.graphLinks(p.center.graphID)
-	rows := []string{petalMasthead(w, 0, "agent graph", fmt.Sprintf("%d agents", len(m.agents.children)), false, p.background)}
+	focus := p.graphName(p.center.graphID)
+	links := p.graphLinks(p.center.graphID)
+	rows := []string{petalMasthead(w, 0, "agent graph", fmt.Sprintf("%d agents", len(p.graphOwnership())), false, p.background)}
 	if h >= 6 {
 		rows = append(rows, richBand("", w, petalText, p.background, false))
 	}
@@ -204,7 +249,7 @@ func (p *picker) graphView() tea.View {
 			if i == idx {
 				bg = selectionBand
 			}
-			row += richBand(joint+line+m.graphName(e.id)+"  · "+e.relation, w-col, petalText, bg, i == idx)
+			row += richBand(joint+line+p.graphName(e.id)+"  · "+e.relation, w-col, petalText, bg, i == idx)
 		} else {
 			info := ""
 			if y == 0 {

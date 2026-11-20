@@ -16,6 +16,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"petal/internal/delegation"
 	"petal/internal/routing"
 )
 
@@ -42,21 +43,26 @@ type proxy struct {
 	embedded      bool
 	editorUpdates chan struct{}
 	routing.Config
-	lifetime         context.Context
-	editor           *acp.Connection
-	editorWire       *adapterWire
-	mu               sync.Mutex
-	aliases          sync.Map // canonical backend ID to the editor ID for an explicit resume override
-	initializing     bool
-	initialized      bool
-	repeatInitialize bool
-	used             bool
-	version          uint16
-	v2Capabilities   Object
-	hasV2Auth        bool
-	backends         map[string]*backend
-	accounts         []string
-	capabilities     acp.AgentCapabilities
+	lifetime            context.Context
+	editor              *acp.Connection
+	editorWire          *adapterWire
+	mu                  sync.Mutex
+	aliases             sync.Map // canonical backend ID to the editor ID for an explicit resume override
+	initializing        bool
+	initialized         bool
+	repeatInitialize    bool
+	used                bool
+	version             uint16
+	v2Capabilities      Object
+	hasV2Auth           bool
+	backends            map[string]*backend
+	accounts            []string
+	capabilities        acp.AgentCapabilities
+	delegation          *delegationTools
+	delegationRuntime   *delegation.Runtime
+	delegationMu        sync.Mutex
+	delegationEndpoints map[string]*delegationEndpoint
+	delegationCwds      map[string]string
 }
 
 func unknownSession(id string) *acp.RequestError {
@@ -250,13 +256,25 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		}
 		return nil, acp.NewInvalidParams("session account is unavailable")
 	}
+	var endpoint *delegationEndpoint
 	switch method {
 	case "session/new", "session/load", "session/resume", "session/fork":
+		var configured []routing.MCPServer
 		var err error
-		params, err = mergeMCPServers(params, p.MCPServers, b.hello.AgentCapabilities.McpCapabilities.Http)
+		endpoint, configured, err = p.prepareDelegation(b.wire.lifetime, params, method, p.publicID(name, native), true)
 		if err != nil {
 			return nil, err
 		}
+		if endpoint != nil {
+			defer endpoint.closeIfUnbound()
+		}
+		params, err = mergeMCPServers(params, configured, b.hello.AgentCapabilities.McpCapabilities.Http)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if public != "" {
+		p.handleDelegationLifecycle(method, p.publicID(name, native))
 	}
 	if strings.HasPrefix(method, notificationPrefix) {
 		return relay(ctx, b.conn, method, params)
@@ -301,6 +319,11 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	if p.embedded && b.hello.Meta["steering"] != nil {
 		session["petalSteering"] = b.hello.Meta["steering"]
 	}
+	if endpoint != nil {
+		if err := p.bindDelegation(endpoint, name, p.publicID(name, native)); err != nil {
+			return nil, err
+		}
+	}
 	return session, nil
 }
 
@@ -327,6 +350,10 @@ func (p *proxy) editorID(name, native string) string {
 }
 
 func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMessage, version uint16) (*backend, error) {
+	return p.startBackendWithReceiver(ctx, name, init, version, nil)
+}
+
+func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init json.RawMessage, version uint16, receive delegation.Receive) (*backend, error) {
 	var request Object
 	if err := json.Unmarshal(init, &request); err != nil {
 		return nil, acp.NewInvalidParams(err.Error())
@@ -367,7 +394,19 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 	context.AfterFunc(lifetime, func() { out.Close(); in.Close() })
 	b := &backend{close: stop}
 	wire := &adapterWire{Writer: in, lifetime: lifetime, updates: make(chan struct{}, 128), nativeV2: version == 2}
+	reader := incoming(out, wire)
+	if receive != nil {
+		reader.sessionUpdate = func(raw json.RawMessage) {
+			_, _ = receive(lifetime, "session/update", p.routeChildParams(name, raw), true)
+		}
+	}
 	conn := acp.NewConnection(func(ctx context.Context, method string, raw json.RawMessage) (any, *acp.RequestError) {
+		if receive != nil {
+			method, _ = untag(method)
+			native, notification := strings.CutPrefix(method, notificationPrefix)
+			result, err := receive(ctx, native, p.routeChildParams(name, raw), notification)
+			return result, rpcError(err)
+		}
 		native, notification := strings.CutPrefix(method, notificationPrefix)
 		if notification && native == "session/update" {
 			defer func() { <-wire.updates }()
@@ -488,7 +527,7 @@ func (p *proxy) startBackend(ctx context.Context, name string, init json.RawMess
 		}
 		result, err := relay(ctx, p.editor, method, args)
 		return result, rpcError(err)
-	}, wire, incoming(out, wire))
+	}, wire, reader)
 	wire.conn = conn
 	if p.embedded {
 		conn.SetLogger(slog.New(slog.DiscardHandler))
@@ -551,6 +590,7 @@ func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Re
 	lifetime, stop := context.WithCancel(lifetime)
 	editorWire := &adapterWire{Writer: out, lifetime: lifetime}
 	p := proxy{editorWire: editorWire, editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
+	p.configureDelegation()
 	ready := make(chan struct{})
 	reader := incoming(in, nil)
 	reader.editor = editorWire

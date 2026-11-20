@@ -21,14 +21,16 @@ type Selection struct {
 }
 
 type Record struct {
-	Parent     string      `json:",omitempty"`
-	Selections []Selection `json:",omitempty"`
-	ID         string
-	Title      string
-	Model      string
-	Account    string
-	Opened     time.Time
-	Updated    time.Time `json:",omitzero"`
+	DelegatedParent  string      `json:"-"`
+	DelegationStatus string      `json:"-"`
+	Parent           string      `json:",omitempty"`
+	Selections       []Selection `json:",omitempty"`
+	ID               string
+	Title            string
+	Model            string
+	Account          string
+	Opened           time.Time
+	Updated          time.Time `json:",omitzero"`
 }
 
 func (r Record) LastActivity() time.Time {
@@ -181,6 +183,12 @@ func List(cwd string, models []string) ([]Record, error) {
 			return nil, err
 		}
 		records = append(records, r)
+	}
+	if len(records) == 0 {
+		return records, nil
+	}
+	if err := loadChildBindings(db, records); err != nil {
+		return nil, err
 	}
 	return records, nil
 }

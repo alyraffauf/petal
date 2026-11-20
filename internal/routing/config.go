@@ -25,6 +25,7 @@ type MCPEnvVariable struct {
 
 // Keep identifiers in values because Viper folds configuration keys to lowercase.
 type fileSettings struct {
+	Delegation            bool        `mapstructure:"delegation"`
 	ACPv2                 bool        `mapstructure:"acp_v2"`
 	StreamResponses       bool        `mapstructure:"stream_responses"`
 	TransparentBackground bool        `mapstructure:"transparent_background"`
@@ -66,6 +67,14 @@ func (c *Config) readSettings(path string) error {
 	if err := normalizeMCPServers(file.MCPServers); err != nil {
 		return err
 	}
+	if file.Delegation {
+		for _, server := range file.MCPServers {
+			if server.Name == DelegationMCPServerName {
+				return fmt.Errorf("MCP server name %q is reserved when delegation is enabled", server.Name)
+			}
+		}
+	}
+	c.Delegation = file.Delegation
 	c.MCPServers = file.MCPServers
 	c.ACPv2 = file.ACPv2
 	c.StreamResponses = file.StreamResponses

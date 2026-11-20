@@ -84,7 +84,10 @@ func (a Account) Command(ctx context.Context, argv []string) *exec.Cmd {
 	return cmd
 }
 
+const DelegationMCPServerName = "petal-delegation"
+
 type Config struct {
+	Delegation            bool   `toml:"delegation" json:"delegation"`
 	ACPv2                 bool   `json:"acp_v2"`
 	StreamResponses       bool   `json:"stream_responses"`
 	TransparentBackground bool   `toml:"transparent_background" json:"transparent_background"`
