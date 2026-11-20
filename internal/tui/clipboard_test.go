@@ -6,7 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"bloomfx.dev/bloom"
+	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
+
+	"petal/internal/routing"
 )
 
 func TestClipboardStagesOnlyCompleteMatchingRead(t *testing.T) {
@@ -71,5 +75,23 @@ func TestClipboardRejectsDamagedPNG(t *testing.T) {
 		if m.editor.Value() != "" || !strings.Contains(m.Messages[len(m.Messages)-1].Text, "damaged") {
 			t.Fatal("damaged image entered the draft")
 		}
+	}
+}
+
+func TestClipboardTextReachesPickerBeforeItCloses(t *testing.T) {
+	picker := newPicker(routing.Config{})
+	m := terminal{root: bloom.New(), launch: picker, screen: screen{
+		connection: connected, editor: testComposer("draft", 5),
+	}}
+	m.requestClipboard("text/plain", "", "")
+	id := m.clipboard.id
+	m.Update(uv.UnknownOscEvent(clipboardPrefix + "type=read:id=" + id + ":status=DATA:mime=" + base64.StdEncoding.EncodeToString([]byte("text/plain")) + ";" + base64.StdEncoding.EncodeToString([]byte("query")) + "\a"))
+	_, command := m.Update(uv.UnknownOscEvent(clipboardPrefix + "type=read:id=" + id + ":status=DONE\a"))
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if command != nil {
+		m.Update(command())
+	}
+	if m.launch != nil || picker.search.Value() != "query" || m.editor.Value() != "draft" {
+		t.Fatalf("clipboard query = %q, draft = %q, picker open = %v", picker.search.Value(), m.editor.Value(), m.launch != nil)
 	}
 }

@@ -119,7 +119,9 @@ func (m *terminal) clipboardEvent(msg tea.Msg) (bool, tea.Cmd) {
 		data, typ := r.data, r.mime
 		m.clipboard = clipboardRead{}
 		if strings.HasPrefix(typ, "text/") {
-			return true, func() tea.Msg { return tea.PasteMsg{Content: string(data)} }
+			// Route the paste before a subsequent keystroke can change focus.
+			_, cmd := m.Update(tea.PasteMsg{Content: string(data)})
+			return true, cmd
 		}
 		if len(data) == 0 {
 			return true, m.clipboardError("Clipboard has no supported image. " + clipboardFallback)
