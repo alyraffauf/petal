@@ -31,6 +31,8 @@ ACP_TCK_DIR=/path/to/acp-tck scripts/check-acp /tmp/petal-acp.json matrix
 ACP_TCK_DIR=/path/to/acp-tck scripts/check-acp /tmp/petal-v2.json v2-full
 ```
 
+The regular Go suite runs the fuzz seeds and deterministic transcript histories. On pull requests and pushes to `main`, CI also generates new inputs for every Go fuzz target for three seconds each. Go mutates seed inputs and retains inputs that reach new code paths. Set `FUZZ_TIME` for a longer local run. If fuzzing finds a failure, download the `fuzz-inputs` CI artifact, extract it at the repository root, and run the replay command printed in the failed step.
+
 The pinned v2 kit reported **CONFORMANT** for the baseline and full fixture profiles. The full profile passed 252 checks and skipped 63. Those results cover Petal as a proxy with the reference adapter. A separate live check exercised a tool call and full replay with bundled Claude ACP 0.100.0 over v2, and with Codex ACP 2.1.1 over v1.
 
 Session queries live in `internal/sessions/queries.sql`. Add schema changes as versioned Goose migrations in `internal/sessions/migrations/`, then run `nix shell --inputs-from . nixpkgs#sqlc -c sqlc generate` at the repository root and commit the generated Go files. Keep version 2 reserved for databases created by the earlier importer.

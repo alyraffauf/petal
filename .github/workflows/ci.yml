@@ -17,3 +17,15 @@ jobs:
       # buildGoModule runs the Go test suite during checkPhase.
       - name: Build Petal and run Go tests
         run: nix build --print-build-logs --no-link .#petal
+      - name: Exercise property tests
+        id: properties
+        run: nix shell --inputs-from . nixpkgs#go -c scripts/check-properties
+        env:
+          FUZZ_TIME: 3s
+      - name: Save inputs for local replay
+        if: failure() && steps.properties.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-inputs
+          path: '**/testdata/fuzz/**'
+          if-no-files-found: ignore
