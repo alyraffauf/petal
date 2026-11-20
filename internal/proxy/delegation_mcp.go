@@ -322,11 +322,26 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 	encoder := json.NewEncoder(conn)
 	var mu sync.Mutex
 	active := make(map[string]context.CancelFunc)
-	type pendingDelivery struct {
-		requestID string
-		childID   string
+	pending := make(map[string]string)
+	recording := 0
+	recordDelivery := func(child string) {
+		defer func() {
+			mu.Lock()
+			recording--
+			mu.Unlock()
+		}()
+		// A complete relay write remains delivered even if the socket closes.
+		recordCtx, stop := context.WithTimeout(lifetime, 10*time.Second)
+		defer stop()
+		binding := sessions.ChildBinding{ParentID: endpoint.parent, ChildID: child}
+		if err := sessions.ConsumeChildResult(recordCtx, endpoint.cwd, binding); err != nil {
+			if lifetime.Err() == nil {
+				slog.Warn("Could not record child result delivery", "childId", child, "error", err)
+			}
+			return
+		}
+		endpoint.wakes.forget(child)
 	}
-	pending := make(map[string]pendingDelivery)
 	write := func(response mcpResponse, delivery string) {
 		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		data, err := json.Marshal(response)
@@ -358,19 +373,13 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 			var token string
 			if json.Unmarshal(req.Params, &token) == nil {
 				mu.Lock()
-				child := pending[token].childID
-				delete(pending, token)
-				mu.Unlock()
+				child := pending[token]
 				if child != "" {
-					binding := sessions.ChildBinding{ParentID: endpoint.parent, ChildID: child}
-					if err := sessions.ConsumeChildResult(ctx, endpoint.cwd, binding); err != nil {
-						if ctx.Err() == nil {
-							slog.Warn("Could not record child result delivery", "childId", child, "error", err)
-						}
-					} else {
-						endpoint.wakes.forget(child)
-					}
+					delete(pending, token)
+					recording++
+					go recordDelivery(child)
 				}
+				mu.Unlock()
 			}
 			continue
 		}
@@ -384,12 +393,6 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 					key := string(params.RequestID)
 					if stop := active[key]; stop != nil {
 						stop()
-					} else {
-						for token, delivery := range pending {
-							if delivery.requestID == key {
-								delete(pending, token)
-							}
-						}
 					}
 					mu.Unlock()
 				}
@@ -427,7 +430,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 		case req.Method == "tools/call":
 			key := string(req.ID)
 			mu.Lock()
-			if len(active)+len(pending) >= 16 || active[key] != nil {
+			if len(active)+len(pending)+recording >= 16 || active[key] != nil {
 				mu.Unlock()
 				response.Error = &mcpError{-32600, "Duplicate request ID or too many active requests"}
 				break
@@ -447,7 +450,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 				var delivery string
 				if child != "" {
 					delivery = rand.Text()
-					pending[delivery] = pendingDelivery{requestID: key, childID: child}
+					pending[delivery] = child
 				}
 				response.Result = result
 				write(response, delivery)

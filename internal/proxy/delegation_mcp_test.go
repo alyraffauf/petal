@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -446,10 +447,47 @@ func TestDelegationResultRemainsUnreadWhenRelayOutputFails(t *testing.T) {
 	endpoint.wakes.signal()
 	changed := endpoint.wakes.changed
 	endpoint.wakes.mu.Unlock()
-	retry, _ := start(false)
-	read(retry, "petal_wait")
-	if response := retry.read(); !strings.Contains(string(response["result"]), "test receipt") {
-		t.Fatalf("retry did not deliver the terminal result: %s", jsonValue(response))
+	// Drive the relay's private socket so cancellation and acknowledgment arrive
+	// in a deterministic order after the terminal response.
+	conn, err := net.Dial("unix", endpoint.server.Args[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(conn, endpoint.server.Env[0].Value); err != nil {
+		t.Fatal(err)
+	}
+	wire := proxyWireTest{t, bufio.NewScanner(conn), json.NewEncoder(conn)}
+	wire.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
+	wire.read()
+	read(wire, "petal_wait")
+	frame := wire.read()
+	if !strings.Contains(string(frame["response"]), "test receipt") || frame["delivery"] == nil {
+		t.Fatalf("missing terminal delivery: %s", jsonValue(frame))
+	}
+	databases, err := filepath.Glob(filepath.Join(os.Getenv("XDG_STATE_HOME"), "petal", "conversations", "*", "index.sqlite"))
+	if err != nil || len(databases) != 1 {
+		t.Fatalf("locating project database: %v, %v", databases, err)
+	}
+	lock, err := os.Open(filepath.Dir(databases[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	wire.send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}`)
+	wire.send(fmt.Sprintf(`{"jsonrpc":"2.0","method":%q,"params":%s}`, deliveryAckMethod, frame["delivery"]))
+	wire.send(`{"jsonrpc":"2.0","id":3,"method":"ping"}`)
+	if result := wire.read(); !strings.Contains(string(result["response"]), `"id":3`) {
+		t.Fatalf("missing ping response while the store is locked: %s", jsonValue(result))
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
 	}
 	select {
 	case <-changed:
