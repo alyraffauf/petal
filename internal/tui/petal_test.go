@@ -22,7 +22,7 @@ func TestPetalKeepsMultilineChromeOnItsOwnRows(t *testing.T) {
 	}{
 		{0, "status ready"},
 		{1, "model variant / account name"},
-		{25, "continued"},
+		{23, "continued"},
 		{26, "/tmp/line break"},
 	} {
 		if !strings.Contains(rows[want.row], want.text) {

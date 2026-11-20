@@ -112,6 +112,11 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	if h >= 8 {
 		footer = 2
 	}
+	// Keep the composer compact when the terminal has few rows.
+	paddedInput := h >= 18
+	if paddedInput {
+		footer += 3 // Two rows inside the composer and one before the shortcuts.
+	}
 	header := min(1, h-footer)
 	route := strings.Trim(petalLabel(v.Model)+" / "+petalLabel(v.Account), " /")
 	status := petalLabel(v.Status)
@@ -221,10 +226,15 @@ func renderChat(v screen, hits *chatHitTargets) string {
 	for len(rows) < h-footer-menuHeight-menuHeading-(inputHeight-1) {
 		rows = append(rows, richBand("", w, petalText, v.background, false))
 	}
-	hits.action = image.Rect(w-aw, len(rows), w, len(rows)+1)
 	hits.actionKind = action
 	if menuHeight > 0 {
 		rows = appendCommandMenu(rows, v, hits, menuHeight, menuHeading > 0)
+	}
+	if paddedInput {
+		rows = append(rows, richBand("", w, petalText, petalSurface, false))
+	}
+	if menuHeight == 0 {
+		hits.action = image.Rect(w-aw, len(rows), w, len(rows)+1)
 	}
 	hits.question = v.question
 	if v.editor != nil && v.connection != connectionFailed && room+4 <= w {
@@ -243,7 +253,10 @@ func renderChat(v screen, hits *chatHitTargets) string {
 		}
 		rows = append(rows, richBand(prefix+line, w-aw, petalText, petalSurface, false)+richBand(button, aw, petalInk, petalRose, button != ""))
 	}
-	if footer == 2 {
+	if paddedInput {
+		rows = append(rows, richBand("", w, petalText, petalSurface, false), richBand("", w, petalText, v.background, false))
+	}
+	if h >= 8 {
 		hint := " " + chatHelp(v) + " "
 		if v.queued > 0 {
 			hint = fmt.Sprintf(" %d pending ", v.queued) + hint
