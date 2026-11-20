@@ -46,7 +46,7 @@ func runChat(m *terminal) error {
 	}
 	m.inputTTY = tty
 	input := &clipboardInput{File: tty}
-	_, err := tea.NewProgram(m, tea.WithInput(input), tea.WithFilter(input.restorePacket)).Run()
+	_, err := tea.NewProgram(&frame{Model: m, background: canvasBackground(m.cfg.TransparentBackground)}, tea.WithInput(input), tea.WithFilter(input.restorePacket)).Run()
 	return err
 }
 

@@ -104,9 +104,6 @@ func styledHint(hint, background string, width int) string {
 }
 
 func navFooterHeight(h int) int {
-	if h >= 24 {
-		return 3
-	}
 	if h >= 12 {
 		return 2
 	}
@@ -121,8 +118,5 @@ func appendNavFooter(rows []string, w, h int, hint, background string) []string 
 		rows = append(rows, richBand(strings.Repeat("─", w), w, selectionBand, background, false))
 	}
 	rows = append(rows, richBand("  "+strings.TrimSpace(hint), w, petalText, background, false))
-	if len(rows) < h && navFooterHeight(h) == 3 {
-		rows = append(rows, richBand("", w, petalText, background, false))
-	}
 	return rows
 }

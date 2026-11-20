@@ -499,6 +499,6 @@ func pick(c routing.Config, resume bool) (sessionStart, bool, error) {
 	if resume && len(m.saved) > 0 {
 		m.center.selected = m.saved[0].ID
 	}
-	_, err := tea.NewProgram(m).Run()
+	_, err := tea.NewProgram(&frame{Model: m, background: m.background}).Run()
 	return sessionStart{cfg: m.cfg, resume: m.resume, id: m.id}, m.chosen, err
 }
