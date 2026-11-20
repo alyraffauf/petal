@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"bloomfx.dev/bloom"
 
@@ -78,6 +79,8 @@ func nextFrame() tea.Cmd {
 
 type terminal struct {
 	openingPreview        []entry
+	streamSource          *turnBlock
+	streamPreview         string
 	inputTTY              *os.File
 	clipboard             clipboardRead
 	limitedColor          bool
@@ -259,6 +262,9 @@ func (m *terminal) View() tea.View {
 	if m.connection == connecting && m.ask == nil && len(m.openingPreview) > 0 {
 		v.Messages = m.openingPreview
 	}
+	if m.Busy && m.streamPreview != "" {
+		v.planRows = append(slices.Clip(v.planRows), entry{"assistant", m.streamPreview})
+	}
 	v.question = m.ask
 	v.hasAgents = len(m.agents.children) > 0 && m.ask == nil
 	if m.Busy && m.connection == connected && m.h != nil {
@@ -385,10 +391,13 @@ func (m *terminal) restorePermissionDraft() {
 
 func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if batch, ok := msg.(outputBatch); ok {
+		visibleBefore := len(m.Messages)
 		for _, e := range batch.events {
 			m.recordOutput(e)
 		}
-		m.transcriptRevision++
+		if len(m.Messages) != visibleBefore {
+			m.transcriptRevision++
+		}
 		if batch.next == nil {
 			return m, m.listen
 		}
@@ -467,6 +476,20 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case animationFrame:
 		m.animating = false
 		m.Frame++
+		if b := m.streamSource; b != nil && m.Busy {
+			text := b.text.String()
+			// Bound Markdown layout work per frame even for very long replies.
+			if len(text) > 4096 {
+				text = text[len(text)-4096:]
+				for len(text) > 0 && !utf8.RuneStart(text[0]) {
+					text = text[1:]
+				}
+				text = "…" + text
+			}
+			m.streamPreview = text
+			m.streamSource = nil
+			m.transcriptRevision++
+		}
 	case tea.WindowSizeMsg:
 		m.Width = t.Width
 		m.Height = t.Height
@@ -625,6 +648,8 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		clear(m.tools)
 		cmd = m.listen
 		m.Busy = false
+		m.streamSource = nil
+		m.streamPreview = ""
 		m.Status = "ready"
 		if t.err == nil && (t.reason == "end_turn" || t.reason == "" || t.reason == "max_tokens") {
 			m.Messages = m.pending.commit(m.Messages[:m.turnStart])
@@ -771,6 +796,9 @@ func (m *terminal) recordOutput(e event) {
 		}
 	}
 	m.pending.push(e)
+	if m.cfg.StreamResponses && m.Busy && m.connection == connected && e.chunk && e.role == "assistant" {
+		m.streamSource = m.pending.last
+	}
 	if !e.chunk {
 		m.Messages = append(m.Messages, entry{e.role, e.text})
 	}

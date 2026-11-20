@@ -66,6 +66,16 @@ transparent_background = true
 
 With Home Manager, set `programs.petal.settings.transparent_background = true;`.
 
+## Stream replies in the terminal
+
+Petal shows completed replies by default. To preview the current reply as it arrives, put this before the account tables and restart Petal.
+
+```toml
+stream_responses = true
+```
+
+The preview refreshes up to ten times per second and shows the latest 4 KiB of the current reply. The completed turn replaces the preview in the transcript. This setting applies to the TUI. Editors connected through `petal acp` already receive chunks as they arrive.
+
 ## Queue follow-ups
 
 Put `busy_input = "follow_up"` before the account tables to queue messages until the running turn ends. The default is `"steer"`.

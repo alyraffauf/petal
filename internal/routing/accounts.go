@@ -85,6 +85,7 @@ func (a Account) Command(ctx context.Context, argv []string) *exec.Cmd {
 }
 
 type Config struct {
+	StreamResponses       bool   `json:"stream_responses"`
 	TransparentBackground bool   `toml:"transparent_background" json:"transparent_background"`
 	BusyInput             string `toml:"busy_input" json:"busy_input"`
 	Accounts              map[string]Account

@@ -109,6 +109,9 @@ func runPTYAdapter(t *testing.T) {
 				t.Fatal("multiline paste changed")
 			}
 			send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{"sessionUpdate": "tool_call", "toolCallId": "tool1", "title": "holding-turn", "status": "completed"}}})
+			send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{
+				"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "partial-reply-visible"},
+			}}})
 			continue
 		case "_session/steering":
 			if activePrompt == 0 || request.Params.Prompt[0].Text != "revised" {
@@ -132,7 +135,7 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "config.toml")
-	config := fmt.Sprintf("[[accounts]]\nname='local'\n[[accounts.env]]\nname='PETAL_PTY_ROLE'\nvalue='adapter'\n[[accounts.models]]\nid='fixture'\ncommand=[%q, '-test.run=^TestPTYChild$']\n", exe)
+	config := fmt.Sprintf("stream_responses=true\n[[accounts]]\nname='local'\n[[accounts.env]]\nname='PETAL_PTY_ROLE'\nvalue='adapter'\n[[accounts.models]]\nid='fixture'\ncommand=[%q, '-test.run=^TestPTYChild$']\n", exe)
 	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +223,7 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 		t.Fatal(err)
 	}
 	write("\r")
-	await("holding-turn")
+	await("partial-reply-visible")
 	write("revised\r")
 	await("steering-confirmed")
 	write("\x1bOR") // xterm F3

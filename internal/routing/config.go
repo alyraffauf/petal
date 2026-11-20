@@ -10,6 +10,7 @@ import (
 
 // Keep identifiers in values because Viper folds configuration keys to lowercase.
 type fileSettings struct {
+	StreamResponses       bool   `mapstructure:"stream_responses"`
 	TransparentBackground bool   `mapstructure:"transparent_background"`
 	BusyInput             string `mapstructure:"busy_input"`
 	Accounts              []struct {
@@ -45,6 +46,7 @@ func (c *Config) readSettings(path string) error {
 	}); err != nil {
 		return err
 	}
+	c.StreamResponses = file.StreamResponses
 	c.BusyInput = file.BusyInput
 	c.TransparentBackground = file.TransparentBackground
 	c.Accounts = make(map[string]Account, len(file.Accounts))
