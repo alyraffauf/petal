@@ -199,15 +199,19 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t.picker != m || !m.history {
 			return m, nil
 		}
-		known := make(map[string]bool)
-		for _, r := range m.saved {
-			known[r.ID] = true
+		known := make(map[string]int, len(m.saved))
+		for index, r := range m.saved {
+			known[r.ID] = index
 		}
 		for _, r := range t.records {
-			if !known[r.ID] {
-				m.saved = append(m.saved, r)
-				known[r.ID] = true
+			if index, ok := known[r.ID]; ok {
+				if activity := r.LastActivity(); activity.After(m.saved[index].LastActivity()) {
+					m.saved[index].Updated = activity
+				}
+				continue
 			}
+			known[r.ID] = len(m.saved)
+			m.saved = append(m.saved, r)
 		}
 		slices.SortStableFunc(m.saved, func(a, b sessions.Record) int { return b.LastActivity().Compare(a.LastActivity()) })
 		if t.err != nil {
