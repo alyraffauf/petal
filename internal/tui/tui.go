@@ -485,13 +485,13 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.listen
 		m.Busy = false
 		m.Status = "Ready"
-		if t.err == nil && (t.reason == "end_turn" || t.reason == "") {
+		if t.err == nil && (t.reason == "end_turn" || t.reason == "" || t.reason == "max_tokens") {
 			m.Messages = m.pending.commit(m.Messages[:m.turnStart])
 		} else {
 			m.pending = turnLog{}
-			if t.err == nil {
-				m.Messages = append(m.Messages, entry{"system", "Turn stopped · " + strings.ReplaceAll(t.reason, "_", " ")})
-			}
+		}
+		if t.err == nil && t.reason != "" && t.reason != "end_turn" {
+			m.Messages = append(m.Messages, entry{"system", "Turn stopped · " + strings.ReplaceAll(t.reason, "_", " ")})
 		}
 		if m.ask != nil {
 			m.ask.cancel()

@@ -74,3 +74,20 @@ func TestToolEmptyTitleReplacesPriorTitle(t *testing.T) {
 		t.Fatalf("got %v, want %v", m.Messages, want)
 	}
 }
+
+func TestTokenLimitPublishesStreamedReply(t *testing.T) {
+	m := terminal{root: bloom.New(), screen: screen{Busy: true}}
+	h := harness{events: make(chan tea.Msg, 1)}
+	for _, chunk := range []string{"Partial ", "reply"} {
+		applyTranscriptUpdate(t, &m, &h, map[string]any{
+			"sessionUpdate": "agent_message_chunk", "messageId": "reply",
+			"content": map[string]string{"type": "text", "text": chunk},
+		})
+	}
+	m.Update(finished{reason: "max_tokens"})
+
+	want := []entry{{"assistant", "Partial reply"}, {"system", "Turn stopped · max tokens"}}
+	if m.Busy || !reflect.DeepEqual(m.Messages, want) {
+		t.Fatalf("busy=%t, messages=%q, want busy=false, messages=%q", m.Busy, m.Messages, want)
+	}
+}
