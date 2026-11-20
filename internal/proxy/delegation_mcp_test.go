@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -14,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"petal/internal/delegation"
 	"petal/internal/routing"
+	"petal/internal/sessions"
 )
 
 func TestDelegationAdapterFixture(t *testing.T) {
@@ -354,4 +357,118 @@ func TestDelegationSocketRejectsMissingCredential(t *testing.T) {
 	if _, err := conn.Read(buf[:]); err != io.EOF {
 		t.Fatalf("unauthorized socket read: %v", err)
 	}
+}
+
+func TestDelegationResultRemainsUnreadWhenRelayOutputFails(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	ctx := t.Context()
+	cwd := t.TempDir()
+	binding := sessions.ChildBinding{ParentID: "parent", ChildID: "child"}
+	for _, id := range []string{binding.ParentID, binding.ChildID} {
+		if _, err := sessions.Create(cwd, sessions.Record{ID: id, Model: "model"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sessions.BindChild(ctx, cwd, binding); err != nil {
+		t.Fatal(err)
+	}
+	runtime := delegation.New(ctx, nil, nil)
+	endpoint, err := newDelegationEndpoint(ctx, cwd, delegationTools{read: runtime.Read, wait: runtime.Wait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer endpoint.cancel()
+	endpoint.parent = binding.ParentID
+	close(endpoint.ready)
+
+	start := func(failDelivery bool) (proxyWireTest, <-chan error) {
+		t.Helper()
+		client, relay := net.Pipe()
+		t.Cleanup(func() { _ = client.Close() })
+		if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() {
+			defer relay.Close()
+			output := terminalResultWriter{relay, failDelivery}
+			done <- relayDelegationMCP(ctx, endpoint.server.Args[1], endpoint.server.Env[0].Value, relay, output)
+		}()
+		wire := proxyWireTest{t, bufio.NewScanner(client), json.NewEncoder(client)}
+		wire.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
+		if wire.read()["result"] == nil {
+			t.Fatal("bridge did not initialize")
+		}
+		return wire, done
+	}
+	read := func(wire proxyWireTest, tool string) {
+		t.Helper()
+		wire.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":%q,"arguments":{"child_id":"child"}}}`, tool))
+	}
+	unread := func() bool {
+		t.Helper()
+		records, err := sessions.List(cwd, []string{"model"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range records {
+			if record.ID == binding.ChildID {
+				return record.UnreadChildResult
+			}
+		}
+		t.Fatal("child missing from project history")
+		return false
+	}
+
+	interrupted, failed := start(true)
+	read(interrupted, "petal_read")
+	if response := interrupted.read(); !strings.Contains(string(response["result"]), "running") {
+		t.Fatalf("expected running child, got %s", jsonValue(response))
+	}
+	if err := sessions.FinishChild(ctx, cwd, binding, sessions.ChildResult{Status: "completed", Data: json.RawMessage(`{"answer":"test receipt"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	read(interrupted, "petal_wait")
+	select {
+	case err := <-failed:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("expected stdout failure, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("relay did not report the interrupted write")
+	}
+	if !unread() {
+		t.Fatal("interrupted relay write consumed the result")
+	}
+
+	endpoint.wakes.mu.Lock()
+	endpoint.wakes.children = map[string]bool{binding.ChildID: true}
+	endpoint.wakes.signal()
+	changed := endpoint.wakes.changed
+	endpoint.wakes.mu.Unlock()
+	retry, _ := start(false)
+	read(retry, "petal_wait")
+	if response := retry.read(); !strings.Contains(string(response["result"]), "test receipt") {
+		t.Fatalf("retry did not deliver the terminal result: %s", jsonValue(response))
+	}
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("successfully delivered result did not clear the pending wake")
+	}
+	if unread() {
+		t.Fatal("successfully delivered result stayed unread")
+	}
+}
+
+type terminalResultWriter struct {
+	io.Writer
+	failDelivery bool
+}
+
+func (w terminalResultWriter) Write(data []byte) (int, error) {
+	if w.failDelivery && strings.Contains(string(data), "test receipt") {
+		return 0, io.ErrClosedPipe
+	}
+	return w.Writer.Write(data)
 }

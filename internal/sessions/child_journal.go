@@ -208,6 +208,23 @@ func FinishChild(ctx context.Context, cwd string, binding ChildBinding, result C
 	})
 }
 
+// ConsumeChildResult records delivery of an immutable terminal result to its parent.
+func ConsumeChildResult(ctx context.Context, cwd string, binding ChildBinding) error {
+	return childTransaction(ctx, cwd, func(tx *sql.Tx) error {
+		update, err := tx.ExecContext(ctx, `
+			UPDATE child_bindings SET result_consumed = 1
+			WHERE parent_id = ? AND child_id = ? AND result_status IS NOT NULL`, binding.ParentID, binding.ChildID)
+		if err != nil {
+			return err
+		}
+		count, err := update.RowsAffected()
+		if err == nil && count == 0 {
+			return ErrChildNotFound
+		}
+		return err
+	})
+}
+
 // ReadChildActivity returns activity strictly after the cursor in sequence order.
 // The result and page come from the same snapshot. A zero limit defaults to 100.
 func ReadChildActivity(ctx context.Context, cwd string, binding ChildBinding, after int64, limit int) (ChildActivityPage, error) {
@@ -308,19 +325,21 @@ func loadChildBindings(db *sql.DB, records []Record) error {
 	for i := range records {
 		byID[records[i].ID] = &records[i]
 	}
-	rows, err := db.Query("SELECT child_id, parent_id, COALESCE(result_status, '') FROM child_bindings")
+	rows, err := db.Query("SELECT child_id, parent_id, COALESCE(result_status, ''), result_status IS NOT NULL AND result_consumed = 0 FROM child_bindings")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var child, parent, status string
-		if err := rows.Scan(&child, &parent, &status); err != nil {
+		var unread bool
+		if err := rows.Scan(&child, &parent, &status, &unread); err != nil {
 			return err
 		}
 		if record := byID[child]; record != nil {
 			record.DelegatedParent = parent
 			record.DelegationStatus = status
+			record.UnreadChildResult = unread
 		}
 	}
 	return rows.Err()

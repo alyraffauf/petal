@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,20 +20,21 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"petal/internal/delegation"
 	"petal/internal/routing"
 	"petal/internal/sessions"
 )
 
 const delegationTokenEnv = "PETAL_DELEGATION_TOKEN"
+const deliveryAckMethod = "petal/ackResultDelivery"
 
 const delegationServerName = routing.DelegationMCPServerName
 
-// The bridge encodes runtime results without coupling the wire format to their Go types.
 type delegationTools struct {
 	catalog  func(string) any
 	delegate func(context.Context, string, string, string, string) (any, error)
-	read     func(context.Context, string, string, string, int64) (any, error)
-	wait     func(context.Context, string, string, string, int64, time.Duration) (any, error)
+	read     func(context.Context, string, string, string, int64) (delegation.Page, error)
+	wait     func(context.Context, string, string, string, int64, time.Duration) (delegation.Page, error)
 }
 
 type delegationEndpoint struct {
@@ -111,12 +113,56 @@ func relayDelegationMCP(ctx context.Context, socket, token string, in io.Reader,
 	if _, err := io.WriteString(conn, token); err != nil {
 		return err
 	}
+	// Serialize adapter requests with private delivery acknowledgments on the socket.
+	var writes sync.Mutex
+	send := func(data []byte) error {
+		writes.Lock()
+		defer writes.Unlock()
+		_, err := conn.Write(data)
+		return err
+	}
 	go func() {
-		_, _ = io.Copy(conn, in)
+		scanner := bufio.NewScanner(in)
+		scanner.Buffer(make([]byte, 4096), 1<<20)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			var req mcpRequest
+			if json.Unmarshal(line, &req) == nil && req.Method == deliveryAckMethod {
+				continue
+			}
+			if send(append(line, '\n')) != nil {
+				break
+			}
+		}
+		writes.Lock()
+		defer writes.Unlock()
 		_ = conn.(*net.UnixConn).CloseWrite()
 	}()
-	_, err = io.Copy(out, conn)
-	return err
+	decoder := json.NewDecoder(conn)
+	for {
+		var frame delegationRelayFrame
+		if err := decoder.Decode(&frame); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		data := append(frame.Response, '\n')
+		n, err := out.Write(data)
+		if err != nil {
+			return err
+		}
+		if n != len(data) {
+			return io.ErrShortWrite
+		}
+		if frame.Delivery != "" {
+			ack := mcpRequest{Version: "2.0", Method: deliveryAckMethod, Params: encoded(frame.Delivery)}
+			data, _ := json.Marshal(ack)
+			if err := send(append(data, '\n')); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // parent is the canonical editor-facing route, within cwd. Adapter pins can change
@@ -241,7 +287,7 @@ func (p *proxy) cancelDelegation(parent string) {
 
 type mcpRequest struct {
 	Version string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
+	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params"`
 }
@@ -251,6 +297,12 @@ type mcpResponse struct {
 	ID      json.RawMessage `json:"id"`
 	Result  any             `json:"result,omitempty"`
 	Error   *mcpError       `json:"error,omitempty"`
+}
+
+// The delivery token stays on the private bridge, out of the MCP response.
+type delegationRelayFrame struct {
+	Response json.RawMessage `json:"response"`
+	Delivery string          `json:"delivery,omitempty"`
 }
 
 type mcpError struct {
@@ -270,24 +322,56 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 	encoder := json.NewEncoder(conn)
 	var mu sync.Mutex
 	active := make(map[string]context.CancelFunc)
-	write := func(response mcpResponse) {
-		mu.Lock()
-		defer mu.Unlock()
+	type pendingDelivery struct {
+		requestID string
+		childID   string
+	}
+	pending := make(map[string]pendingDelivery)
+	write := func(response mcpResponse, delivery string) {
 		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := encoder.Encode(response); err != nil {
+		data, err := json.Marshal(response)
+		if err == nil {
+			err = encoder.Encode(delegationRelayFrame{Response: data, Delivery: delivery})
+		}
+		if err != nil {
 			cancel()
 		}
+	}
+	writeResponse := func(response mcpResponse) {
+		mu.Lock()
+		defer mu.Unlock()
+		write(response, "")
 	}
 
 	initialized := false
 	for scanner.Scan() {
 		var req mcpRequest
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-			write(mcpResponse{"2.0", json.RawMessage("null"), nil, &mcpError{-32700, "Parse error"}})
+			writeResponse(mcpResponse{"2.0", json.RawMessage("null"), nil, &mcpError{-32700, "Parse error"}})
 			continue
 		}
 		if req.Version != "2.0" || req.Method == "" {
-			write(mcpResponse{"2.0", json.RawMessage("null"), nil, &mcpError{-32600, "Invalid request"}})
+			writeResponse(mcpResponse{"2.0", json.RawMessage("null"), nil, &mcpError{-32600, "Invalid request"}})
+			continue
+		}
+		if req.ID == nil && req.Method == deliveryAckMethod {
+			var token string
+			if json.Unmarshal(req.Params, &token) == nil {
+				mu.Lock()
+				child := pending[token].childID
+				delete(pending, token)
+				mu.Unlock()
+				if child != "" {
+					binding := sessions.ChildBinding{ParentID: endpoint.parent, ChildID: child}
+					if err := sessions.ConsumeChildResult(ctx, endpoint.cwd, binding); err != nil {
+						if ctx.Err() == nil {
+							slog.Warn("Could not record child result delivery", "childId", child, "error", err)
+						}
+					} else {
+						endpoint.wakes.forget(child)
+					}
+				}
+			}
 			continue
 		}
 		if req.ID == nil {
@@ -297,8 +381,15 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 				}
 				if json.Unmarshal(req.Params, &params) == nil {
 					mu.Lock()
-					if stop := active[string(params.RequestID)]; stop != nil {
+					key := string(params.RequestID)
+					if stop := active[key]; stop != nil {
 						stop()
+					} else {
+						for token, delivery := range pending {
+							if delivery.requestID == key {
+								delete(pending, token)
+							}
+						}
 					}
 					mu.Unlock()
 				}
@@ -336,7 +427,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 		case req.Method == "tools/call":
 			key := string(req.ID)
 			mu.Lock()
-			if len(active) >= 16 || active[key] != nil {
+			if len(active)+len(pending) >= 16 || active[key] != nil {
 				mu.Unlock()
 				response.Error = &mcpError{-32600, "Duplicate request ID or too many active requests"}
 				break
@@ -346,20 +437,26 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 			mu.Unlock()
 			go func() {
 				defer stop()
-				result := endpoint.call(callCtx, tools, req.Params)
+				result, child := endpoint.call(callCtx, tools, req.Params)
 				mu.Lock()
+				defer mu.Unlock()
 				delete(active, key)
-				mu.Unlock()
-				if callCtx.Err() == nil {
-					response.Result = result
-					write(response)
+				if callCtx.Err() != nil {
+					return
 				}
+				var delivery string
+				if child != "" {
+					delivery = rand.Text()
+					pending[delivery] = pendingDelivery{requestID: key, childID: child}
+				}
+				response.Result = result
+				write(response, delivery)
 			}()
 			continue
 		default:
 			response.Error = &mcpError{-32601, "Method not found"}
 		}
-		write(response)
+		writeResponse(response)
 	}
 }
 
@@ -380,18 +477,19 @@ type mcpToolResult struct {
 	IsError bool      `json:"isError,omitempty"`
 }
 
-func (endpoint *delegationEndpoint) call(ctx context.Context, tools delegationTools, raw json.RawMessage) mcpToolResult {
+func (endpoint *delegationEndpoint) call(ctx context.Context, tools delegationTools, raw json.RawMessage) (mcpToolResult, string) {
 	var call struct {
 		Name      string
 		Arguments json.RawMessage
 	}
 	var value any
+	var child string
 	err := json.Unmarshal(raw, &call)
 	if err == nil {
 		select {
 		case <-endpoint.ready:
 			if err = ctx.Err(); err == nil {
-				value, err = endpoint.invoke(ctx, tools, call.Name, call.Arguments)
+				value, child, err = endpoint.invoke(ctx, tools, call.Name, call.Arguments)
 			}
 		default:
 			err = errors.New("Petal has not confirmed the parent session yet")
@@ -401,13 +499,13 @@ func (endpoint *delegationEndpoint) call(ctx context.Context, tools delegationTo
 		var encoded []byte
 		encoded, err = json.Marshal(value)
 		if err == nil {
-			return mcpToolResult{Content: []mcpText{{Type: "text", Text: string(encoded)}}}
+			return mcpToolResult{Content: []mcpText{{Type: "text", Text: string(encoded)}}}, child
 		}
 	}
-	return mcpToolResult{Content: []mcpText{{Type: "text", Text: err.Error()}}, IsError: true}
+	return mcpToolResult{Content: []mcpText{{Type: "text", Text: err.Error()}}, IsError: true}, ""
 }
 
-func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegationTools, name string, arguments json.RawMessage) (any, error) {
+func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegationTools, name string, arguments json.RawMessage) (any, string, error) {
 	decode := func(dest any) error {
 		decoder := json.NewDecoder(bytes.NewReader(arguments))
 		decoder.DisallowUnknownFields()
@@ -418,31 +516,33 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 		var args struct{ Search string }
 		if len(arguments) > 0 {
 			if err := decode(&args); err != nil {
-				return nil, err
+				return nil, "", err
 			}
 		}
-		return tools.catalog(args.Search), nil
+		return tools.catalog(args.Search), "", nil
 	case "petal_delegate":
 		var args struct{ Model, Task string }
 		if err := decode(&args); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if strings.TrimSpace(args.Model) == "" || strings.TrimSpace(args.Task) == "" {
-			return nil, errors.New("model and task are required")
+			return nil, "", errors.New("model and task are required")
 		}
-		return tools.delegate(ctx, endpoint.parent, endpoint.cwd, args.Model, args.Task)
+		value, err := tools.delegate(ctx, endpoint.parent, endpoint.cwd, args.Model, args.Task)
+		return value, "", err
 	case "petal_read":
 		var args struct {
 			ChildID string `json:"child_id"`
 			After   int64
 		}
 		if err := decode(&args); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if args.ChildID == "" || args.After < 0 {
-			return nil, errors.New("child_id is required and after must be nonnegative")
+			return nil, "", errors.New("child_id is required and after must be nonnegative")
 		}
-		return tools.read(ctx, endpoint.parent, endpoint.cwd, args.ChildID, args.After)
+		page, err := tools.read(ctx, endpoint.parent, endpoint.cwd, args.ChildID, args.After)
+		return childDelivery(args.ChildID, page, err)
 	case "petal_wait":
 		args := struct {
 			ChildID string `json:"child_id"`
@@ -450,13 +550,24 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 			Timeout int64
 		}{Timeout: 30}
 		if err := decode(&args); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if args.ChildID == "" || args.After < 0 || args.Timeout < 1 || args.Timeout > 60 {
-			return nil, errors.New("child_id is required, after must be nonnegative, and timeout must be 1 to 60 seconds")
+			return nil, "", errors.New("child_id is required, after must be nonnegative, and timeout must be 1 to 60 seconds")
 		}
-		return tools.wait(ctx, endpoint.parent, endpoint.cwd, args.ChildID, args.After, time.Duration(args.Timeout)*time.Second)
+		page, err := tools.wait(ctx, endpoint.parent, endpoint.cwd, args.ChildID, args.After, time.Duration(args.Timeout)*time.Second)
+		return childDelivery(args.ChildID, page, err)
 	default:
-		return nil, fmt.Errorf("unknown tool %q", name)
+		return nil, "", fmt.Errorf("unknown tool %q", name)
 	}
+}
+
+func childDelivery(child string, page delegation.Page, err error) (any, string, error) {
+	if err != nil {
+		return nil, "", err
+	}
+	if page.Result == nil {
+		child = ""
+	}
+	return childPageResponse(page), child, nil
 }

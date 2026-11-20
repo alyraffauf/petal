@@ -44,7 +44,7 @@ type controlCenter struct {
 type controlNode struct {
 	id, parent, title, kind, state, route string
 	index, depth                          int
-	branch                                bool
+	branch, unread                        bool
 }
 
 func (p *picker) nodes() []controlNode {
@@ -96,7 +96,7 @@ func (p *picker) nodes() []controlNode {
 			title = "untitled conversation"
 		}
 		savedNodes[r.ID] = len(all)
-		all = append(all, controlNode{id: r.ID, parent: parent, title: petalLabel(title), kind: kind, state: petalLabel(state), route: petalLabel(r.Model + " / " + r.Account), index: i})
+		all = append(all, controlNode{id: r.ID, parent: parent, title: petalLabel(title), kind: kind, state: petalLabel(state), route: petalLabel(r.Model + " / " + r.Account), index: i, unread: r.UnreadChildResult})
 	}
 	if current != "" {
 		for i, c := range m.agents.children {
@@ -112,6 +112,7 @@ func (p *picker) nodes() []controlNode {
 			if index, ok := savedNodes[c.id]; ok {
 				if r := p.saved[all[index].index]; r.DelegatedParent != "" {
 					node.parent = r.DelegatedParent
+					node.unread = r.UnreadChildResult
 				}
 				all[index] = node
 			} else {
@@ -359,6 +360,9 @@ func (p *picker) centerDetails(n controlNode) []entry {
 	case "Subagent":
 		rows := []entry{{"system", "Subagent · " + m.Model + " / " + m.Account}}
 		c := m.agents.children[n.index]
+		if n.unread {
+			rows = append(rows, entry{"system", "Unread result"})
+		}
 		if c.description != "" {
 			rows = append(rows, entry{"system", c.description})
 		}
@@ -387,7 +391,11 @@ func (p *picker) centerDetails(n controlNode) []entry {
 		if n.kind == "Delegated" {
 			rows = append(rows, entry{"system", "Parent · " + p.graphName(n.parent)})
 			if r.DelegationStatus != "" {
-				rows = append(rows, entry{"system", "Result · " + petalLabel(r.DelegationStatus)})
+				label := "Result"
+				if n.unread {
+					label = "Unread result"
+				}
+				rows = append(rows, entry{"system", label + " · " + petalLabel(r.DelegationStatus)})
 			}
 		} else if r.Parent != "" {
 			for _, parent := range p.saved {
@@ -578,6 +586,12 @@ func (p *picker) nodeLine(n controlNode, width int, selected bool) string {
 		fg = petalAmber
 		dot = "●"
 		state = "needs input"
+	}
+	if n.unread {
+		fg, dot, state = petalAmber, "●", "unread"
+		if width < 28 {
+			name = "Unread · " + name
+		}
 	}
 	labelWidth := width - indent
 	stateWidth := 0

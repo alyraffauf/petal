@@ -8,7 +8,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -39,24 +38,8 @@ func (p *proxy) configureDelegation() {
 				Next string `json:"next"`
 			}{child, "Continue independent work or finish your turn. Petal will prompt this connected session when the child finishes. Use petal_read or petal_wait if you need activity sooner."}, err
 		},
-		read: func(ctx context.Context, parent, cwd, child string, after int64) (any, error) {
-			page, err := runtime.Read(ctx, parent, cwd, child, after)
-			if err == nil && page.Result != nil {
-				if e := p.endpoint(parent); e != nil {
-					e.wakes.forget(child)
-				}
-			}
-			return childPageResponse(page, err)
-		},
-		wait: func(ctx context.Context, parent, cwd, child string, after int64, timeout time.Duration) (any, error) {
-			page, err := runtime.Wait(ctx, parent, cwd, child, after, timeout)
-			if err == nil && page.Result != nil {
-				if e := p.endpoint(parent); e != nil {
-					e.wakes.forget(child)
-				}
-			}
-			return childPageResponse(page, err)
-		},
+		read: runtime.Read,
+		wait: runtime.Wait,
 	}
 }
 
@@ -98,10 +81,7 @@ func (p *proxy) delegationCatalog(search string) any {
 	}{targets, omitted, p.Model}
 }
 
-func childPageResponse(page delegation.Page, err error) (any, error) {
-	if err != nil {
-		return nil, err
-	}
+func childPageResponse(page delegation.Page) any {
 	next := "Call petal_wait with the same child_id and after set to nextAfter when you need more activity."
 	switch {
 	case page.HasMore:
@@ -116,7 +96,7 @@ func childPageResponse(page delegation.Page, err error) (any, error) {
 	return struct {
 		delegation.Page
 		Next string `json:"next"`
-	}{page, next}, nil
+	}{page, next}
 }
 
 type delegatedConnection struct {
