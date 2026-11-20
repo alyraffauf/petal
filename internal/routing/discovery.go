@@ -110,8 +110,8 @@ func discoverAccount(provider, cli, adapter string, a Account) Account {
 		if cli != "" && a.Env["CODEX_PATH"] == "" {
 			a.Env["CODEX_PATH"] = cli
 		}
-		dir := a.Env["CODEX_HOME"]
-		if dir == "" {
+		dir, configured := a.Env["CODEX_HOME"]
+		if !configured {
 			dir = os.Getenv("CODEX_HOME")
 		}
 		if dir == "" {

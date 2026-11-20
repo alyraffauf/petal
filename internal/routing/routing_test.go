@@ -195,3 +195,24 @@ MODE_SWITCH="enabled"
 		}
 	}
 }
+
+func TestCodexDiscoveryHonorsEmptyAccountHomeOverride(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	ambient := filepath.Join(dir, "ambient")
+	for cache, model := range map[string]string{filepath.Join(home, ".codex"): "home-model", ambient: "ambient-model"} {
+		if err := os.MkdirAll(cache, 0700); err != nil {
+			t.Fatal(err)
+		}
+		data := []byte(`{"models":[{"slug":"` + model + `","visibility":"list"}]}`)
+		if err := os.WriteFile(filepath.Join(cache, "models_cache.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", ambient)
+	account := discoverAccount("codex", "", "codex-acp", Account{Env: map[string]string{"CODEX_HOME": ""}})
+	if len(account.Models["home-model"]) == 0 || len(account.Models["ambient-model"]) != 0 {
+		t.Fatalf("loaded models from the wrong Codex home: %v", account.Models)
+	}
+}
