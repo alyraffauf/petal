@@ -256,7 +256,7 @@ func (m *terminal) View() tea.View {
 		return m.launch.View()
 	}
 	v := m.screen
-	if m.connection == connecting && len(v.Messages) == 0 {
+	if m.connection == connecting && m.ask == nil && len(m.openingPreview) > 0 {
 		v.Messages = m.openingPreview
 	}
 	v.question = m.ask
