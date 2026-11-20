@@ -117,7 +117,7 @@ func TestWheelOverThreadDetailsScrollsOnlyThatPane(t *testing.T) {
 func TestControlCenterFollowsSavedDelegationWithoutLiveSession(t *testing.T) {
 	p := newPicker(routing.Config{})
 	p.saved = []sessions.Record{
-		{ID: "child", Title: "Check ordering", DelegatedParent: "parent", DelegationStatus: "completed"},
+		{ID: "child", Title: "Check ordering", DelegatedParent: "parent", DelegationStatus: "completed", UnreadChildResult: true},
 		{ID: "parent", Title: "Review changes"},
 	}
 	p.center = controlCenter{selected: "parent", folded: map[string]bool{"parent": true}}
@@ -127,5 +127,15 @@ func TestControlCenterFollowsSavedDelegationWithoutLiveSession(t *testing.T) {
 	nodes := p.nodes()
 	if len(nodes) != 2 || p.center.selected != "child" || nodes[1].id != "child" || nodes[1].depth != 1 || nodes[1].state != "completed" {
 		t.Fatalf("saved delegation was not revealed under its parent: %+v", nodes)
+	}
+	p.width, p.height, p.history = 92, 23, true
+	view := ansi.Strip(p.View().Content)
+	if !strings.Contains(view, "Unread result") || !strings.Contains(view, "completed") {
+		t.Fatalf("reopened center did not show the unread result and terminal status:\n%s", view)
+	}
+	p.saved[0].UnreadChildResult = false
+	p.selectNode(p.nodes()[1])
+	if view := ansi.Strip(p.View().Content); strings.Contains(view, "Unread result") {
+		t.Fatalf("center still shows the consumed result as unread:\n%s", view)
 	}
 }

@@ -224,3 +224,54 @@ func TestInterruptedChildRecovery(t *testing.T) {
 		t.Fatalf("failed delegation left a session: %+v, %v", orphan, err)
 	}
 }
+
+func TestChildResultConsumptionIsScopedAndIdempotent(t *testing.T) {
+	cwd, binding := childJournalFixture(t)
+	ctx := t.Context()
+	sibling := ChildBinding{ParentID: binding.ParentID, ChildID: "sibling"}
+	if _, err := Create(cwd, Record{ID: sibling.ChildID, Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := BindChild(ctx, cwd, sibling); err != nil {
+		t.Fatal(err)
+	}
+	requireJournalError(t, ConsumeChildResult(ctx, cwd, binding), ErrChildNotFound)
+	result := ChildResult{Status: "completed", Data: json.RawMessage(`{"answer":"done"}`)}
+	for _, child := range []ChildBinding{binding, sibling} {
+		if err := FinishChild(ctx, cwd, child, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unread := func(want map[string]bool) {
+		t.Helper()
+		records, err := List(cwd, []string{"model"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]bool{}
+		for _, record := range records {
+			if record.DelegatedParent == binding.ParentID {
+				got[record.ID] = record.UnreadChildResult
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("unread flags = %v, want %v", got, want)
+		}
+	}
+	wrong := ChildBinding{ParentID: "other", ChildID: binding.ChildID}
+	requireJournalError(t, ConsumeChildResult(ctx, cwd, wrong), ErrChildNotFound)
+	requireJournalError(t, ConsumeChildResult(ctx, t.TempDir(), binding), ErrChildNotFound)
+	checkJournalPage(t, ctx, cwd, binding, 0, 1, []ChildActivity{}, &result)
+	unread(map[string]bool{"child": true, "sibling": true})
+
+	for range 2 {
+		if err := ConsumeChildResult(ctx, cwd, binding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := FinishChild(ctx, cwd, binding, result); err != nil {
+		t.Fatal(err)
+	}
+	checkJournalPage(t, ctx, cwd, binding, 0, 1, []ChildActivity{}, &result)
+	unread(map[string]bool{"child": false, "sibling": true})
+}

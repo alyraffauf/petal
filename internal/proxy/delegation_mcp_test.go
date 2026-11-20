@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -11,10 +12,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"petal/internal/delegation"
 	"petal/internal/routing"
+	"petal/internal/sessions"
 )
 
 func TestDelegationAdapterFixture(t *testing.T) {
@@ -354,4 +358,155 @@ func TestDelegationSocketRejectsMissingCredential(t *testing.T) {
 	if _, err := conn.Read(buf[:]); err != io.EOF {
 		t.Fatalf("unauthorized socket read: %v", err)
 	}
+}
+
+func TestDelegationResultRemainsUnreadWhenRelayOutputFails(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	ctx := t.Context()
+	cwd := t.TempDir()
+	binding := sessions.ChildBinding{ParentID: "parent", ChildID: "child"}
+	for _, id := range []string{binding.ParentID, binding.ChildID} {
+		if _, err := sessions.Create(cwd, sessions.Record{ID: id, Model: "model"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sessions.BindChild(ctx, cwd, binding); err != nil {
+		t.Fatal(err)
+	}
+	runtime := delegation.New(ctx, nil, nil)
+	endpoint, err := newDelegationEndpoint(ctx, cwd, delegationTools{read: runtime.Read, wait: runtime.Wait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer endpoint.cancel()
+	endpoint.parent = binding.ParentID
+	close(endpoint.ready)
+
+	start := func(failDelivery bool) (proxyWireTest, <-chan error) {
+		t.Helper()
+		client, relay := net.Pipe()
+		t.Cleanup(func() { _ = client.Close() })
+		if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() {
+			defer relay.Close()
+			output := terminalResultWriter{relay, failDelivery}
+			done <- relayDelegationMCP(ctx, endpoint.server.Args[1], endpoint.server.Env[0].Value, relay, output)
+		}()
+		wire := proxyWireTest{t, bufio.NewScanner(client), json.NewEncoder(client)}
+		wire.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
+		if wire.read()["result"] == nil {
+			t.Fatal("bridge did not initialize")
+		}
+		return wire, done
+	}
+	read := func(wire proxyWireTest, tool string) {
+		t.Helper()
+		wire.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":%q,"arguments":{"child_id":"child"}}}`, tool))
+	}
+	unread := func() bool {
+		t.Helper()
+		records, err := sessions.List(cwd, []string{"model"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range records {
+			if record.ID == binding.ChildID {
+				return record.UnreadChildResult
+			}
+		}
+		t.Fatal("child missing from project history")
+		return false
+	}
+
+	interrupted, failed := start(true)
+	read(interrupted, "petal_read")
+	if response := interrupted.read(); !strings.Contains(string(response["result"]), "running") {
+		t.Fatalf("expected running child, got %s", jsonValue(response))
+	}
+	if err := sessions.FinishChild(ctx, cwd, binding, sessions.ChildResult{Status: "completed", Data: json.RawMessage(`{"answer":"test receipt"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	read(interrupted, "petal_wait")
+	select {
+	case err := <-failed:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("expected stdout failure, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("relay did not report the interrupted write")
+	}
+	if !unread() {
+		t.Fatal("interrupted relay write consumed the result")
+	}
+
+	endpoint.wakes.mu.Lock()
+	endpoint.wakes.children = map[string]bool{binding.ChildID: true}
+	endpoint.wakes.signal()
+	changed := endpoint.wakes.changed
+	endpoint.wakes.mu.Unlock()
+	// Drive the relay's private socket so cancellation and acknowledgment arrive
+	// in a deterministic order after the terminal response.
+	conn, err := net.Dial("unix", endpoint.server.Args[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(conn, endpoint.server.Env[0].Value); err != nil {
+		t.Fatal(err)
+	}
+	wire := proxyWireTest{t, bufio.NewScanner(conn), json.NewEncoder(conn)}
+	wire.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
+	wire.read()
+	read(wire, "petal_wait")
+	frame := wire.read()
+	if !strings.Contains(string(frame["response"]), "test receipt") || frame["delivery"] == nil {
+		t.Fatalf("missing terminal delivery: %s", jsonValue(frame))
+	}
+	databases, err := filepath.Glob(filepath.Join(os.Getenv("XDG_STATE_HOME"), "petal", "conversations", "*", "index.sqlite"))
+	if err != nil || len(databases) != 1 {
+		t.Fatalf("locating project database: %v, %v", databases, err)
+	}
+	lock, err := os.Open(filepath.Dir(databases[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	wire.send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}`)
+	wire.send(fmt.Sprintf(`{"jsonrpc":"2.0","method":%q,"params":%s}`, deliveryAckMethod, frame["delivery"]))
+	wire.send(`{"jsonrpc":"2.0","id":3,"method":"ping"}`)
+	if result := wire.read(); !strings.Contains(string(result["response"]), `"id":3`) {
+		t.Fatalf("missing ping response while the store is locked: %s", jsonValue(result))
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("successfully delivered result did not clear the pending wake")
+	}
+	if unread() {
+		t.Fatal("successfully delivered result stayed unread")
+	}
+}
+
+type terminalResultWriter struct {
+	io.Writer
+	failDelivery bool
+}
+
+func (w terminalResultWriter) Write(data []byte) (int, error) {
+	if w.failDelivery && strings.Contains(string(data), "test receipt") {
+		return 0, io.ErrClosedPipe
+	}
+	return w.Writer.Write(data)
 }
