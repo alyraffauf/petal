@@ -42,7 +42,7 @@ func (v screen) layoutMessage(index int, e entry, width int) messageLayout {
 	layout = messageLayout{text: e.Text, role: e.Role, width: width}
 	preview, hasImage := v.images[e.Text]
 	if e.Role == "tool" && !hasImage {
-		layout.log = indexPlainLog(e.Text, width)
+		layout.log = c.indexPlainLog(e.Text, width)
 	}
 	if layout.log == nil {
 		source := e.Text
