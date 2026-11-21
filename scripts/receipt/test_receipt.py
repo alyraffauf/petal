@@ -152,10 +152,13 @@ write({'method':'barrier'})
 read()
 event('running')
 event('idle')
-write({'id':2,'result':{'messageId':'current'}})
 write({'method':'session/update','params':{'sessionId':'parent','update':{'sessionUpdate':'user_message','messageId':'current'}}})
 event('running')
 event('idle')
+write({'method':'session/update','params':{'sessionId':'parent','update':{'sessionUpdate':'user_message','messageId':'wake'}}})
+event('running')
+event('idle')
+write({'id':2,'result':{'messageId':'current'}})
 """
         with subprocess.Popen(
             [sys.executable, "-c", script],
@@ -178,6 +181,7 @@ event('idle')
                 _, events = client.request(
                     2, "session/prompt", {"sessionId": "parent"}, wait_idle=True
                 )
+                self.assertEqual(events[0]["messageId"], "current")
                 self.assertEqual(
                     [e["state"] for e in events if "state" in e], ["running", "idle"]
                 )

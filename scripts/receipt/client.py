@@ -66,17 +66,18 @@ class Client:
         self.turn_start = cursor
         message_id = None
         updates = []
+        completed = {}
         response = None
-        running = idle = False
+        running = False
+        start = cursor
         with self.changed:
-            while response is None or (
-                wait_idle
-                and (
-                    not idle
-                    or not message_id
-                    or message_id != response.get("messageId")
-                )
-            ):
+            while True:
+                if response is not None:
+                    if not wait_idle:
+                        return response, updates
+                    if response.get("messageId") in completed:
+                        self.turn_start, turn_updates = completed[response["messageId"]]
+                        return response, turn_updates
                 self.changed.wait_for(
                     lambda cursor=cursor: cursor < len(self.events) or self.closed
                 )
@@ -91,21 +92,21 @@ class Client:
                     update = payload["update"]
                     if wait_idle and update.get("sessionUpdate") == "user_message":
                         message_id = update.get("messageId")
-                        running = idle = False
-                        updates.clear()
-                        self.turn_start = cursor - 1
+                        running = False
+                        updates = []
+                        start = cursor - 1
                     updates.append(update)
                     if update.get("sessionUpdate") == "state_update":
                         if update.get("state") == "running":
-                            running, idle = True, False
+                            running = True
                         elif (
-                            running
+                            message_id and running
                             and update.get("state") == "idle"
                             and update.get("stopReason")
                         ):
-                            idle = True
+                            completed.setdefault(message_id, (start, updates.copy()))
+                            running = False
                 elif "method" not in packet and packet.get("id") == ident:
                     if "error" in packet:
                         raise RuntimeError("ACP request rejected")
                     response = packet["result"]
-        return response, updates
