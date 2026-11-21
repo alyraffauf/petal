@@ -135,15 +135,25 @@ func ReadHistoryWithContext(ctx context.Context, cwd, parent string, reference i
 }
 
 type HistoryMatch struct {
+	Source    string `json:"source,omitempty"`
 	Reference int64  `json:"reference"`
 	Session   string `json:"session"`
 	Role      string `json:"role"`
 	Snippet   string `json:"snippet"`
 }
 
+type HistoryCoverage struct {
+	Indexed int  `json:"indexed"`
+	Window  int  `json:"window"`
+	Partial bool `json:"partial"`
+}
+
 type HistoryMatches struct {
-	Hits       []HistoryMatch `json:"hits"`
-	NextBefore int64          `json:"next_before,omitempty"`
+	Coverage   *HistoryCoverage `json:"coverage,omitempty"`
+	Next       string           `json:"next,omitempty"`
+	Retrieval  string           `json:"retrieval,omitempty"`
+	Hits       []HistoryMatch   `json:"hits"`
+	NextBefore int64            `json:"next_before,omitempty"`
 }
 
 func SearchHistory(ctx context.Context, cwd, parent, query string, before int64) (HistoryMatches, error) {
@@ -160,6 +170,15 @@ func SearchHistory(ctx context.Context, cwd, parent, query string, before int64)
 		return page, err
 	}
 	defer db.Close()
+	return searchHistory(ctx, db, parent, expr, before)
+}
+
+type historyReader interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func searchHistory(ctx context.Context, db historyReader, parent, expr string, before int64) (HistoryMatches, error) {
+	page := HistoryMatches{Hits: []HistoryMatch{}}
 	rows, err := db.QueryContext(ctx, historyScope+`SELECT m.rowid,m.session_id,m.role,CASE WHEN length(snippet(message_search,0,'','','…',18)) <= 512
 		THEN snippet(message_search,0,'','','…',18)
 		ELSE substr(snippet(message_search,0,'','','…',1),1,512) END
