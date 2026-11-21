@@ -42,6 +42,8 @@ type backend struct {
 	hello  acp.InitializeResponse
 }
 type proxy struct {
+	editorSessions *editorSessions
+
 	embedded      bool
 	editorUpdates chan struct{}
 	routing.Config
@@ -620,6 +622,23 @@ func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Re
 	lifetime, stop := context.WithCancel(lifetime)
 	editorWire := &adapterWire{Writer: out, lifetime: lifetime}
 	p := proxy{editorWire: editorWire, editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
+	if !embedded && c.Model == "" {
+		p.Model = c.DefaultModel()
+		if len(c.ModelNames()) > 1 {
+			p.editorSessions = &editorSessions{routes: make(map[string]*proxy)}
+			// The catalog can route successive sessions to different adapters.
+			// Stock Claude and Codex share v1; a model-bound entry can negotiate v2.
+			var claude, codex bool
+			for name, account := range c.Accounts {
+				if c.PinnedAccount != "" && c.PinnedAccount != name {
+					continue
+				}
+				claude = claude || account.Provider == "claude"
+				codex = codex || account.Provider == "codex"
+			}
+			p.editorSessions.commonV1 = claude && codex
+		}
+	}
 	p.configureDelegation()
 	ready := make(chan struct{})
 	reader := incoming(in, nil)
@@ -630,7 +649,13 @@ func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Re
 		if id != nil {
 			ctx = context.WithValue(ctx, editorRequestID{}, id)
 		}
-		result, err := p.handle(ctx, method, params)
+		var result any
+		var err error
+		if p.editorSessions != nil {
+			result, err = p.handleEditor(ctx, method, params)
+		} else {
+			result, err = p.handle(ctx, method, params)
+		}
 		return result, rpcError(err)
 	}, editorWire, reader)
 	editorWire.conn = p.editor

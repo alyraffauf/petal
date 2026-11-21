@@ -42,14 +42,11 @@ func main() {
 			}
 			return login.Run()
 		}
-		if model == "" {
-			c.Model = c.DefaultModel()
-			if c.Model == "" {
-				if c.PinnedAccount != "" {
-					return fmt.Errorf("no ACP model available for account %q", c.PinnedAccount)
-				}
-				return fmt.Errorf("no ACP model available")
+		if model == "" && c.DefaultModel() == "" {
+			if c.PinnedAccount != "" {
+				return fmt.Errorf("no ACP model available for account %q", c.PinnedAccount)
 			}
+			return fmt.Errorf("no ACP model available")
 		}
 		proxy.Serve(c)
 		return nil

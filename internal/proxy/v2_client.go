@@ -40,7 +40,11 @@ func (p *proxy) relayV2ClientCall(ctx context.Context, name, method string, raw 
 	}
 	rewriteID := func(fields Object, key string) {
 		if hasString(fields, key) {
-			fields[key] = encoded(p.publicID(name, stringField(fields, key)))
+			if key == "elicitationId" {
+				fields[key] = encoded(p.publicID(name, stringField(fields, key)))
+			} else {
+				fields[key] = encoded(p.editorID(name, stringField(fields, key)))
+			}
 		}
 	}
 	nativeSession := stringField(params, "sessionId")
@@ -87,7 +91,7 @@ func (p *proxy) relayV2ClientCall(ctx context.Context, name, method string, raw 
 		if p.delegation != nil && native == "session/update" {
 			update := params.member("update")
 			if stringField(update, "sessionUpdate") == "state_update" {
-				e := p.endpoint(stringField(params, "sessionId"))
+				e := p.endpoint(p.publicID(name, nativeSession))
 				if e != nil {
 					switch stringField(update, "state") {
 					case "running":

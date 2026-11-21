@@ -81,7 +81,7 @@ func (p *proxy) initialize(ctx context.Context, raw json.RawMessage) (any, error
 			names = append(names, name)
 		}
 	}
-	if p.ACPv2 && *request.Version >= 2 {
+	if p.ACPv2 && *request.Version >= 2 && (p.editorSessions == nil || !p.editorSessions.commonV1) {
 		result, selected, err := p.initializeV2(ctx, raw, names, *request.Version)
 		if selected || err != nil {
 			return result, err

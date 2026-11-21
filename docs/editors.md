@@ -26,9 +26,13 @@ Zed 1.28.1 tries ACP v2 when Zed enables its `acp-beta` feature flag. Release bu
 
 ## Choose a model or account
 
-Set `args` to `["acp", "codex/default"]` to use the default Codex model and balance new sessions across your Codex accounts. Use `["acp", "claude/default"]` for Claude Code. To pin a configured account, use `["acp", "codex/default", "--account", "work"]`.
+With `petal acp`, one editor entry offers models from all discovered and configured accounts. Choose Claude or Codex when starting a thread. Petal routes the session to an account offering that model and remembers it when you reopen the thread.
 
-Without a model argument, Petal picks the first route ending in `/default` in alphabetical order. If no route ends in `/default`, it picks the first route alphabetically.
+To limit the entry to one route, set `args` to `["acp", "codex/default"]` to use the default Codex model and balance new sessions across your Codex accounts. Use `["acp", "claude/default"]` for Claude Code. To pin a configured account, use `["acp", "codex/default", "--account", "work"]`.
+
+When the picker spans Claude and Codex, Petal uses ACP v1, which both stock adapters support. A model-specific entry can negotiate ACP v2.
+
+If you send a prompt without choosing a model, Petal picks the first route ending in `/default` in alphabetical order. If no route ends in `/default`, it picks the first route alphabetically.
 
 ## Connect another ACP client
 
