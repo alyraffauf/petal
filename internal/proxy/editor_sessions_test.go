@@ -49,8 +49,34 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 		if err := json.Unmarshal(session["configOptions"], &opts); err != nil || len(opts) != 1 || len(opts[0].Options) != 2 || opts[0].Options[0].Value != "claude/default" || opts[0].Options[1].Value != "codex/default" {
 			t.Fatalf("editor picker: %s", session["configOptions"])
 		}
+		if model == "codex/default" {
+			call("session/set_config_option", Object{"sessionId": session["sessionId"], "configId": encoded("model"), "value": encoded("claude/default")})
+		}
 		ids[model] = session["sessionId"]
 		call("session/set_config_option", Object{"configId": encoded("model"), "value": encoded(model), "sessionId": session["sessionId"]})
+	}
+	query := Object{"cwd": encoded(cwd)}
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		page := call("session/list", query)
+		var rows []Object
+		if json.Unmarshal(page["sessions"], &rows) != nil {
+			t.Fatal("invalid session page")
+		}
+		for _, row := range rows {
+			parts := decodeRouteID(stringField(row, "sessionId"), 3)
+			if parts == nil || seen[parts[0]] {
+				t.Fatal("unexpected history row", row)
+			}
+			seen[parts[0]] = true
+		}
+		if page["nextCursor"] == nil {
+			break
+		}
+		query["cursor"] = page["nextCursor"]
+	}
+	if !seen["a"] || !seen["b"] {
+		t.Fatalf("missing account in history: %v", seen)
 	}
 	moved := cwd + "-moved"
 	if err := os.Rename(cwd, moved); err != nil {

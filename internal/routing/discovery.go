@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Nix supplies bridges for installed CLIs. Explicit PATH entries take precedence.
@@ -124,7 +126,21 @@ func discoverAccount(provider, cli, adapter string, a Account) Account {
 				DisplayName      string `json:"display_name"`
 			}
 		}
-		if data, err := os.ReadFile(filepath.Join(dir, "models_cache.json")); err == nil && json.Unmarshal(data, &cache) == nil {
+		data, err := os.ReadFile(filepath.Join(dir, "models_cache.json"))
+		if err == nil {
+			err = json.Unmarshal(data, &cache)
+		}
+		if (err != nil || len(cache.Models) == 0) && cli != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			cmd := a.Command(ctx, []string{cli, "debug", "models"})
+			cmd.WaitDelay = time.Second
+			data, err = cmd.Output()
+			if err == nil {
+				err = json.Unmarshal(data, &cache)
+			}
+		}
+		if err == nil {
 			for _, m := range cache.Models {
 				if m.Visibility == "list" {
 					ids = append(ids, m.Slug)

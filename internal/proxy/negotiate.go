@@ -215,6 +215,14 @@ func (p *proxy) initializeV1(ctx context.Context, raw json.RawMessage, names []s
 	if len(meta) > 0 {
 		result["_meta"] = meta
 	}
+	if p.editorSessions != nil {
+		sessionCaps, ok := caps["sessionCapabilities"].(map[string]any)
+		if !ok {
+			sessionCaps = map[string]any{}
+			caps["sessionCapabilities"] = sessionCaps
+		}
+		sessionCaps["list"] = map[string]any{}
+	}
 	if len(p.accounts) > 1 {
 		delete(caps, "providers")
 	}
@@ -259,7 +267,13 @@ func (p *proxy) list(ctx context.Context, params Object) (any, error) {
 	if index >= len(p.accounts) {
 		return Object{"sessions": json.RawMessage("[]")}, nil
 	}
-	name := p.accounts[index]
+	return p.accountPage(ctx, params, p.accounts, index, cursor)
+}
+
+func (p *proxy) accountPage(ctx context.Context, params Object, accounts []string, index int, cursor sessionCursor) (any, error) {
+	nativeV2 := p.version == 2
+	name := accounts[index]
+	var err error
 	delete(params, "cursor")
 	if cursor.native != nil {
 		params["cursor"] = encoded(*cursor.native)
@@ -304,9 +318,9 @@ func (p *proxy) list(ctx context.Context, params Object) (any, error) {
 		next = nil
 	}
 	delete(result, "nextCursor")
-	if next != nil || index+1 < len(p.accounts) {
+	if next != nil || index+1 < len(accounts) {
 		if next == nil {
-			name = p.accounts[index+1]
+			name = accounts[index+1]
 			if !nativeV2 {
 				empty := ""
 				next = &empty
