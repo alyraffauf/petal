@@ -61,7 +61,7 @@ func TestTranscriptSearchFollowsSessionLifecycle(t *testing.T) {
 		if _, err := Create(project, Record{ID: account, Account: account, Model: "codex"}); err != nil {
 			t.Fatal(err)
 		}
-		if err := SaveTranscript(project, account, []Message{{"user", "Measure cache miss frequency"}, {"agent", "Cache hits outnumber misses"}}, false); err != nil {
+		if err := SaveTranscript(project, account, []Message{{Role: "user", Body: "Measure cache miss frequency"}, {Role: "agent", Body: "Cache hits outnumber misses"}}, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -87,10 +87,10 @@ func TestTranscriptSearchFollowsSessionLifecycle(t *testing.T) {
 	if hits := search(t.TempDir(), "", "cache", 0); len(hits) != 0 {
 		t.Fatal(hits)
 	}
-	if err := SaveTranscript(project, "work", []Message{{"tool", "Rotated credentials"}}, true); err != nil {
+	if err := SaveTranscript(project, "work", []Message{{Role: "tool", Body: "Rotated credentials"}}, true); err != nil {
 		t.Fatal(err)
 	}
-	if hits := search(project, "work", "cache", 0); len(hits) != 0 {
+	if hits := search(project, "work", "cache", 0); len(hits) != 1 {
 		t.Fatal(hits)
 	}
 	if hits := search(project, "work", "credentials", 0); len(hits) != 1 || hits[0].Role != "tool" {
@@ -125,5 +125,53 @@ func TestUpdateRejectsTimestampOutsideStorageRange(t *testing.T) {
 	got, err := Lookup(project, original.ID)
 	if err != nil || got.ID != original.ID || !got.Opened.Equal(original.Opened) || !got.Updated.IsZero() {
 		t.Fatalf("failed edit changed the stored record: %+v, %v", got, err)
+	}
+}
+
+func TestCompactedReplayKeepsReferencesUntilDeletion(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	const id = "project-thread"
+	if _, err := Create(cwd, Record{ID: id, Model: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	save := func(replay bool, msgs ...Message) {
+		t.Helper()
+		if err := SaveTranscript(cwd, id, msgs, replay); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := Message{"user", "original needle", "u1"}
+	reply := Message{"assistant", "yes", "a1"}
+	save(false, first, reply)
+	initial, err := Transcript(cwd, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1 := Message{"compaction", "first summary", "c1"}
+	c2 := Message{"compaction", "second summary", "c2"}
+	sameText := Message{"assistant", "yes", "a2"}
+	save(true, c1, reply)
+	save(true, c2, sameText)
+	save(true, c2, sameText)
+	save(true)
+	rows, err := Transcript(cwd, id)
+	if err != nil || len(rows) != 5 || rows[0] != initial[0] || rows[1] != initial[1] || rows[2].Role != "compaction" || rows[3].Body != c2.Body || rows[4].Body != sameText.Body {
+		t.Fatalf("archive: %+v, %v", rows, err)
+	}
+	hits, err := Search(cwd, "", "needle", 0, 5)
+	if err != nil || len(hits) != 1 || hits[0].Row != initial[0].Rowid {
+		t.Fatalf("lost original reference: %+v %v", hits, err)
+	}
+	if err := Forget(cwd, "", id); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = Transcript(cwd, id)
+	if err != nil || len(rows) != 0 {
+		t.Fatal(rows, err)
+	}
+	hits, err = Search(cwd, "", "needle", 0, 5)
+	if err != nil || len(hits) != 0 {
+		t.Fatal(hits, err)
 	}
 }

@@ -16,12 +16,13 @@ type ChildActivity struct {
 }
 
 type ChildBinding struct {
-	ChildID        string
-	ParentID       string
-	Lease          sql.NullString
-	ResultStatus   sql.NullString
-	ResultData     []byte
-	ResultConsumed int64
+	ChildID         string
+	ParentID        string
+	Lease           sql.NullString
+	ResultStatus    sql.NullString
+	ResultData      []byte
+	CancelRequested int64
+	ResultConsumed  int64
 }
 
 type Message struct {
@@ -29,6 +30,7 @@ type Message struct {
 	SessionID string
 	Role      string
 	Body      string
+	SourceID  sql.NullString
 }
 
 type MessageSearch struct {

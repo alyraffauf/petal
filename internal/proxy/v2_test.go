@@ -104,6 +104,11 @@ func TestNativeV2Adapter(t *testing.T) {
 		case "session/resume":
 			active = true
 			if params["replayFrom"] != nil {
+				if os.Getenv("PETAL_COMPACT_REPLAY") == "1" {
+					for _, id := range []string{"first", "second"} {
+						update(`{"sessionUpdate":"compaction_update","status":"completed","compactionId":"` + id + `","summary":[{"type":"text","text":"summary"}]}`)
+					}
+				}
 				update(`{"sessionUpdate":"replay_complete"}`)
 			}
 			update(`{"sessionUpdate":"state_update","state":"running","background":[{"type":"subagent","sessionId":"child"}]}`)

@@ -100,16 +100,21 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 func TestExternalV2TurnIsSearchableAtIdle(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cwd := t.TempDir()
-	editor, server := net.Pipe()
-	t.Cleanup(func() { editor.Close(); server.Close() })
-	if err := editor.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		t.Fatal(err)
+	t.Setenv("PETAL_COMPACT_REPLAY", "1")
+	launch := func() proxyWireTest {
+		editor, server := net.Pipe()
+		t.Cleanup(func() { editor.Close(); server.Close() })
+		if err := editor.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		cfg := routing.Config{ACPv2: true, Model: "m", Accounts: map[string]routing.Account{"work": nativeAccount(t, `{"session":{}}`)}}
+		connect(t.Context(), cfg, server, server, false, nil)
+		wire := proxyWireTest{t, bufio.NewScanner(editor), json.NewEncoder(editor)}
+		wire.send(v2Initialize)
+		wire.read()
+		return wire
 	}
-	cfg := routing.Config{ACPv2: true, Model: "m", Accounts: map[string]routing.Account{"work": nativeAccount(t, `{"session":{}}`)}}
-	connect(t.Context(), cfg, server, server, false, nil)
-	wire := proxyWireTest{t, bufio.NewScanner(editor), json.NewEncoder(editor)}
-	wire.send(v2Initialize)
-	wire.read()
+	wire := launch()
 	wire.send(`{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":` + string(encoded(cwd)) + `,"mcpServers":[]}}`)
 	id := wire.read().member("result")["sessionId"]
 	wire.send(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":` + string(id) + `,"idempotencyKey":"transcript","prompt":[{"type":"text","text":"lookup"}]}}`)
@@ -127,4 +132,22 @@ func TestExternalV2TurnIsSearchableAtIdle(t *testing.T) {
 	if err != nil || len(rows) != 2 || rows[0].Body != "lookup" || rows[1].Body != "needle" {
 		t.Fatalf("persisted transcript %v: %v", rows, err)
 	}
+	reopened := launch()
+	for i := 0; i < 2; i++ {
+		reopened.send(`{"jsonrpc":"2.0","id":4,"method":"session/resume","params":{"sessionId":` + string(id) + `,"cwd":` + string(encoded(cwd)) + `,"mcpServers":[],"replayFrom":{"type":"start"}}}`)
+		for {
+			frame := reopened.read()
+			if string(frame["id"]) == "4" {
+				if frame["error"] != nil {
+					t.Fatal(string(frame["error"]))
+				}
+				break
+			}
+		}
+	}
+	archive, err := sessions.Transcript(cwd, hits[0].Session)
+	if err != nil || len(archive) != 4 || archive[0] != rows[0] || archive[1] != rows[1] || archive[2].Role != "compaction" || archive[3].Role != "compaction" {
+		t.Fatalf("archive after compacted replay: %+v, %v", archive, err)
+	}
+
 }

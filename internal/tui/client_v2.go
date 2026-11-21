@@ -192,7 +192,7 @@ func (h *harness) updateV2(ctx context.Context, raw json.RawMessage) (bool, *acp
 		h.releaseV2Slot()
 		h.emitV2(ctx, update)
 	case "user_message", "user_message_chunk", "agent_message", "agent_message_chunk",
-		"agent_thought", "agent_thought_chunk", "tool_call_update", "tool_call_content_chunk":
+		"agent_thought", "agent_thought_chunk", "tool_call_update", "tool_call_content_chunk", "compaction_update", "compaction_summary_chunk":
 		h.releaseV2Slot()
 		h.emitV2(ctx, event{v2Update: params.Update})
 	default:

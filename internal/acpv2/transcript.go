@@ -40,12 +40,17 @@ func (t *Transcript) Reset() { *t = Transcript{} }
 // with no displayable content keeps its position but has no visible entry.
 func (t *Transcript) Entries() []Entry {
 	var entries []Entry
+	t.Visit(func(_ string, e Entry) { entries = append(entries, e) })
+	return entries
+}
+
+// Visit yields visible entries with their adapter IDs in first-seen order.
+func (t *Transcript) Visit(yield func(string, Entry)) {
 	for _, row := range t.rows {
 		if text := row.text(); text != "" {
-			entries = append(entries, Entry{Role: row.role, Text: text})
+			yield(row.id, Entry{Role: row.role, Text: text})
 		}
 	}
-	return entries
 }
 
 func (row transcriptRow) text() string {
@@ -69,6 +74,9 @@ func (row transcriptRow) body() string {
 }
 
 func (row transcriptRow) header() string {
+	if row.role == "compaction" {
+		return strings.TrimSpace("Context compaction " + row.status + " " + row.title)
+	}
 	if row.role != "tool" {
 		return ""
 	}
@@ -112,6 +120,9 @@ func (t *Transcript) Apply(update json.RawMessage) (bool, error) {
 	var role string
 	idField := "messageId"
 	switch kind {
+	case "compaction_update", "compaction_summary_chunk":
+		role = "compaction"
+		idField = "compactionId"
 	case "user_message", "user_message_chunk":
 		role = "user"
 	case "agent_message", "agent_message_chunk":
@@ -158,6 +169,11 @@ func (t *Transcript) Apply(update json.RawMessage) (bool, error) {
 	}
 
 	before := *row
+	if role == "compaction" {
+		patchString(&row.status, fields["status"])
+		patchString(&row.title, fields["error"])
+		fields["content"] = fields["summary"]
+	}
 	if role == "tool" {
 		patchString(&row.name, fields["name"])
 		patchString(&row.title, fields["title"])
@@ -174,7 +190,7 @@ func (t *Transcript) Apply(update json.RawMessage) (bool, error) {
 		}
 		return (role == "tool" && !found) || before.text() != row.text(), nil
 	}
-	return role == "tool" && (!found || before.header() != row.header()), nil
+	return (role == "tool" || role == "compaction") && (!found || before.header() != row.header()), nil
 }
 
 func readString(raw json.RawMessage) (string, bool) {

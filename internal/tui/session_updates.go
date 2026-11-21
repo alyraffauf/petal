@@ -55,7 +55,7 @@ func usageDetails(u *acp.SessionUsageUpdate) string {
 	return s
 }
 
-const compactionRole = "compaction"
+const compactionRole = "compaction-ref"
 
 type compaction struct {
 	status          acp.CompactionStatus

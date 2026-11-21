@@ -180,6 +180,9 @@ func TestV2ClientNegotiatesAndReplaysThroughProxy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if mode != "truncated" {
+				want = append([]entry{{"user", "stale"}}, want...)
+			}
 			if len(rows) != len(want) {
 				t.Fatalf("indexed rows = %+v, want %+v", rows, want)
 			}

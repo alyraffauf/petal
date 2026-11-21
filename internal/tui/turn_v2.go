@@ -9,6 +9,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"petal/internal/acpv2"
+	"petal/internal/sessions"
 )
 
 type promptV2Result struct{ err error }
@@ -149,7 +150,7 @@ func (m *terminal) recordV2Update(update json.RawMessage) {
 }
 
 // Updates can revise a previously displayed tool or message in place. Keep
-// local UI notices after the projected transcript and replace the search rows
+// local UI notices after the projected transcript and archive new observations
 // from the same projection when the foreground is idle.
 func (m *terminal) publishV2Transcript(checkpoint bool) {
 	conversation := m.conversationV2()
@@ -175,7 +176,11 @@ func (m *terminal) publishV2Transcript(checkpoint bool) {
 	m.transcriptRevision++
 	if !busy || checkpoint {
 		conversation.dirty = false
-		m.indexMessages(messages[:conversation.shown], true)
+		if m.h != nil && m.h.record.ID != "" && m.Cwd != "" {
+			if err := sessions.SaveTranscript(m.Cwd, m.h.record.ID, sessions.ProjectTranscript(conversation.transcript, true), true); err != nil {
+				m.recordNote("Could not index transcript · " + err.Error())
+			}
+		}
 	}
 }
 
