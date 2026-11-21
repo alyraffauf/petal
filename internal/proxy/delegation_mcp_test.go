@@ -287,6 +287,16 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			if page := call(firstMCP, "petal_read_transcript", anchor, false); !strings.Contains(page, "receipt") {
 				t.Fatal(page)
 			}
+			if err := sessions.SaveTranscript(cwd, handle.ChildID, []sessions.Message{{Role: "tool", Body: "fixture neighbor"}}, false); err != nil {
+				t.Fatal(err)
+			}
+			window := fmt.Sprintf(`{"reference":%d,"context":8}`, ref)
+			var passage sessions.HistoryPassage
+			page := call(firstMCP, "petal_read_transcript", window, false)
+			if err := json.Unmarshal([]byte(page), &passage); err != nil || len(passage.After) == 0 || passage.After[len(passage.After)-1].Text != "fixture neighbor" {
+				t.Fatalf("child context: %s", page)
+			}
+			call(secondMCP, "petal_read_transcript", window, true)
 			call(secondMCP, "petal_read_transcript", anchor, true)
 			private := call(secondMCP, "petal_search_history", `{"query":"receipt"}`, false)
 			if private != `{"hits":[]}` {

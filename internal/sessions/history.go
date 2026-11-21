@@ -4,19 +4,29 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"unicode/utf8"
 )
 
 // Message references are stable within the endpoint's project archive.
 type HistoryPassage struct {
-	Reference  int64  `json:"reference"`
-	Session    string `json:"session"`
-	Role       string `json:"role"`
-	Text       string `json:"text"`
-	Offset     int    `json:"offset"`
-	NextOffset int    `json:"next_offset,omitempty"`
-	Previous   int64  `json:"previous,omitempty"`
-	Next       int64  `json:"next,omitempty"`
+	Reference  int64             `json:"reference"`
+	Session    string            `json:"session"`
+	Role       string            `json:"role"`
+	Text       string            `json:"text"`
+	Offset     int               `json:"offset"`
+	NextOffset int               `json:"next_offset,omitempty"`
+	Before     []HistoryNeighbor `json:"before,omitempty"`
+	After      []HistoryNeighbor `json:"after,omitempty"`
+	Previous   int64             `json:"previous,omitempty"`
+	Next       int64             `json:"next,omitempty"`
+}
+
+type HistoryNeighbor struct {
+	Reference int64  `json:"reference"`
+	Role      string `json:"role"`
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // Follow only durable delegation links, starting at the authenticated session.
@@ -25,7 +35,14 @@ const historyScope = `WITH RECURSIVE scope(id) AS (
 ) `
 
 func ReadHistory(ctx context.Context, cwd, parent string, reference int64, offset int) (HistoryPassage, error) {
+	return ReadHistoryWithContext(ctx, cwd, parent, reference, offset, 0)
+}
+
+func ReadHistoryWithContext(ctx context.Context, cwd, parent string, reference int64, offset, count int) (HistoryPassage, error) {
 	var passage HistoryPassage
+	if count < 0 || count > 8 {
+		return passage, errors.New("context must be between 0 and 8")
+	}
 	if reference < 0 || offset < 0 || offset > 1<<31-1 || (reference == 0 && offset != 0) {
 		return passage, errors.New("invalid transcript reference or offset")
 	}
@@ -59,6 +76,51 @@ func ReadHistory(ctx context.Context, cwd, parent string, reference int64, offse
 		passage.Text = passage.Text[:end]
 		passage.NextOffset = offset + end
 	}
+	if count == 0 || passage.NextOffset != 0 {
+		return passage, nil
+	}
+	remaining := 4096 - len(passage.Text)
+	// Spend the shared budget on preceding messages first, nearest first on each side.
+	for _, before := range []bool{true, false} {
+		if remaining == 0 {
+			break
+		}
+		order := "rowid > ? ORDER BY rowid ASC"
+		dest := &passage.After
+		if before {
+			order = "rowid < ? ORDER BY rowid DESC"
+			dest = &passage.Before
+		}
+		rows, err := db.QueryContext(ctx, `SELECT rowid,role,substr(CAST(body AS BLOB),1,?) FROM messages WHERE session_id=? AND `+order+" LIMIT ?", remaining+1, passage.Session, passage.Reference, count)
+		if err != nil {
+			return passage, err
+		}
+		for remaining > 0 && rows.Next() {
+			var n HistoryNeighbor
+			if err := rows.Scan(&n.Reference, &n.Role, &n.Text); err != nil {
+				rows.Close()
+				return passage, err
+			}
+			if len(n.Text) > remaining {
+				end := remaining
+				for end > 0 && !utf8.RuneStart(n.Text[end]) {
+					end--
+				}
+				n.Text = n.Text[:end]
+				n.Truncated = true
+			}
+			*dest = append(*dest, n)
+			remaining -= len(n.Text)
+			if n.Truncated {
+				remaining = 0
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return passage, err
+		}
+	}
+	slices.Reverse(passage.Before)
 	return passage, nil
 }
 
