@@ -35,7 +35,7 @@ func ReadHistory(ctx context.Context, cwd, parent string, reference int64, offse
 	}
 	defer db.Close()
 	// A zero reference opens the latest message in the caller's thread.
-	const query = historyScope + `SELECT m.rowid,m.session_id,m.role,substr(m.body,?,4097),
+	const query = historyScope + `SELECT m.rowid,m.session_id,m.role,substr(CAST(m.body AS BLOB),?,4097),
 		coalesce((SELECT max(rowid) FROM messages WHERE session_id=m.session_id AND rowid<m.rowid),0),
 		coalesce((SELECT min(rowid) FROM messages WHERE session_id=m.session_id AND rowid>m.rowid),0)
 		FROM messages m WHERE m.rowid=coalesce(nullif(?,0),(SELECT max(rowid) FROM messages WHERE session_id=?))
@@ -48,10 +48,16 @@ func ReadHistory(ctx context.Context, cwd, parent string, reference int64, offse
 		return passage, err
 	}
 	passage.Offset = offset
-	if utf8.RuneCountInString(passage.Text) > 4096 {
-		_, size := utf8.DecodeLastRuneInString(passage.Text)
-		passage.Text = passage.Text[:len(passage.Text)-size]
-		passage.NextOffset = offset + 4096
+	if len(passage.Text) > 0 && !utf8.RuneStart(passage.Text[0]) {
+		return HistoryPassage{}, errors.New("offset is inside a UTF-8 character")
+	}
+	if len(passage.Text) > 4096 {
+		end := 4096
+		for !utf8.RuneStart(passage.Text[end]) {
+			end--
+		}
+		passage.Text = passage.Text[:end]
+		passage.NextOffset = offset + end
 	}
 	return passage, nil
 }
