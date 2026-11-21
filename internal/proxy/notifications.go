@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,15 +85,17 @@ type v2Request struct {
 }
 
 type adapterWire struct {
-	outputMu    sync.Mutex
-	selectedV2  atomic.Bool
-	updates     chan struct{}
-	lifetime    context.Context
-	nativeV2    bool
-	conn        *acp.Connection
-	nextRequest atomic.Uint64
-	wakes       sync.Map // wake request token -> guarded submission
-	requests    sync.Map
+	traceLog                *slog.Logger
+	responses, firstUpdates sync.Map
+	outputMu                sync.Mutex
+	selectedV2              atomic.Bool
+	updates                 chan struct{}
+	lifetime                context.Context
+	nativeV2                bool
+	conn                    *acp.Connection
+	nextRequest             atomic.Uint64
+	wakes                   sync.Map // wake request token -> guarded submission
+	requests                sync.Map
 	io.Writer
 	ids sync.Map // adapter request ID -> originating editor request ID
 }
@@ -101,7 +104,20 @@ func (w *adapterWire) Write(line []byte) (int, error) {
 	w.outputMu.Lock()
 	defer w.outputMu.Unlock()
 	if !bytes.Contains(line, []byte(`\u0000petal/wake/`)) && !bytes.Contains(line, []byte(`\u0000petal/request/`)) && !bytes.Contains(line, []byte(`\u0000petal/v2-request/`)) {
-		return w.Writer.Write(line)
+		n, err := w.Writer.Write(line)
+		if w.traceLog != nil {
+			var frame struct {
+				ID     json.RawMessage
+				Method string
+				Error  json.RawMessage
+			}
+			if json.Unmarshal(line, &frame) == nil && frame.Method == "" && frame.ID != nil {
+				if value, ok := w.responses.LoadAndDelete(string(frame.ID)); ok {
+					value.(*requestTrace).event("editor_response_write", "written", err == nil && n == len(line), "rpc_ok", frame.Error == nil)
+				}
+			}
+		}
+		return n, err
 	}
 	var frame Object
 	if err := json.Unmarshal(line, &frame); err != nil {
@@ -152,6 +168,7 @@ func (w *adapterWire) Write(line []byte) (int, error) {
 }
 
 type wireReader struct {
+	traceUpdates  *slog.Logger
 	editor        *adapterWire
 	scan          *bufio.Scanner
 	pending       []byte
@@ -200,6 +217,21 @@ func (r *wireReader) Read(dst []byte) (int, error) {
 					return 0, fmt.Errorf("invalid ACP method name")
 				}
 				if head.ID == nil {
+					if method == "session/update" && r.traceUpdates != nil {
+						var frame struct {
+							Params struct {
+								SessionID string
+								Update    struct{ State string }
+							}
+						}
+						_ = json.Unmarshal(line, &frame)
+						if v, ok := r.adapter.firstUpdates.LoadAndDelete(frame.Params.SessionID); ok {
+							v.(*requestTrace).event("first_session_update")
+						}
+						if r.adapter.nativeV2 && frame.Params.Update.State == "idle" {
+							r.traceUpdates.Info("adapter_idle", "adapter_session", traceSession(frame.Params.SessionID))
+						}
+					}
 					if method == "session/update" && (r.sessionUpdate != nil || r.observeUpdate != nil) {
 						// Journal child updates before a later ACP response can complete.
 						var update struct{ Params json.RawMessage }

@@ -347,8 +347,13 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 	if err != nil {
 		return nil, err
 	}
+	doneTrace := traceAdapter(ctx, b.wire, method, params)
 	result, err := p.relayV2Backend(ctx, b, method, params, notification)
+	doneTrace(result, err)
+	t, _ := ctx.Value(traceKey{}).(*requestTrace)
+	t.event("transcript_finish_started")
 	err = finishTranscript(err)
+	t.event("transcript_finish_returned", "ok", err == nil)
 	if err != nil {
 		var rpc *acp.RequestError
 		if public != "" && errors.As(err, &rpc) && rpc.Code == -32002 {
