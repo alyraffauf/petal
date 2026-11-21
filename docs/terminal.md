@@ -33,3 +33,5 @@ Press **F4** or type `/agents` to focus a subagent in the thread tree. Use the a
 When an adapter asks you to visit a URL, you can keep typing and sending prompts. Press **F6** to review the link. **Esc** returns to your draft and keeps the request pending. After visiting the link, press **Enter** if the request is still open. A matching completion from the adapter clears it automatically. Press **d** to decline.
 
 Over SSH, a browser on your laptop needs a route to a loopback callback on the host running Petal. If the callback uses port 8765, for example, forward that port with `ssh -L 8765:127.0.0.1:8765 host` before completing sign-in.
+
+Use `/effort` in a connected conversation to change reasoning effort before the next prompt. The picker shows the levels the current model supports and marks the active level. The same setting is available under `/config` and in ACP editors that display session configuration options.
