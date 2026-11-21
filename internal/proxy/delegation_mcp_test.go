@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -536,4 +537,42 @@ func (w terminalResultWriter) Write(data []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 	return w.Writer.Write(data)
+}
+
+func TestHistorySearchAdvertisement(t *testing.T) {
+	for _, flag := range []string{"0", "1"} {
+		t.Setenv("PETAL_HISTORY_EMBEDDINGS", flag)
+		var list struct {
+			Tools []struct {
+				Name, Description string
+				InputSchema       struct {
+					Properties map[string]struct{ Enum []string }
+					Not        struct {
+						Required   []string
+						Properties map[string]struct{ Const string }
+					}
+				}
+			}
+		}
+		if err := json.Unmarshal(delegationToolList(), &list); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, tool := range list.Tools {
+			if tool.Name != "petal_search_history" {
+				continue
+			}
+			found = true
+			enabled := flag == "1"
+			if slices.Contains(tool.InputSchema.Properties["mode"].Enum, "hybrid") != enabled || strings.Contains(strings.ToLower(tool.Description), "hybrid") != enabled {
+				t.Fatal(tool)
+			}
+			if enabled && (!slices.Equal(tool.InputSchema.Not.Required, []string{"mode", "before"}) || tool.InputSchema.Not.Properties["mode"].Const != "hybrid") {
+				t.Fatal(tool.InputSchema)
+			}
+		}
+		if !found {
+			t.Fatal("missing history tool")
+		}
+	}
 }

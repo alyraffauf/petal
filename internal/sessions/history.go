@@ -63,16 +63,25 @@ func ReadHistory(ctx context.Context, cwd, parent string, reference int64, offse
 }
 
 type HistoryMatch struct {
+	Source    string `json:"source,omitempty"`
 	Reference int64  `json:"reference"`
 	Session   string `json:"session"`
 	Role      string `json:"role"`
 	Snippet   string `json:"snippet"`
 }
 
+type HistoryCoverage struct {
+	Indexed int  `json:"indexed"`
+	Window  int  `json:"window"`
+	Partial bool `json:"partial"`
+}
+
 type HistoryMatches struct {
-	Retrieval  string         `json:"retrieval,omitempty"`
-	Hits       []HistoryMatch `json:"hits"`
-	NextBefore int64          `json:"next_before,omitempty"`
+	Coverage   *HistoryCoverage `json:"coverage,omitempty"`
+	Next       string           `json:"next,omitempty"`
+	Retrieval  string           `json:"retrieval,omitempty"`
+	Hits       []HistoryMatch   `json:"hits"`
+	NextBefore int64            `json:"next_before,omitempty"`
 }
 
 func SearchHistory(ctx context.Context, cwd, parent, query string, before int64) (HistoryMatches, error) {

@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"time"
 )
@@ -54,7 +55,7 @@ func embedHistory(ctx context.Context, inputs []string) ([][]float32, error) {
 
 // Backfill eight missing vectors per call. Compare the input again at write
 // time because a transcript can change while Ollama is running.
-func historyVectors(ctx context.Context, db *sql.DB, parent, query string) ([]HistoryMatch, error) {
+func historyVectors(ctx context.Context, db *sql.DB, parent, query string, coverage *HistoryCoverage) ([]HistoryMatch, error) {
 	const window = historyScope + `, recent AS (SELECT rowid AS ref FROM messages WHERE session_id IN (SELECT id FROM scope) ORDER BY rowid DESC LIMIT 256) `
 	rows, err := db.QueryContext(ctx, window+`SELECT ref,substr(body,1,1024) FROM recent JOIN messages ON rowid=ref LEFT JOIN message_embeddings ON reference=ref WHERE reference IS NULL ORDER BY ref DESC LIMIT 8`, parent)
 	if err != nil {
@@ -89,7 +90,7 @@ func historyVectors(ctx context.Context, db *sql.DB, parent, query string) ([]Hi
 			return nil, err
 		}
 	}
-	rows, err = db.QueryContext(ctx, window+`SELECT ref,session_id,role,substr(body,1,512),vector FROM recent JOIN messages ON messages.rowid=ref JOIN message_embeddings ON reference=ref ORDER BY ref DESC`, parent)
+	rows, err = db.QueryContext(ctx, window+`SELECT ref,session_id,role,substr(body,1,512),vector FROM recent JOIN messages ON messages.rowid=ref LEFT JOIN message_embeddings ON reference=ref ORDER BY ref DESC`, parent)
 	if err != nil {
 		return nil, err
 	}
@@ -105,9 +106,12 @@ func historyVectors(ctx context.Context, db *sql.DB, parent, query string) ([]Hi
 		if err := rows.Scan(&hit.Reference, &hit.Session, &hit.Role, &hit.Snippet, &blob); err != nil {
 			return nil, err
 		}
+		coverage.Window++
 		if len(blob) != 384*4 {
 			continue
 		}
+		coverage.Indexed++
+		hit.Source = "semantic"
 		var score float64
 		// Ollama /api/embed returns unit vectors.
 		for i, q := range vectors[0] {
@@ -125,16 +129,27 @@ func historyVectors(ctx context.Context, db *sql.DB, parent, query string) ([]Hi
 	return hits, rows.Err()
 }
 
+func HybridHistoryEnabled() bool { return os.Getenv("PETAL_HISTORY_EMBEDDINGS") == "1" }
+
+// Structured identifiers need lexical evidence even when nearby codes embed similarly.
+var historyIdentifier = regexp.MustCompile(`[[:alnum:]]_[[:alnum:]]|[[:alpha:]][[:digit:]]|[[:digit:]][[:alpha:]]|[[:alnum:]]-[[:digit:]]`)
+
 func SearchHybridHistory(ctx context.Context, cwd, parent, query string) (HistoryMatches, error) {
 	page, err := SearchHistory(ctx, cwd, parent, query, 0)
 	if err != nil {
 		return page, err
 	}
-	if os.Getenv("PETAL_HISTORY_EMBEDDINGS") != "1" {
+	if !HybridHistoryEnabled() {
 		return page, errors.New("enable hybrid history with PETAL_HISTORY_EMBEDDINGS=1")
 	}
 	page.Retrieval = "fts"
+	for i := range page.Hits {
+		page.Hits[i].Source = "keyword"
+	}
 	page.NextBefore = 0
+	if historyIdentifier.MatchString(query) {
+		return page, nil
+	}
 	select {
 	case embeddingSlot <- struct{}{}:
 		defer func() { <-embeddingSlot }()
@@ -148,12 +163,18 @@ func SearchHybridHistory(ctx context.Context, cwd, parent, query string) (Histor
 		return page, err
 	}
 	defer db.Close()
-	semantic, err := historyVectors(timed, db, parent, query)
+	var coverage HistoryCoverage
+	semantic, err := historyVectors(timed, db, parent, query, &coverage)
 	if errors.Is(err, errEmbeddingProvider) || errors.Is(err, context.DeadlineExceeded) {
 		return page, ctx.Err()
 	}
 	if err != nil {
 		return page, err
+	}
+	coverage.Partial = coverage.Indexed < coverage.Window
+	page.Coverage = &coverage
+	if coverage.Partial {
+		page.Next = "Repeat this hybrid query to index up to eight more messages in the recent window."
 	}
 	page.Retrieval = "hybrid"
 	seen := map[int64]bool{}

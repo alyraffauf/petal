@@ -423,7 +423,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 		case !initialized:
 			response.Error = &mcpError{-32002, "Server not initialized"}
 		case req.Method == "tools/list":
-			response.Result = json.RawMessage(delegationToolList)
+			response.Result = delegationToolList()
 		case req.Method == "tools/call":
 			key := string(req.ID)
 			mu.Lock()
@@ -460,14 +460,24 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 	}
 }
 
-const delegationToolList = `{"tools":[
-{"name":"petal_search_history","description":"Search archived messages in your session and its delegated descendants by keyword. Quote adjacent words for a phrase. Open a hit with petal_read_transcript using its reference. Matches are newest first. Pass next_before as before for older matches. Optional hybrid mode mixes keyword and local semantic results without pagination.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512},"mode":{"type":"string","enum":["fts","hybrid"]},"before":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}},
+func delegationToolList() json.RawMessage {
+	mode := `"enum":["fts"]`
+	description := ""
+	constraint := ""
+	if sessions.HybridHistoryEnabled() {
+		mode = `"enum":["fts","hybrid"]`
+		description = " Hybrid mixes keyword and semantic hits without pagination. Repeat partial searches to extend coverage."
+		constraint = `,"not":{"required":["mode","before"],"properties":{"mode":{"const":"hybrid"}}}`
+	}
+	return json.RawMessage(`{"tools":[
+{"name":"petal_search_history","description":"Search archived messages in your session and its delegated descendants by keyword. Quote adjacent words for a phrase. Open a hit with petal_read_transcript using its reference. Keyword matches are newest first. Pass next_before as before for older keyword matches.` + description + `","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512},"mode":{"type":"string",` + mode + `},"before":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false` + constraint + `}},
 {"name":"petal_read_transcript","description":"Recover a saved message after compaction. With no arguments, open your latest saved message. Pass previous or next as reference to move between messages. For long text, reuse reference with next_offset as offset.","inputSchema":{"type":"object","properties":{"reference":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}},
 {"name":"petal_capabilities","description":"Discover configured child models before delegating. Search by model ID, label or provider if a target is missing. IDs respect the current account pin. Quota is checked at routing time when needed.","inputSchema":{"type":"object","properties":{"search":{"type":"string"}},"additionalProperties":false}},
 {"name":"petal_delegate","description":"Use a model ID from petal_capabilities. Start an independent child in your working directory. Its only prompt is task, so include context, edit scope and expected output. Keep childId and follow next.","inputSchema":{"type":"object","properties":{"model":{"type":"string","minLength":1},"task":{"type":"string","minLength":1}},"required":["model","task"],"additionalProperties":false}},
 {"name":"petal_read","description":"Read available child activity immediately. Start at 0 and pass nextAfter as after on subsequent calls. Follow next.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0}},"required":["child_id"],"additionalProperties":false}},
 {"name":"petal_wait","description":"Wait for activity, a permission request, completion or timeout (default 30 seconds). Follow next. A running child may return an empty page.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0},"timeout":{"type":"integer","minimum":1,"maximum":60,"default":30}},"required":["child_id"],"additionalProperties":false}}
-]}`
+]}`)
+}
 
 type mcpText struct {
 	Type string `json:"type"`
@@ -518,19 +528,26 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 		var args struct {
 			Mode   string
 			Query  string
-			Before int64
+			Before *int64
 		}
 		if err := decode(&args); err != nil {
 			return nil, "", err
 		}
-		if args.Mode == "hybrid" && args.Before == 0 {
+		if args.Mode == "hybrid" && args.Before == nil {
 			value, err := sessions.SearchHybridHistory(ctx, endpoint.cwd, endpoint.parent, args.Query)
 			return value, "", err
 		}
 		if args.Mode != "" && args.Mode != "fts" {
 			return nil, "", errors.New("invalid search mode or hybrid cursor")
 		}
-		value, err := sessions.SearchHistory(ctx, endpoint.cwd, endpoint.parent, args.Query, args.Before)
+		var before int64
+		if args.Before != nil {
+			before = *args.Before
+			if before < 1 {
+				return nil, "", errors.New("before must be positive")
+			}
+		}
+		value, err := sessions.SearchHistory(ctx, endpoint.cwd, endpoint.parent, args.Query, before)
 		return value, "", err
 	case "petal_read_transcript":
 		var args struct {

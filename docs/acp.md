@@ -66,13 +66,20 @@ Petal with `PETAL_HISTORY_EMBEDDINGS=1`. Call `petal_search_history` with
 keyword search and its newest-first cursor. Hybrid returns one page of up to
 ten hits. It alternates keyword and semantic hits, starting with keyword,
 and removes duplicates. A busy or unavailable provider yields keyword hits
-with `retrieval: "fts"`.
+with `retrieval: "fts"`. Hybrid requests label each hit's `source` as
+`keyword` or `semantic`. Queries containing an underscore between letters
+or digits, adjacent letters and digits, or a hyphen before a digit following
+a letter or digit use keyword retrieval. This keeps similar codes such as
+`ERR_SOCKET_902` from matching `ERR_SOCKET_901` by vector similarity.
+Keyword matching still uses the archive's FTS tokenizer.
 
 Only hybrid calls send text to the local Ollama service. Petal ignores HTTP
 proxies and redirects for this request. Each call embeds the query and up to
 eight missing message prefixes (1,024 characters each) from the newest 256
 messages in the authenticated session and its delegated descendants. Repeated
-searches fill that window. Older text remains searchable by keyword. Ollama
+searches fill that window. The response reports `coverage.indexed` and
+`coverage.window`. When `coverage.partial` is true, follow `next` to search
+again. Full coverage applies only to prefixes in the recent window. Older text remains searchable by keyword. Ollama
 can truncate input to the model context. Petal allows one embedding request
 per process at a time and gives semantic retrieval ten seconds.
 
@@ -86,6 +93,9 @@ With Ollama running, reproduce the fixture using
 `PETAL_EVAL_EMBEDDINGS=1 go test -count=1 -v ./internal/sessions -run TestLocalHybridEvaluation`.
 On all-minilm model ID `1b226e2802db`, both modes ranked both exact identifiers
 first. Hybrid ranked both paraphrases first, while FTS found neither. Both
-returned zero hits for two unrelated queries. This small fixture exercises
+returned zero hits for two unrelated queries and a one-digit identifier near miss.
+In a mixed query, a literal example of the search terms ranked first. The
+older paraphrased answer appeared second after coverage grew from 8/11 to
+11/11 on the second call. Keyword-first ordering can favor literal distractors. This small fixture exercises
 scope, reference reads, invalidation and offline fallback. Its cosine cutoff
 of 0.4 has not been evaluated on a representative production corpus.
