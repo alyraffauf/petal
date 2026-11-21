@@ -18,6 +18,7 @@ type transcriptRecorder struct{ active sync.Map }
 type recordedSession struct {
 	mu                              sync.Mutex
 	cwd, id                         string
+	record                          sessions.Record
 	version                         uint16
 	projection                      acpv2.Transcript
 	last                            string
@@ -25,20 +26,26 @@ type recordedSession struct {
 	replay, full, complete, resumed bool
 }
 
-func (r *transcriptRecorder) open(key, id, cwd, account, model string) (*recordedSession, error) {
-	_, err := sessions.Create(cwd, sessions.Record{ID: id, Account: account, Model: model, Opened: time.Now()})
-	if err != nil {
-		return nil, err
-	}
-	s := &recordedSession{cwd: cwd, id: id}
+func (r *transcriptRecorder) open(key, id, cwd, account, model string) *recordedSession {
+	s := &recordedSession{cwd: cwd, id: id, record: sessions.Record{ID: id, Account: account, Model: model, Opened: time.Now()}}
 	r.active.Store(key, s)
-	return s, nil
+	return s
+}
+
+func (s *recordedSession) store(messages []sessions.Message, replay bool) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	if _, err := sessions.Create(s.cwd, s.record); err != nil {
+		return err
+	}
+	return sessions.SaveTranscript(s.cwd, s.id, messages, replay)
 }
 
 func (s *recordedSession) save(replace bool) error {
 	msgs := sessions.ProjectTranscript(&s.projection, s.version == 2)
 	if len(msgs) > 0 || replace {
-		if err := sessions.SaveTranscript(s.cwd, s.id, msgs, replace); err != nil {
+		if err := s.store(msgs, replace); err != nil {
 			return err
 		}
 	}
@@ -101,7 +108,7 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 		id := stringField(u, "compactionId")
 		if entry, ok := s.projection.FinishedCompaction(id); ok {
 			message := sessions.Message{Role: entry.Role, Body: entry.Text, SourceID: id}
-			if err := sessions.SaveTranscript(s.cwd, s.id, []sessions.Message{message}, false); err != nil {
+			if err := s.store([]sessions.Message{message}, false); err != nil {
 				slog.Error("save ACP compaction", "error", err)
 			}
 		}
@@ -140,7 +147,7 @@ func (p *proxy) beforeTranscript(method, name, native, id string, params Object)
 	}
 	key := p.publicID(name, native)
 	if method == "session/load" || method == "session/resume" {
-		s := &recordedSession{cwd: stringField(params, "cwd"), id: id, replay: true, full: method == "session/load" || stringField(params.member("replayFrom"), "type") == "start"}
+		s := &recordedSession{cwd: stringField(params, "cwd"), id: id, record: sessions.Record{ID: id, Account: name, Model: p.Model, Opened: time.Now()}, replay: true, full: method == "session/load" || stringField(params.member("replayFrom"), "type") == "start"}
 		prior, existed := r.active.Swap(key, s)
 		return func(err error) error {
 			s.mu.Lock()
@@ -151,10 +158,6 @@ func (p *proxy) beforeTranscript(method, name, native, id string, params Object)
 				} else {
 					r.active.CompareAndDelete(key, s)
 				}
-				return err
-			}
-			_, err = sessions.Create(s.cwd, sessions.Record{ID: id, Account: name, Model: p.Model, Opened: time.Now()})
-			if err != nil {
 				return err
 			}
 			if s.full && (p.version == 2 && s.resumed || p.version == 1 && len(s.projection.Entries()) > 0) {
@@ -188,7 +191,7 @@ func (p *proxy) beforeTranscript(method, name, native, id string, params Object)
 			data, _ := json.Marshal(Object{"sessionUpdate": encoded("user_message"), "messageId": encoded("prompt"), "content": params["prompt"]})
 			_, _ = prompt.Apply(data)
 			for _, e := range prompt.Entries() {
-				if err := sessions.SaveTranscript(s.cwd, s.id, []sessions.Message{{Role: "user", Body: e.Text}}, false); err != nil {
+				if err := s.store([]sessions.Message{{Role: "user", Body: e.Text}}, false); err != nil {
 					return nil, fmt.Errorf("record ACP prompt: %w", err)
 				}
 			}

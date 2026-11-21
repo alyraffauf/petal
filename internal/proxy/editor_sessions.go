@@ -197,12 +197,27 @@ func (p *proxy) bindEditorSession(ctx context.Context, s *editorSession, id, mod
 }
 
 func (p *proxy) pendingModelOptions(s *editorSession) Object {
-	picker := p.modelOption()
-	picker["currentValue"] = encoded(s.route.Model)
+	return s.route.editorOptions(s.options, s.setup != nil)
+}
+
+func (p *proxy) editorOptions(raw json.RawMessage, switchable bool) Object {
 	var options []Object
-	_ = json.Unmarshal(s.options, &options)
-	options = slices.DeleteFunc(options, func(o Object) bool { return stringField(o, "category") == "model" || stringField(o, "id") == "model" })
-	options = append([]Object{picker}, options...)
+	_ = json.Unmarshal(raw, &options)
+	if switchable {
+		options = slices.DeleteFunc(options, func(o Object) bool {
+			return stringField(o, "category") == "model" || stringField(o, "id") == "model" || stringField(o, "configId") == "model"
+		})
+		options = append([]Object{p.modelOption()}, options...)
+	}
+	for _, o := range options {
+		if stringField(o, "category") == "thought_level" {
+			key := "id"
+			if o["configId"] != nil {
+				key = "configId"
+			}
+			o[key] = encoded("effort")
+		}
+	}
 	data, _ := json.Marshal(options)
 	return Object{"configOptions": data}
 }
@@ -370,8 +385,23 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	if method == "session/prompt" && s.setup != nil {
 		s.setup = nil
 		if s.options != nil {
-			update, _ := json.Marshal(Object{"sessionUpdate": encoded("config_option_update"), "configOptions": s.options})
-			_ = p.editor.SendNotification(ctx, "session/update", Object{"sessionId": encoded(id), "update": update})
+			update := s.route.editorOptions(s.options, false)
+			update["sessionUpdate"] = encoded("config_option_update")
+			_ = p.editor.SendNotification(ctx, "session/update", map[string]any{"sessionId": id, "update": update})
+		}
+	}
+	if method == "session/set_config_option" && stringField(params, "configId") == "effort" {
+		var options []Object
+		_ = json.Unmarshal(s.options, &options)
+		for _, o := range options {
+			if stringField(o, "category") == "thought_level" {
+				key := "id"
+				if o["configId"] != nil {
+					key = "configId"
+				}
+				params["configId"] = o[key]
+				break
+			}
 		}
 	}
 	route, routed := s.route, s.routedID
@@ -380,18 +410,22 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	params["sessionId"] = encoded(routed)
 	raw, _ = json.Marshal(params)
 	result, err := route.handle(ctx, method, raw)
-	if err == nil && method == "session/set_config_option" {
-		if data, ok := result.(json.RawMessage); ok {
-			var response Object
-			if json.Unmarshal(data, &response) == nil && response["configOptions"] != nil {
-				s.mu.Lock()
-				if s.route == route && s.setup != nil {
-					s.options = response["configOptions"]
-					response["configOptions"] = p.pendingModelOptions(s)["configOptions"]
-					result = response
-				}
-				s.mu.Unlock()
+	if err == nil && (method == "session/set_config_option" || method == "session/options" || method == "session/resume" || method == "session/load") {
+		var response Object
+		switch v := result.(type) {
+		case json.RawMessage:
+			_ = json.Unmarshal(v, &response)
+		case Object:
+			response = v
+		}
+		if response["configOptions"] != nil {
+			s.mu.Lock()
+			if s.route == route {
+				s.options = response["configOptions"]
+				response["configOptions"] = p.pendingModelOptions(s)["configOptions"]
+				result = response
 			}
+			s.mu.Unlock()
 		}
 	}
 	if err == nil && method == "session/delete" {

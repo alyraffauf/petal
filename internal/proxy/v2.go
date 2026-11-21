@@ -388,9 +388,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 		}
 		fork["sessionId"] = encoded(routed)
 		if p.recorder != nil {
-			if _, err := p.recorder.open(routed, routed, stringField(params, "cwd"), name, p.Model); err != nil {
-				return nil, err
-			}
+			p.recorder.open(routed, routed, stringField(params, "cwd"), name, p.Model)
 		}
 		return fork, nil
 	}
@@ -410,7 +408,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 	}
 	if err == nil && p.recorder != nil {
 		id := stringField(session, "sessionId")
-		_, err = p.recorder.open(id, id, stringField(params, "cwd"), name, p.Model)
+		p.recorder.open(id, id, stringField(params, "cwd"), name, p.Model)
 	}
 	return session, err
 }

@@ -361,9 +361,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	}
 	if p.recorder != nil && (method == "session/new" || method == "session/fork") {
 		id := stringField(session, "sessionId")
-		if _, err := p.recorder.open(id, id, stringField(params, "cwd"), name, p.Model); err != nil {
-			return nil, err
-		}
+		p.recorder.open(id, id, stringField(params, "cwd"), name, p.Model)
 	}
 	return session, nil
 }
@@ -542,6 +540,11 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 				var updateKind string
 				_ = json.Unmarshal(item["sessionUpdate"], &updateKind)
 				switch updateKind {
+				case "config_option_update":
+					if strings.HasPrefix(stringField(args, "sessionId"), "petal-") && item["configOptions"] != nil {
+						item["configOptions"] = p.editorOptions(item["configOptions"], false)["configOptions"]
+						changed = true
+					}
 				case "subagent_update", "session_message":
 					for _, key := range []string{"sessionId", "senderSessionId", "recipientSessionId"} {
 						var id string
