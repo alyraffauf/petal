@@ -90,7 +90,36 @@ func (p *proxy) initialize(ctx context.Context, raw json.RawMessage) (any, error
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return p.initializeV1(ctx, raw, names, *request.Version > 1)
+	result, err := p.initializeV1(ctx, raw, names, *request.Version > 1)
+	var unavailable *unavailableAdapters
+	if p.editorSessions == nil || !errors.As(err, &unavailable) {
+		return result, err
+	}
+	original := p.Model
+	for _, model := range p.ModelNames() {
+		if model == original {
+			continue
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		var alternatives []string
+		for _, name := range slices.Sorted(maps.Keys(p.Accounts)) {
+			if (p.PinnedAccount == "" || p.PinnedAccount == name) && len(p.Accounts[name].Models[model]) > 0 && !slices.Equal(p.Accounts[name].Models[model], p.Accounts[name].Models[original]) {
+				alternatives = append(alternatives, name)
+			}
+		}
+		if len(alternatives) == 0 {
+			continue
+		}
+		p.Model = model
+		result, trialErr := p.initializeV1(ctx, raw, alternatives, *request.Version > 1)
+		if trialErr == nil {
+			return result, nil
+		}
+	}
+	p.Model = original
+	return nil, err
 }
 
 func (p *proxy) installBackends(version uint16, names []string, backends map[string]*backend, repeat bool) {
@@ -108,6 +137,10 @@ func (p *proxy) installBackends(version uint16, names []string, backends map[str
 	}
 	p.mu.Unlock()
 }
+
+type unavailableAdapters struct{ error }
+
+func (e *unavailableAdapters) Unwrap() error { return e.error }
 
 func (p *proxy) initializeV1(ctx context.Context, raw json.RawMessage, names []string, fallback bool) (any, error) {
 	var params Object
@@ -192,7 +225,7 @@ func (p *proxy) initializeV1(ctx context.Context, raw json.RawMessage, names []s
 		}
 	}
 	if len(available) == 0 && len(failures) > 0 {
-		return nil, errors.Join(failures...)
+		return nil, &unavailableAdapters{errors.Join(failures...)}
 	}
 	if caps == nil {
 		caps = map[string]any{}

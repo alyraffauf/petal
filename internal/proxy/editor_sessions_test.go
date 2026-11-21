@@ -23,6 +23,7 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 	for model, account := range map[string]string{"claude/default": "a", "codex/default": "b"} {
 		config.Accounts[account] = routing.Account{Models: map[string][]string{model: {exe, "-test.run=^TestAccountAdapter$"}}, Env: map[string]string{"PETAL_NEGOTIATE_FIXTURE": account}}
 	}
+	config.Accounts["offline"] = routing.Account{Models: map[string][]string{"aaa/default": {"/missing/petal-test-adapter"}}}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	launch := func() func(string, Object) Object {
@@ -46,7 +47,7 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 	for _, model := range []string{"codex/default", "claude/default"} {
 		session := call("session/new", Object{"cwd": encoded(cwd), "mcpServers": json.RawMessage("[]")})
 		var opts []struct{ Options []struct{ Value string } }
-		if err := json.Unmarshal(session["configOptions"], &opts); err != nil || len(opts) != 1 || len(opts[0].Options) != 2 || opts[0].Options[0].Value != "claude/default" || opts[0].Options[1].Value != "codex/default" {
+		if err := json.Unmarshal(session["configOptions"], &opts); err != nil || len(opts) != 1 || len(opts[0].Options) != 3 || opts[0].Options[1].Value != "claude/default" || opts[0].Options[2].Value != "codex/default" {
 			t.Fatalf("editor picker: %s", session["configOptions"])
 		}
 		if model == "codex/default" {
