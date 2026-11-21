@@ -44,7 +44,7 @@ func Listen(ctx context.Context, cwd string, tools Tools, bound func() (sessions
 		return routing.MCPServer{}, err
 	}
 	token := rand.Text()
-	config := routing.MCPServer{Name: routing.DelegationMCPServerName, Command: command, Args: []string{"delegation-mcp", socket}, Env: []routing.MCPEnvVariable{{Name: TokenEnv, Value: token}}}
+	config := routing.MCPServer{Name: routing.AgentMCPServerName, Command: command, Args: []string{"delegation-mcp", socket}, Env: []routing.MCPEnvVariable{{Name: TokenEnv, Value: token}}}
 	context.AfterFunc(ctx, func() {
 		_ = listener.Close()
 		_ = os.Remove(dir)
@@ -274,8 +274,8 @@ func (endpoint server) serve(lifetime context.Context, conn net.Conn, tools Tool
 			response.Result = map[string]any{
 				"protocolVersion": params.ProtocolVersion,
 				"capabilities":    map[string]any{"tools": struct{}{}},
-				"instructions":    "Call petal_capabilities before choosing a child model. Use its exact model ID. Give the child a self-contained task with the context, file scope and output you need. The child shares your working directory and starts with fresh conversation history. Keep childId. Finish your turn when you have no independent work. Petal wakes the connected parent for unread child results. Follow next on each response. For questions about earlier work, including what a completed child observed or returned, search the archive with petal_search_history. Open the original message or tool result with petal_read_transcript and cite its numeric reference when asked for a source. Use the child activity journal to follow a run in progress.",
-				"serverInfo":      map[string]string{"name": routing.DelegationMCPServerName, "version": "1.0.0"},
+				"instructions":    "Search this chat and its children, including before compaction. For exact quotes or code, open the original and cite its reference. Children start with fresh context in your working directory. Finish your turn when ready; Petal wakes you when a child finishes.",
+				"serverInfo":      map[string]string{"name": routing.AgentMCPServerName, "version": "1.0.0"},
 			}
 		case req.Method == "ping":
 			response.Result = struct{}{}

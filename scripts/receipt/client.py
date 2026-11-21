@@ -45,7 +45,9 @@ class Client:
         params = packet["params"]
         name = params.get("subject", params).get("toolCall", {}).get("name", "")
         allow = (
-            name.startswith("mcp__petal-delegation__petal_")
+            name in {f"mcp__petal__{tool}" for tool in (
+                "search", "recall", "open", "models", "delegate", "activity", "wait"
+            )}
             or name == "mcp__petal_echo__echo"
         )
         kind = "allow_once" if allow else "reject_once"

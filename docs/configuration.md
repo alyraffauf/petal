@@ -104,9 +104,9 @@ Set the variable in Petal’s environment to the complete header value, includin
 
 The adapter handles OAuth and remembers the login for its profile. Claude Code can request sign-in when you reconnect the server through its MCP command. On first use Codex can ask you to run `codex mcp login <name>`. Use the same Codex home and server URL as the Petal account. If the server exists only in Petal, supply its URL to the CLI with `codex -c 'mcp_servers.work-tools.url="https://tools.example.org/mcp"' mcp login work-tools`.
 
-### Petal delegation
+### Built-in Petal tools
 
-Petal exposes its delegation tools by default. Set `delegation = false` to disable them. [Petal delegation over MCP](petal-delegation.md)
+Petal exposes transcript search, source reads, and child-agent tools through the `petal` MCP server by default. The existing `delegation = false` setting disables the whole server. [Petal MCP tools](petal-delegation.md)
 
 ## Terminal background
 
@@ -182,7 +182,7 @@ The trace records model and effort selections, including the adapter's acknowled
 ## History embeddings
 
 With no settings, Petal tries the local Ollama model `all-minilm:latest` on
-ordinary archive searches. To always use keyword search, set `provider = "off"`
+calls to `recall`. To expose only keyword search, set `provider = "off"`
 under `[history.embeddings]`. This setting replaces `PETAL_HISTORY_EMBEDDINGS`.
 An installation that previously left embeddings disabled should set `off`
 to keep keyword-only searches.

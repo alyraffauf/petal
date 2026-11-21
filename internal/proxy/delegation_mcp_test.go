@@ -96,7 +96,7 @@ func TestDelegationAdapterFixture(t *testing.T) {
 				}
 				if prompt[0].Text != "finish independent work" {
 					wantID, _ := json.Marshal(`["child","child","child"]`)
-					if !strings.Contains(prompt[0].Text, string(wantID)) || !strings.Contains(prompt[0].Text, "petal_read") {
+					if !strings.Contains(prompt[0].Text, string(wantID)) || !strings.Contains(prompt[0].Text, "activity") {
 						t.Fatal("missing child completion context")
 					}
 					if version == 1 && !rejectedWake {
@@ -190,7 +190,7 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 					t.Fatal("missing bridge credential")
 				}
 				server := servers[0]
-				if stringField(server, "name") != routing.DelegationMCPServerName || !filepath.IsAbs(stringField(server, "command")) || (version == 2 && stringField(server, "type") != "stdio") {
+				if stringField(server, "name") != routing.AgentMCPServerName || !filepath.IsAbs(stringField(server, "command")) || (version == 2 && stringField(server, "type") != "stdio") {
 					t.Fatalf("invalid stdio definition: %s", jsonValue(server))
 				}
 				var args []string
@@ -229,19 +229,19 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			}
 			firstMCP := open(first)
 			secondMCP := open(second)
-			catalog := call(firstMCP, "petal_capabilities", `{"search":"child"}`, false)
+			catalog := call(firstMCP, "models", `{"search":"child"}`, false)
 			var found struct{ Models []delegationTarget }
 			if json.Unmarshal([]byte(catalog), &found) != nil || len(found.Models) != 1 || found.Models[0].ID != "child" {
 				t.Fatalf("unexpected targets %s", catalog)
 			}
-			call(firstMCP, "petal_delegate", `{"model":"child","task":"echo","cwd":"/","parent_id":"forged"}`, true)
-			child := call(firstMCP, "petal_delegate", `{"model":"child","task":"echo"}`, false)
+			call(firstMCP, "delegate", `{"model":"child","task":"echo","cwd":"/","parent_id":"forged"}`, true)
+			child := call(firstMCP, "delegate", `{"model":"child","task":"echo"}`, false)
 			var handle struct{ ChildID, Next string }
-			if json.Unmarshal([]byte(child), &handle) != nil || !strings.Contains(handle.Next, "petal_wait") || handle.ChildID != `["child","child","child"]` {
+			if json.Unmarshal([]byte(child), &handle) != nil || !strings.Contains(handle.Next, "wait") || handle.ChildID != `["child","child","child"]` {
 				t.Fatalf("unexpected routed child: %s", child)
 			}
 			args := fmt.Sprintf(`{"child_id":%q}`, handle.ChildID)
-			call(secondMCP, "petal_read", args, true)
+			call(secondMCP, "activity", args, true)
 			promptParent := func(id int) {
 				t.Helper()
 				editor.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"session/prompt","params":{"sessionId":%q,"prompt":[{"type":"text","text":"finish independent work"}]}}`, id, parent))
@@ -269,10 +269,10 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 					break
 				}
 			}
-			if page := call(firstMCP, "petal_read", args, false); !strings.Contains(page, "receipt: echo") {
+			if page := call(firstMCP, "activity", args, false); !strings.Contains(page, "receipt: echo") {
 				t.Fatalf("child output missing: %s", page)
 			}
-			history := call(firstMCP, "petal_search_history", `{"query":"receipt"}`, false)
+			history := call(firstMCP, "search", `{"query":"receipt"}`, false)
 			var matches sessions.HistoryMatches
 			if err := json.Unmarshal([]byte(history), &matches); err != nil {
 				t.Fatal(err)
@@ -288,7 +288,7 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				t.Fatalf("child transcript missing: %s", history)
 			}
 			anchor := fmt.Sprintf(`{"reference":%d}`, ref)
-			if page := call(firstMCP, "petal_read_transcript", anchor, false); !strings.Contains(page, "receipt") {
+			if page := call(firstMCP, "open", anchor, false); !strings.Contains(page, "receipt") {
 				t.Fatal(page)
 			}
 			if err := sessions.SaveTranscript(cwd, handle.ChildID, []sessions.Message{{Role: "tool", Body: "fixture neighbor"}}, false); err != nil {
@@ -296,21 +296,21 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			}
 			window := fmt.Sprintf(`{"reference":%d,"context":8}`, ref)
 			var passage sessions.HistoryPassage
-			page := call(firstMCP, "petal_read_transcript", window, false)
+			page := call(firstMCP, "open", window, false)
 			if err := json.Unmarshal([]byte(page), &passage); err != nil || len(passage.After) == 0 || passage.After[len(passage.After)-1].Text != "fixture neighbor" {
 				t.Fatalf("child context: %s", page)
 			}
 			for _, spelling := range []string{"8.0", "8e0"} {
-				if got := call(firstMCP, "petal_read_transcript", fmt.Sprintf(`{"reference":%d,"context":%s}`, ref, spelling), false); got != page {
+				if got := call(firstMCP, "open", fmt.Sprintf(`{"reference":%d,"context":%s}`, ref, spelling), false); got != page {
 					t.Fatalf("context %s changed response", spelling)
 				}
 			}
 			for _, invalid := range []string{"null", "1.0000000000000000001", `"1"`} {
-				call(firstMCP, "petal_read_transcript", fmt.Sprintf(`{"reference":%d,"context":%s}`, ref, invalid), true)
+				call(firstMCP, "open", fmt.Sprintf(`{"reference":%d,"context":%s}`, ref, invalid), true)
 			}
-			call(secondMCP, "petal_read_transcript", window, true)
-			call(secondMCP, "petal_read_transcript", anchor, true)
-			private := call(secondMCP, "petal_search_history", `{"query":"receipt"}`, false)
+			call(secondMCP, "open", window, true)
+			call(secondMCP, "open", anchor, true)
+			private := call(secondMCP, "search", `{"query":"receipt"}`, false)
 			var scoped sessions.HistoryMatches
 			if err := json.Unmarshal([]byte(private), &scoped); err != nil || scoped.Hits == nil || len(scoped.Hits) != 0 {
 				t.Fatalf("unrelated thread saw child output: %s", private)
@@ -335,7 +335,7 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				if frame := waitReply("5"); string(frame.member("error")["code"]) != "-32603" {
 					t.Fatalf("%s did not relay backend rejection: %s", teardown.method, jsonValue(frame))
 				}
-				call(teardown.mcp, "petal_capabilities", `{}`, false)
+				call(teardown.mcp, "models", `{}`, false)
 				editor.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":6,"method":%q,"params":{"sessionId":%q}}`, teardown.method, teardown.parent))
 				if frame := waitReply("6"); frame["result"] == nil {
 					t.Fatalf("%s failed on retry: %s", teardown.method, jsonValue(frame))
@@ -359,10 +359,10 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				t.Errorf("pinned resume changed the editor session ID: %s", resumed["sessionId"])
 			}
 			reloaded := open(resumed)
-			if page := call(reloaded, "petal_read_transcript", anchor, false); !strings.Contains(page, "receipt") {
+			if page := call(reloaded, "open", anchor, false); !strings.Contains(page, "receipt") {
 				t.Fatal(page)
 			}
-			if page := call(reloaded, "petal_read", args, false); !strings.Contains(page, "receipt: echo") {
+			if page := call(reloaded, "activity", args, false); !strings.Contains(page, "receipt: echo") {
 				t.Errorf("resumed parent did not recover its child: %s", page)
 			}
 			if version == 1 {
@@ -472,14 +472,14 @@ func TestDelegationResultRemainsUnreadWhenRelayOutputFails(t *testing.T) {
 	}
 
 	interrupted, failed := start(true)
-	read(interrupted, "petal_read")
+	read(interrupted, "activity")
 	if response := interrupted.read(); !strings.Contains(string(response["result"]), "running") {
 		t.Fatalf("expected running child, got %s", jsonValue(response))
 	}
 	if err := sessions.FinishChild(ctx, cwd, binding, sessions.ChildResult{Status: "completed", Data: json.RawMessage(`{"answer":"test receipt"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	read(interrupted, "petal_wait")
+	read(interrupted, "wait")
 	select {
 	case err := <-failed:
 		if !errors.Is(err, io.ErrClosedPipe) {
@@ -513,7 +513,7 @@ func TestDelegationResultRemainsUnreadWhenRelayOutputFails(t *testing.T) {
 	wire := proxyWireTest{t, bufio.NewScanner(conn), json.NewEncoder(conn)}
 	wire.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
 	wire.read()
-	read(wire, "petal_wait")
+	read(wire, "wait")
 	frame := wire.read()
 	if !strings.Contains(string(frame["response"]), "test receipt") || frame["delivery"] == nil {
 		t.Fatalf("missing terminal delivery: %s", jsonValue(frame))

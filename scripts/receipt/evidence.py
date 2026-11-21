@@ -56,15 +56,15 @@ def tool_events(updates):
         call.update(update)
         tool = None
         raw = call.get("rawInput") or {}
-        for candidate in ("petal_search_history", "petal_read_transcript"):
+        for candidate in ("search", "recall", "open"):
             names = {
-                f"mcp.petal-delegation.{candidate}",
-                f"mcp__petal-delegation__{candidate}",
+                f"mcp.petal.{candidate}",
+                f"mcp__petal__{candidate}",
             }
             if (
                 key
                 and (call.get("name") or call.get("title")) in names
-                and raw.get("server", "petal-delegation") == "petal-delegation"
+                and raw.get("server", "petal") == "petal"
                 and raw.get("tool", candidate) == candidate
             ):
                 tool = candidate
@@ -107,7 +107,7 @@ def check_retrieval(updates, receipt, source, session, body):
         hit = False
         if status == "completed" and not failed and isinstance(data, dict):
             if (
-                tool == "petal_search_history"
+                tool in ("search", "recall")
                 and isinstance(args.get("query"), str)
                 and args["query"].strip()
             ):
@@ -119,7 +119,7 @@ def check_retrieval(updates, receipt, source, session, body):
                 )
                 found |= hit
             if (
-                tool == "petal_read_transcript"
+                tool == "open"
                 and update.get("toolCallId") in eligible_reads
             ):
                 opened |= (
@@ -139,7 +139,7 @@ def check_retrieval(updates, receipt, source, session, body):
 
 def check_denial(updates, decoy_ref, decoy):
     return not contains(updates, decoy) and any(
-        tool == "petal_read_transcript"
+        tool == "open"
         and args.get("reference") == decoy_ref
         and (failed or status == "failed")
         and text.strip() == "no saved message at this reference"

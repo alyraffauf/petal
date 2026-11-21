@@ -86,7 +86,7 @@ func (a Account) Command(ctx context.Context, argv []string) *exec.Cmd {
 	return cmd
 }
 
-const DelegationMCPServerName = "petal-delegation"
+const AgentMCPServerName = "petal"
 
 type Config struct {
 	History               HistorySettings `json:"history"`

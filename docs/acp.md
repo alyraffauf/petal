@@ -59,12 +59,12 @@ Opening a 20-row viewport on 4,000 Markdown messages fell from about 143 ms to 0
 
 ### Local semantic history search
 
-By default, `petal_search_history` tries local Ollama at `127.0.0.1:11434`
-with `all-minilm:latest`. Install the model with `ollama pull all-minilm` to
-enable semantic matches. Petal uses keyword search if the model or service
-is unavailable. Use `mode: "fts"` to request keyword search explicitly.
-A request with a `before` cursor continues a keyword search. Hybrid search
-returns a single page of up to ten hits. It alternates keyword and semantic hits, starting with keyword,
+`search` searches by keyword. Pass its `next_before` cursor as
+`before` to continue. When you remember the idea but the wording may differ,
+call `recall` with a natural-language query. By default
+it uses local Ollama at `127.0.0.1:11434` with `all-minilm:latest`. Install
+the model with `ollama pull all-minilm` or configure another endpoint.
+The meaning search returns a single page of up to ten hits. It alternates keyword and semantic hits, starting with keyword,
 and removes duplicates. A busy or unavailable provider yields keyword hits
 with `retrieval: "fts"`. Hybrid requests label each hit's `source` as
 `keyword` or `semantic`. Queries containing an underscore between letters
@@ -73,7 +73,7 @@ a letter or digit use keyword retrieval. This keeps similar codes such as
 `ERR_SOCKET_902` from matching `ERR_SOCKET_901` by vector similarity.
 Keyword matching still uses the archive's FTS tokenizer.
 
-Automatic and explicitly hybrid calls can send text to the configured service. Petal ignores HTTP
+Calls to `recall` can send text to the configured service. Petal ignores HTTP
 proxies and redirects for this request. Each call embeds the query and up to
 eight missing message prefixes (1,024 characters each) from the newest 256
 messages in the authenticated session and its delegated descendants. Repeated

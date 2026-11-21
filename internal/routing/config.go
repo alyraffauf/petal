@@ -76,7 +76,7 @@ func (c *Config) readSettings(path string) error {
 	}
 	if file.Delegation {
 		for _, server := range file.MCPServers {
-			if server.Name == DelegationMCPServerName {
+			if server.Name == AgentMCPServerName {
 				return fmt.Errorf("MCP server name %q is reserved when delegation is enabled", server.Name)
 			}
 		}
