@@ -16,6 +16,7 @@ Delegation is enabled by default. The parent adapter must support stdio MCP serv
 
 | Tool | Arguments | Response |
 | --- | --- | --- |
+| `petal_search_history` | `query`, optional `before` | Searches saved messages in the parent and its delegated descendants. Matches appear newest first. Pass `next_before` as `before` for older matches. Quote a phrase for adjacent words. Pass a hit’s `reference` to `petal_read_transcript` for the original text. |
 | `petal_read_transcript` | Optional `reference` and UTF-8 byte `offset` | Opens the latest archived message by default. Pass a returned `previous` or `next` reference to browse. Pass `next_offset` with the same reference to continue long text. |
 | `petal_capabilities` | Optional `search` | Configured model IDs, labels and providers for the current account selection. The initial list shows up to 32 models. Search returns all matches. |
 | `petal_delegate` | `model`, `task` | `childId` and `model` after Petal binds the child to the parent and schedules its prompt. |

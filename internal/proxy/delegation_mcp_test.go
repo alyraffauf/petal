@@ -268,6 +268,30 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			if page := call(firstMCP, "petal_read", args, false); !strings.Contains(page, "receipt: echo") {
 				t.Fatalf("child output missing: %s", page)
 			}
+			history := call(firstMCP, "petal_search_history", `{"query":"receipt"}`, false)
+			var matches sessions.HistoryMatches
+			if err := json.Unmarshal([]byte(history), &matches); err != nil {
+				t.Fatal(err)
+			}
+			var ref int64
+			for _, hit := range matches.Hits {
+				if hit.Session == handle.ChildID {
+					ref = hit.Reference
+					break
+				}
+			}
+			if ref == 0 {
+				t.Fatalf("child transcript missing: %s", history)
+			}
+			anchor := fmt.Sprintf(`{"reference":%d}`, ref)
+			if page := call(firstMCP, "petal_read_transcript", anchor, false); !strings.Contains(page, "receipt") {
+				t.Fatal(page)
+			}
+			call(secondMCP, "petal_read_transcript", anchor, true)
+			private := call(secondMCP, "petal_search_history", `{"query":"receipt"}`, false)
+			if private != `{"hits":[]}` {
+				t.Fatalf("unrelated thread saw child output: %s", private)
+			}
 			for _, teardown := range []struct {
 				method, parent string
 				mcp            proxyWireTest
@@ -312,6 +336,9 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				t.Errorf("pinned resume changed the editor session ID: %s", resumed["sessionId"])
 			}
 			reloaded := open(resumed)
+			if page := call(reloaded, "petal_read_transcript", anchor, false); !strings.Contains(page, "receipt") {
+				t.Fatal(page)
+			}
 			if page := call(reloaded, "petal_read", args, false); !strings.Contains(page, "receipt: echo") {
 				t.Errorf("resumed parent did not recover its child: %s", page)
 			}
