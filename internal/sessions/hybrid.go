@@ -28,13 +28,13 @@ var embeddingSlot = make(chan struct{}, 1)
 // time because a transcript can change while Ollama is running.
 const window = historyScope + `, recent AS (SELECT rowid AS ref FROM messages WHERE session_id IN (SELECT id FROM scope) ORDER BY rowid DESC LIMIT 256) `
 
-func backfill(ctx context.Context, db *sql.DB, cfg embeddings.Settings, parent, query, digest string) ([]float32, error) {
+func backfill(ctx context.Context, db *sql.DB, cfg embeddings.Settings, parent, query, digest, resolved string, queryVector []float32) ([]float32, error) {
 	rows, err := db.QueryContext(ctx, window+`SELECT ref,substr(body,1,1024) FROM recent JOIN messages ON rowid=ref LEFT JOIN message_embeddings ON reference=ref AND digest=? WHERE reference IS NULL ORDER BY ref DESC LIMIT 8`, parent, digest)
 	if err != nil {
 		return nil, err
 	}
 	var ids []int64
-	inputs := []string{query}
+	var inputs []string
 	for rows.Next() {
 		var id int64
 		var body string
@@ -50,23 +50,35 @@ func backfill(ctx context.Context, db *sql.DB, cfg embeddings.Settings, parent, 
 	if err != nil {
 		return nil, err
 	}
-	vectors, err := cfg.Embed(ctx, embeddingClient, inputs)
+	if queryVector != nil && len(inputs) == 0 {
+		return queryVector, nil
+	}
+	batch := inputs
+	if queryVector == nil {
+		batch = append([]string{query}, inputs...)
+	}
+	vectors, model, err := cfg.Embed(ctx, embeddingClient, batch)
 	if err != nil {
 		return nil, errors.Join(embeddings.ErrUnavailable, err)
 	}
-	current, err := cfg.CacheKey(ctx, embeddingClient)
-	if err != nil || current != digest {
+	if queryVector == nil {
+		queryVector, vectors = vectors[0], vectors[1:]
+		current, err := cfg.CacheKey(ctx, embeddingClient)
+		if err != nil || current != digest {
+			return nil, embeddings.ErrUnavailable
+		}
+	} else if model != resolved || len(vectors[0]) != len(queryVector) {
 		return nil, embeddings.ErrUnavailable
 	}
 	for i, id := range ids {
 		buf := new(bytes.Buffer)
-		binary.Write(buf, binary.LittleEndian, vectors[i+1])
-		_, err = db.ExecContext(ctx, historyScope+`INSERT OR REPLACE INTO message_embeddings(reference,vector,digest) SELECT rowid,?,? FROM messages WHERE rowid=? AND session_id IN (SELECT id FROM scope) AND substr(body,1,1024)=?`, parent, buf.Bytes(), digest, id, inputs[i+1])
+		binary.Write(buf, binary.LittleEndian, vectors[i])
+		_, err = db.ExecContext(ctx, historyScope+`INSERT OR REPLACE INTO message_embeddings(reference,vector,digest) SELECT rowid,?,? FROM messages WHERE rowid=? AND session_id IN (SELECT id FROM scope) AND substr(body,1,1024)=?`, parent, buf.Bytes(), digest, id, inputs[i])
 		if err != nil {
 			return nil, err
 		}
 	}
-	return vectors[0], nil
+	return queryVector, nil
 }
 
 func scoreHistory(ctx context.Context, db historyReader, parent, digest string, queryVector []float32, coverage *HistoryCoverage) ([]HistoryMatch, error) {
@@ -134,7 +146,17 @@ func optionalHistoryVector(ctx context.Context, db *sql.DB, cfg embeddings.Setti
 		}
 		return nil, "", err
 	}
-	vector, err := backfill(optional, db, cfg, parent, query, digest)
+	var queryVector []float32
+	var resolved string
+	if cfg.Provider == "openai-compatible" {
+		vectors, model, err := cfg.Embed(optional, embeddingClient, []string{query})
+		if err != nil {
+			return nil, "", ctx.Err()
+		}
+		queryVector, resolved = vectors[0], model
+		digest += ":" + resolved + ":" + strconv.Itoa(len(queryVector))
+	}
+	vector, err := backfill(optional, db, cfg, parent, query, digest, resolved, queryVector)
 	var sqliteErr *sqlite.Error
 	busy := errors.As(err, &sqliteErr) && sqliteErr.Code()&255 == sqlite3.SQLITE_BUSY
 	if busy || errors.Is(err, embeddings.ErrUnavailable) || optional.Err() != nil {

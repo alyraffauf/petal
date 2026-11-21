@@ -60,10 +60,10 @@ func (cfg Settings) CacheKey(ctx context.Context, client *http.Client) (string, 
 	return "", ErrUnavailable
 }
 
-func (cfg Settings) Embed(ctx context.Context, client *http.Client, inputs []string) ([][]float32, error) {
+func (cfg Settings) Embed(ctx context.Context, client *http.Client, inputs []string) ([][]float32, string, error) {
 	body, err := json.Marshal(map[string]any{"model": cfg.Model, "input": inputs})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	path := "/api/embed"
 	if cfg.Provider == "openai-compatible" {
@@ -71,16 +71,16 @@ func (cfg Settings) Embed(ctx context.Context, client *http.Client, inputs []str
 	}
 	req, err := embeddingRequest(ctx, cfg, "POST", path, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return nil, ErrUnavailable
+		return nil, "", ErrUnavailable
 	}
 	var reply struct {
 		Model      string
@@ -91,41 +91,41 @@ func (cfg Settings) Embed(ctx context.Context, client *http.Client, inputs []str
 		}
 	}
 	if err = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&reply); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if reply.Model != cfg.Model {
-		return nil, ErrUnavailable
+	if reply.Model == "" || (cfg.Provider == "ollama" && reply.Model != cfg.Model) {
+		return nil, "", ErrUnavailable
 	}
 	if cfg.Provider == "openai-compatible" {
 		if len(reply.Data) != len(inputs) {
-			return nil, ErrUnavailable
+			return nil, "", ErrUnavailable
 		}
 		reply.Embeddings = make([][]float32, len(inputs))
 		for _, d := range reply.Data {
 			if len(d.Embedding) == 0 || d.Index == nil || *d.Index < 0 || *d.Index >= len(inputs) || reply.Embeddings[*d.Index] != nil {
-				return nil, ErrUnavailable
+				return nil, "", ErrUnavailable
 			}
 			reply.Embeddings[*d.Index] = d.Embedding
 		}
 	}
 	if len(reply.Embeddings) != len(inputs) {
-		return nil, errors.New("incomplete embeddings")
+		return nil, "", errors.New("incomplete embeddings")
 	}
 	for _, v := range reply.Embeddings {
 		if len(v) == 0 || len(v) != len(reply.Embeddings[0]) {
-			return nil, errors.New("unexpected embedding dimensions")
+			return nil, "", errors.New("unexpected embedding dimensions")
 		}
 		var norm float64
 		for _, x := range v {
 			norm += float64(x) * float64(x)
 		}
 		if norm == 0 {
-			return nil, ErrUnavailable
+			return nil, "", ErrUnavailable
 		}
 		norm = math.Sqrt(norm)
 		for i := range v {
 			v[i] = float32(float64(v[i]) / norm)
 		}
 	}
-	return reply.Embeddings, nil
+	return reply.Embeddings, reply.Model, nil
 }

@@ -94,7 +94,7 @@ model tag digest from Ollama’s `/api/tags` before and after embedding. A
 changed digest during the request yields keyword results. Cached vectors
 with a different or unknown digest are rebuilt in the usual batches.
 
-For OpenAI-compatible endpoints the cache uses the provider, base URL and model ID. Use a versioned model ID when replacing a deployment. Set the endpoint and credential reference in [configuration.md](configuration.md#history-embeddings).
+For OpenAI-compatible endpoints the cache uses the provider, base URL, configured model, returned model ID and vector dimensions. Use a versioned model ID when replacing a deployment. Set the endpoint and credential reference in [configuration.md](configuration.md#history-embeddings).
 
 With Ollama running, reproduce the fixture using
 `PETAL_EVAL_EMBEDDINGS=1 go test -count=1 -v ./internal/sessions -run TestLocalHybridEvaluation`.

@@ -611,12 +611,12 @@ func TestConfiguredEmbeddingSearch(t *testing.T) {
 			Model string
 			Input []string
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Model != "MixedCase" || !slices.Equal(req.Input, []string{"battery", "vehicle"}) {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Model != "MixedCase" || (len(req.Input) != 1 || (req.Input[0] != "battery" && req.Input[0] != "vehicle")) {
 			t.Errorf("unexpected request: %+v", req)
 			http.Error(w, "bad request", 400)
 			return
 		}
-		io.WriteString(w, `{"model":"MixedCase","data":[{"index":1,"embedding":[0,3]},{"index":0,"embedding":[0,2]}]}`)
+		io.WriteString(w, `{"model":"MixedCase-v2","data":[{"index":0,"embedding":[0,2]}]}`)
 	}))
 	defer srv.Close()
 	cwd := t.TempDir()
