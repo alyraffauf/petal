@@ -1,6 +1,6 @@
 # Petal delegation over MCP
 
-Petal can expose four tools to a parent agent through a Petal-managed stdio MCP server. The parent chooses a configured model, starts a child in the same project directory, and reads the child's activity and final result. Petal routes the model through its configured accounts, including any account pin.
+Petal can expose tools to a parent agent through a Petal-managed stdio MCP server. The parent chooses a configured model, starts a child in the same project directory, and reads the child's activity and final result. Petal routes the model through its configured accounts, including any account pin.
 
 ## Disable delegation
 
@@ -16,6 +16,7 @@ Delegation is enabled by default. The parent adapter must support stdio MCP serv
 
 | Tool | Arguments | Response |
 | --- | --- | --- |
+| `petal_read_transcript` | Optional `reference` and UTF-8 byte `offset` | Opens the latest archived message by default. Pass a returned `previous` or `next` reference to browse. Pass `next_offset` with the same reference to continue long text. |
 | `petal_capabilities` | Optional `search` | Configured model IDs, labels and providers for the current account selection. The initial list shows up to 32 models. Search returns all matches. |
 | `petal_delegate` | `model`, `task` | `childId` and `model` after Petal binds the child to the parent and schedules its prompt. |
 | `petal_read` | `child_id`, optional `after` | A page of journal entries after the cursor. |

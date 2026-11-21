@@ -464,6 +464,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 }
 
 const delegationToolList = `{"tools":[
+{"name":"petal_read_transcript","description":"Recover a saved message after compaction. With no arguments, open your latest saved message. Pass previous or next as reference to move between messages. For long text, reuse reference with next_offset as offset.","inputSchema":{"type":"object","properties":{"reference":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}},
 {"name":"petal_capabilities","description":"Discover configured child models before delegating. Search by model ID, label or provider if a target is missing. IDs respect the current account pin. Quota is checked at routing time when needed.","inputSchema":{"type":"object","properties":{"search":{"type":"string"}},"additionalProperties":false}},
 {"name":"petal_delegate","description":"Use a model ID from petal_capabilities. Start an independent child in your working directory. Its only prompt is task, so include context, edit scope and expected output. Keep childId and follow next.","inputSchema":{"type":"object","properties":{"model":{"type":"string","minLength":1},"task":{"type":"string","minLength":1}},"required":["model","task"],"additionalProperties":false}},
 {"name":"petal_read","description":"Read available child activity immediately. Start at 0 and pass nextAfter as after on subsequent calls. Follow next.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0}},"required":["child_id"],"additionalProperties":false}},
@@ -515,6 +516,18 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 		return decoder.Decode(dest)
 	}
 	switch name {
+	case "petal_read_transcript":
+		var args struct {
+			Reference int64
+			Offset    int
+		}
+		if len(arguments) > 0 {
+			if err := decode(&args); err != nil {
+				return nil, "", err
+			}
+		}
+		value, err := sessions.ReadHistory(ctx, endpoint.cwd, endpoint.parent, args.Reference, args.Offset)
+		return value, "", err
 	case "petal_capabilities":
 		var args struct{ Search string }
 		if len(arguments) > 0 {
