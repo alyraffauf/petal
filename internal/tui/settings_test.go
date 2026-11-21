@@ -12,7 +12,7 @@ import (
 func TestSettingPickerShowsCurrentGroupedValue(t *testing.T) {
 	settings := settingsFrom(proxy.Object{
 		"configOptions": json.RawMessage(`[{
-			"id":"effort","name":"Reasoning effort","category":"thought_level","type":"select",
+			"configId":"effort","name":"Reasoning effort","category":"thought_level","type":"select",
 			"currentValue":"high","options":[{"group":"depth","name":"Depth","options":[
 				{"value":"low","name":"Low"},{"value":"high","name":"High","description":"More reasoning"}
 			]}]
@@ -21,6 +21,9 @@ func TestSettingPickerShowsCurrentGroupedValue(t *testing.T) {
 	model := &terminal{agentSettings: settings}
 	model.Width, model.Height = 65, 6
 	model.openSettings("thought_level")
+	if model.launch == nil || model.launch.setting.target.ID != "effort" {
+		t.Fatal("missing ACP v2 effort option ID")
+	}
 
 	view := ansi.Strip(model.launch.View().Content)
 	if !strings.Contains(view, "› Depth · High (current) · More reasoning") {

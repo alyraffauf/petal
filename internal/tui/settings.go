@@ -22,6 +22,24 @@ type setting struct {
 	CurrentValue                          json.RawMessage
 	Options                               []valueChoice
 }
+
+// ACP v1 calls the option identifier id; v2 calls it configId.
+func (s *setting) UnmarshalJSON(data []byte) error {
+	type fields setting
+	var wire struct {
+		fields
+		ConfigID string
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*s = setting(wire.fields)
+	if wire.ConfigID != "" {
+		s.ID = wire.ConfigID
+	}
+	return nil
+}
+
 type settingsUpdate struct {
 	Config        []setting
 	Modes         []option

@@ -21,7 +21,7 @@ import (
 )
 
 // Editors discover the picker through session/new, before they send a model.
-// Keep that empty session local until the editor chooses a model or sends work.
+// A local picker remains available when the default adapter cannot open.
 type editorSessions struct {
 	commonV1 bool
 	mu       sync.Mutex
@@ -44,7 +44,11 @@ func (p *proxy) modelOption() Object {
 		choices = append(choices, map[string]string{"value": id, "name": p.ModelLabel(id)})
 	}
 	options, _ := json.Marshal(choices)
-	return Object{"id": encoded("model"), "category": encoded("model"), "name": encoded("Model"), "type": encoded("select"), "currentValue": encoded(p.Model), "options": options}
+	key := "id"
+	if p.version == 2 {
+		key = "configId"
+	}
+	return Object{key: encoded("model"), "category": encoded("model"), "name": encoded("Model"), "type": encoded("select"), "currentValue": encoded(p.Model), "options": options}
 }
 
 func projectKey(cwd string) string {
@@ -153,6 +157,17 @@ func (p *proxy) openEditorSession(ctx context.Context, params Object) (any, erro
 	}
 	id := "petal-" + rand.Text()
 	s := &editorSession{setup: params, cwd: projectKey(stringField(params, "cwd"))}
+	// A working default adapter supplies model-specific settings before the first
+	// prompt. Keep the local picker usable if that route cannot start.
+	if _, err := p.bindEditorSession(ctx, s, id, p.Model); err == nil {
+		p.editorSessions.sessions.Store(id, s)
+		response := p.pendingModelOptions(s)
+		response["sessionId"] = encoded(id)
+		return response, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	p.editorSessions.sessions.Store(id, s)
 	return map[string]any{"sessionId": id, "configOptions": []Object{p.modelOption()}}, nil
 }
@@ -284,6 +299,11 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	if method == "session/set_model" {
 		requested = stringField(params, "modelId")
 	}
+	if method == "session/options" && s.route != nil && s.setup != nil {
+		options := p.pendingModelOptions(s)
+		s.mu.Unlock()
+		return options, nil
+	}
 	repick := selecting && s.route != nil && s.setup != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
 	if selecting && s.route != nil && s.setup != nil && requested == s.route.Model {
 		options := p.pendingModelOptions(s)
@@ -337,6 +357,10 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			returnOptions := p.pendingModelOptions(s)
 			s.mu.Unlock()
 			if method == "session/set_model" {
+				update := Object{"sessionUpdate": encoded("config_option_update"), "configOptions": returnOptions["configOptions"]}
+				if err := p.editor.SendNotification(ctx, "session/update", map[string]any{"sessionId": id, "update": update}); err != nil {
+					return nil, err
+				}
 				return Object{}, nil
 			}
 			return returnOptions, nil

@@ -29,6 +29,8 @@ type run struct {
 	permissionCtx  context.Context
 	endPermissions context.CancelFunc
 	reply          strings.Builder
+	replyID        string
+	replies        []sessions.Message
 	transcript     acpv2.Transcript
 	permissions    int
 	busy           bool
@@ -97,9 +99,8 @@ func (r *run) execute(conn Connection, task string, closeTransport context.Cance
 	messages := []sessions.Message{{Role: "user", Body: task}}
 	messages = append(messages, sessions.ProjectTranscript(&r.transcript, r.version == 2)...)
 	if r.version != 2 {
-		if answer := r.reply.String(); answer != "" {
-			messages = append(messages, sessions.Message{Role: "assistant", Body: answer})
-		}
+		r.finishReply()
+		messages = append(messages, r.replies...)
 	}
 	answer := ""
 	for _, message := range messages[1:] {
@@ -250,6 +251,14 @@ func cancelledPermission() json.RawMessage {
 	return json.RawMessage(`{"outcome":{"outcome":"cancelled"}}`)
 }
 
+func (r *run) finishReply() {
+	if r.reply.Len() != 0 {
+		r.replies = append(r.replies, sessions.Message{Role: "assistant", Body: r.reply.String()})
+		r.reply.Reset()
+	}
+	r.replyID = ""
+}
+
 func (r *run) update(raw json.RawMessage) error {
 	var update struct {
 		Kind       string `json:"sessionUpdate"`
@@ -265,6 +274,12 @@ func (r *run) update(raw json.RawMessage) error {
 		return nil
 	}
 
+	if r.version == 1 {
+		switch update.Kind {
+		case "tool_call", "tool_call_update", "tool_call_content_chunk", "agent_thought_chunk", "compaction_update":
+			r.finishReply()
+		}
+	}
 	switch update.Kind {
 	case "compaction_update", "compaction_summary_chunk":
 		_, err := r.transcript.Apply(raw)
@@ -274,8 +289,17 @@ func (r *run) update(raw json.RawMessage) error {
 			if r.version == 2 {
 				_, _ = r.transcript.Apply(raw)
 			} else {
-				var chunk struct{ Content struct{ Type, Text string } }
+				var chunk struct {
+					MessageID string
+					Content   struct{ Type, Text string }
+				}
 				if json.Unmarshal(raw, &chunk) == nil && chunk.Content.Type == "text" {
+					if chunk.MessageID != "" && chunk.MessageID != r.replyID {
+						r.finishReply()
+					}
+					if chunk.MessageID != "" {
+						r.replyID = chunk.MessageID
+					}
 					r.reply.WriteString(chunk.Content.Text)
 				}
 			}

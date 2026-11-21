@@ -236,3 +236,22 @@ func TestV2QueuedTerminalUpdateSurvivesCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestV1ChildReplyBoundaries(t *testing.T) {
+	r := &run{version: 1, active: true, ctx: t.Context()}
+	for _, update := range []string{
+		`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Checking."}}`,
+		`{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"}}`,
+		`{"sessionUpdate":"agent_message_chunk","messageId":"result","content":{"type":"text","text":"rece"}}`,
+		`{"sessionUpdate":"agent_message_chunk","messageId":"result","content":{"type":"text","text":"ipt"}}`,
+		`{"sessionUpdate":"agent_message_chunk","messageId":"next","content":{"type":"text","text":"Done."}}`,
+	} {
+		if err := r.update(json.RawMessage(update)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.finishReply()
+	if len(r.replies) != 3 || r.replies[0].Body != "Checking." || r.replies[1].Body != "receipt" || r.replies[2].Body != "Done." {
+		t.Fatal(r.replies)
+	}
+}
