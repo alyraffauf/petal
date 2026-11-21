@@ -27,6 +27,7 @@
           ) ../..)
         ];
       };
+      excludedPackages = [ "third_party/textarea" ];
       vendorHash = "sha256-jL1RiZdFsPwSOX3x4vcvq3iSAt3SAtbpQybx4RsFjrA=";
       # The Claude bridge uses the user's installed CLI, discovered at runtime.
       ldflags = [
