@@ -122,7 +122,11 @@ func historyEntries(history []historyEvent) []acpv2.Entry {
 			if status != nil && *status != "" {
 				state = *status
 			}
-			text = strings.Join(append([]string{"**" + label + "** · " + state}, content...), "\n\n")
+			header := "**" + label + "** · " + state
+			if text != "" {
+				header += "\n\n" + text
+			}
+			text = header
 		}
 		if text != "" {
 			entries = append(entries, acpv2.Entry{Role: displayRoles[group], Text: text})

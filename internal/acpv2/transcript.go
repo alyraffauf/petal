@@ -29,6 +29,8 @@ type transcriptKey struct {
 type transcriptRow struct {
 	role, id, name, title, status string
 	content                       []string
+	displaySet, lastText          bool
+	rawText                       string
 }
 
 func NewTranscript() *Transcript { return &Transcript{} }
@@ -81,11 +83,10 @@ func (row transcriptRow) text() string {
 }
 
 func (row transcriptRow) body() string {
-	var separator string
-	if row.role == "tool" {
-		separator = "\n\n"
+	if row.role == "tool" && !row.displaySet {
+		return row.rawText
 	}
-	return strings.Join(row.content, separator)
+	return strings.Join(row.content, "")
 }
 
 func (row transcriptRow) header() string {
@@ -127,7 +128,15 @@ func (t *Transcript) Apply(update json.RawMessage) (bool, error) {
 	if err := json.Unmarshal(update, &fields); err != nil {
 		return false, fmt.Errorf("decode ACP v2 session update: %w", err)
 	}
+	return t.ApplyFields(fields, 2)
+}
+
+// ApplyFields projects a decoded update, including tool updates from v1 adapters.
+func (t *Transcript) ApplyFields(fields map[string]json.RawMessage, version uint16) (bool, error) {
 	kind, ok := readString(fields["sessionUpdate"])
+	if version == 1 && kind == "tool_call" {
+		kind = "tool_call_update"
+	}
 	if !ok {
 		return false, fmt.Errorf("ACP v2 session update requires a string sessionUpdate")
 	}
@@ -157,9 +166,14 @@ func (t *Transcript) Apply(update json.RawMessage) (bool, error) {
 
 	chunk := strings.HasSuffix(kind, "_chunk")
 	var chunkText string
+	var plain bool
 	if chunk {
 		var valid bool
-		chunkText, valid = projectContent(fields["content"], role == "tool")
+		if role == "tool" {
+			chunkText, plain, valid = toolBlock(fields["content"], version)
+		} else {
+			chunkText, valid = projectContent(fields["content"], false)
+		}
 		if !valid {
 			return false, fmt.Errorf("ACP v2 %s requires a content block", kind)
 		}
@@ -177,35 +191,58 @@ func (t *Transcript) Apply(update json.RawMessage) (bool, error) {
 	}
 	row := &t.rows[position]
 	if chunk {
+		if role == "tool" {
+			hadFallback := !row.displaySet && row.rawText != ""
+			row.appendTool(chunkText, plain)
+			return !found || chunkText != "" || hadFallback, nil
+		}
 		if chunkText != "" {
 			row.content = append(row.content, chunkText)
 		}
-		return chunkText != "" || (role == "tool" && !found), nil
+		return chunkText != "", nil
 	}
 
 	before := *row
+	content := fields["content"]
 	if role == "compaction" {
 		patchString(&row.status, fields["status"])
 		patchString(&row.title, fields["error"])
-		fields["content"] = fields["summary"]
+		content = fields["summary"]
 	}
 	if role == "tool" {
 		patchString(&row.name, fields["name"])
 		patchString(&row.title, fields["title"])
 		patchString(&row.status, fields["status"])
+		var blocks []json.RawMessage
+		if content != nil && json.Unmarshal(content, &blocks) == nil {
+			row.content = nil
+			row.lastText = false
+			row.displaySet = true
+			row.rawText = ""
+			for _, block := range blocks {
+				text, plain, valid := toolBlock(block, version)
+				if valid {
+					row.appendTool(text, plain)
+				}
+			}
+		}
+		if raw := fields["rawOutput"]; !row.displaySet && raw != nil {
+			row.rawText = rawToolText(raw)
+		}
+		return !found || before.header() != row.header() || before.body() != row.body(), nil
 	}
 
 	var blocks []json.RawMessage
-	if raw := fields["content"]; raw != nil && json.Unmarshal(raw, &blocks) == nil {
+	if content != nil && json.Unmarshal(content, &blocks) == nil {
 		row.content = nil
 		for _, block := range blocks {
-			if projected, valid := projectContent(block, role == "tool"); valid && projected != "" {
+			if projected, valid := projectContent(block, false); valid && projected != "" {
 				row.content = append(row.content, projected)
 			}
 		}
-		return (role == "tool" && !found) || before.text() != row.text(), nil
+		return before.text() != row.text(), nil
 	}
-	return (role == "tool" || role == "compaction") && (!found || before.header() != row.header()), nil
+	return role == "compaction" && (!found || before.header() != row.header()), nil
 }
 
 func readString(raw json.RawMessage) (string, bool) {

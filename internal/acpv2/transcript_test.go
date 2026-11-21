@@ -95,3 +95,28 @@ func TestCompactionSummaryAndStableSource(t *testing.T) {
 		t.Fatalf("got %d events", count)
 	}
 }
+
+func TestToolDisplayOwnsItsContentAcrossPatches(t *testing.T) {
+	const start = `{"sessionUpdate":"tool_call_update","toolCallId":"x",`
+	const raw = `"rawOutput":{"result":{"content":[{"type":"text","text":"private"}]}}`
+	log := acpv2.NewTranscript()
+	check := func(body string) {
+		t.Helper()
+		text := "**x** · pending"
+		if body != "" {
+			text += "\n\n" + body
+		}
+		assertEntries(t, log, acpv2.Entry{Role: "tool", Text: text})
+	}
+	apply(t, log, start+raw+"}", true)
+	check("private")
+	apply(t, log, start+`"rawOutput":null}`, true)
+	check("")
+	apply(t, log, start+`"content":[{"type":"content","content":{"type":"text","text":"masked"}}]}`, true)
+	apply(t, log, start+raw+"}", false)
+	check("masked")
+	for _, clear := range []string{"null", "[]"} {
+		apply(t, log, start+`"content":`+clear+","+raw+"}", clear == "null")
+		check("")
+	}
+}
