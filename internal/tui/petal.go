@@ -78,10 +78,7 @@ func petalMasthead(w, frame int, title, status string, working bool, background 
 		statusColor = ribbonPalette[195+int(26*math.Sin(phase*2))]
 	}
 	sample := func(x, y float64) string {
-		if working {
-			wave := (1 + math.Cos(2*math.Pi*(x*1.85+y*.34)-float64(frame)*.13)) / 2
-			return ribbonPalette[25+int(190*wave*wave)]
-		}
+
 		center := .51 + .46*math.Sin(8*x+phase) + .18*math.Sin(17*x-phase*.55)
 		edge := y - center
 		envelope := math.Exp(-13 * (x - .55) * (x - .55))
@@ -93,7 +90,12 @@ func petalMasthead(w, frame int, title, status string, working bool, background 
 	var band strings.Builder
 	for x := lw; x < w-rw; x++ {
 		t := float64(x) / float64(max(1, w-1))
-		fmt.Fprintf(&band, "\x1b[38;2;%s;48;2;%sm▄", sample(t, .75), sample(t, .25))
+		bottom, top := sample(t, .75), sample(t, .25)
+		if working {
+			pos := float64(x-lw) / float64(max(1, w-rw-lw))
+			top, bottom = tideColor(pos, frame), tideColor(pos+.17, frame)
+		}
+		fmt.Fprintf(&band, "\x1b[38;2;%s;48;2;%sm▄", bottom, top)
 	}
 	return richBand(left, lw, petalText, background, true) + band.String() + "\x1b[0m" + richBand(right, rw, statusColor, background, false)
 }

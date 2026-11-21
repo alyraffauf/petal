@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bloomfx.dev/bloom/anim"
 	"fmt"
 	"image"
 	"math"
@@ -718,9 +719,15 @@ func selectedTreeSpan(text string, width, offset, total int, fg string, bold, se
 			color = treeBands[step]
 		}
 		if progress >= 0 {
-			distance := math.Abs(float64(offset)/float64(max(1, total)) - (progress*1.5 - .25))
-			if distance < .24 {
-				color = arrivalBands[int((1-distance/.24)*15)]
+			position := float64(offset) / float64(max(1, total))
+			distance := (position - anim.InOutCubic(progress)) / .14
+			opacity := .27 * math.Exp(-distance*distance) * math.Pow(math.Sin(math.Pi*progress), 2)
+			if opacity > .006 {
+				r, g, b := 19, 17, 23
+				if selected {
+					r, g, b = 42+step, 31+step/2, 47+step/2
+				}
+				color = fmt.Sprintf("%d;%d;%d", r+int(float64(245-r)*opacity), g+int(float64(168-g)*opacity), b+int(float64(115-b)*opacity))
 			}
 		}
 		if color != last {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"bloomfx.dev/bloom/anim"
@@ -35,7 +36,7 @@ func (m centerMotion) arrival(id string) float64 {
 	if t >= 1 {
 		return -1
 	}
-	return anim.InOutCubic(t)
+	return t
 }
 func (p *picker) workingTide() bool {
 	if p.center.owner != nil && p.center.owner.Busy {
@@ -61,14 +62,26 @@ func (p *picker) motionTick() tea.Cmd {
 	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg { return centerFrame{p} })
 }
 
-var treeBands, arrivalBands = func() ([13]string, [16]string) {
+var treeBands = func() [13]string {
 	var tree [13]string
-	var arrival [16]string
 	for i := range tree {
 		tree[i] = fmt.Sprintf("%d;%d;%d", 42+i, 31+i/2, 47+i/2)
 	}
-	for i := range arrival {
-		arrival[i] = fmt.Sprintf("%d;%d;%d", 46+i*4, 33+i*2, 48+i)
-	}
-	return tree, arrival
+	return tree
 }()
+
+// The working ribbon moves between the same plum shadow and rose highlight
+// as the motion study. Each half-cell row samples a different phase.
+var tidePalette = func() [128]string {
+	var colors [128]string
+	for i := range colors {
+		t := float64(i) / float64(len(colors)-1)
+		colors[i] = fmt.Sprintf("%d;%d;%d", 42+int(math.Round(213*t)), 29+int(math.Round(145*t)), 52+int(math.Round(159*t)))
+	}
+	return colors
+}()
+
+func tideColor(position float64, frame int) string {
+	wave := (1 + math.Cos(2*math.Pi*(position-float64(frame)/60))) / 2
+	return tidePalette[int(math.Round(127*math.Pow(anim.InOutCubic(wave), 2.5)))]
+}
