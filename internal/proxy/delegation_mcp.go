@@ -62,8 +62,8 @@ func (p *proxy) prepareDelegation(lifetime context.Context, params Object, metho
 		}
 	}
 	for _, server := range servers {
-		if stringField(server, "name") == routing.DelegationMCPServerName {
-			return nil, nil, acp.NewInvalidParams("the petal-delegation MCP server is reserved")
+		if stringField(server, "name") == routing.AgentMCPServerName {
+			return nil, nil, acp.NewInvalidParams("the petal MCP server is reserved")
 		}
 	}
 	cwd := stringField(params, "cwd")

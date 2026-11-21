@@ -113,7 +113,7 @@ func (q *wakeQueue) next(ctx context.Context) []string {
 
 func wakePrompt(native string, ids []string) Object {
 	data, _ := json.Marshal(ids)
-	text := fmt.Sprintf("Petal delegation update: these child runs have ended: %s. Continue the original task under the user’s instructions. If you need a child’s result or activity for that task, call petal_read with its full child_id. For questions about earlier work that need an original source, Petal’s archive includes saved child messages and tool results. Search with petal_search_history and open the source with petal_read_transcript.", data)
+	text := fmt.Sprintf("Petal delegation update: these child runs have ended: %s. Continue the original task under the user’s instructions. If you need a child’s result or activity for that task, call activity with its full child_id. For questions about earlier work that need an original source, Petal’s archive includes saved child messages and tool results. Search with search and open the source with open.", data)
 	prompt, _ := json.Marshal([]map[string]string{{"type": "text", "text": text}})
 	return Object{"sessionId": encoded(native), "prompt": prompt}
 }

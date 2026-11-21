@@ -28,21 +28,18 @@ type Tools struct {
 }
 
 func delegationToolList(enabled bool) json.RawMessage {
-	mode := `"enum":["fts"]`
-	description := ""
-	constraint := ""
+	semanticTool := ""
 	if enabled {
-		mode = `"enum":["fts","hybrid"]`
-		description = " By default Petal tries hybrid search. Hybrid mixes keyword and semantic hits without pagination. Repeat partial searches to extend coverage."
-		constraint = `,"not":{"required":["mode","before"],"properties":{"mode":{"const":"hybrid"}}}`
+		semanticTool = `{"name":"recall","description":"Find archived messages by meaning. Combines semantic and keyword hits. Repeat if coverage.partial; falls back to keywords if embeddings are unavailable.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512}},"required":["query"],"additionalProperties":false}},`
 	}
 	return json.RawMessage(`{"tools":[
-{"name":"petal_search_history","description":"Find original sources for questions about earlier work, including exact tool output from completed delegated children and work before compaction or restart. Search saved user, assistant, and tool messages in this session and its descendants. Use a distinctive keyword, identifier, or tool name from the earlier task. Quote adjacent words for a phrase. For an original result or verbatim quote, open the matching reference with petal_read_transcript. Keyword matches are newest first. Pass next_before as before for older keyword matches.` + description + `","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512},"mode":{"type":"string",` + mode + `},"before":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false` + constraint + `}},
-{"name":"petal_read_transcript","description":"Open an original archived message or tool result by numeric reference, including sources from completed delegated children. Use a reference from petal_search_history or one supplied by the user. Cite the returned reference when asked for a source. With no arguments, open your latest saved message. Pass previous or next as reference to move between messages. For long text, reuse reference with next_offset as offset. Set context (0–8) for neighboring messages on each side within the shared 4096-byte text budget.","inputSchema":{"type":"object","properties":{"reference":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"context":{"type":"integer","minimum":0,"maximum":8}},"additionalProperties":false}},
-{"name":"petal_capabilities","description":"Discover configured child models before delegating. Search by model ID, label or provider if a target is missing. IDs respect the current account pin. Quota is checked at routing time when needed.","inputSchema":{"type":"object","properties":{"search":{"type":"string"}},"additionalProperties":false}},
-{"name":"petal_delegate","description":"Use a model ID from petal_capabilities. Start an independent child in your working directory. Its only prompt is task, so include context, edit scope and expected output. Keep childId and follow next.","inputSchema":{"type":"object","properties":{"model":{"type":"string","minLength":1},"task":{"type":"string","minLength":1}},"required":["model","task"],"additionalProperties":false}},
-{"name":"petal_read","description":"Read the activity journal for a delegated run you are following, including its terminal result. Use the full childId returned by petal_delegate. Start at 0 and pass nextAfter as after on subsequent calls. Follow next. For historical questions that ask for original sources, use petal_search_history.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0}},"required":["child_id"],"additionalProperties":false}},
-{"name":"petal_wait","description":"Wait while following a delegated run for activity, a permission request, completion or timeout (default 30 seconds). Use the full childId returned by petal_delegate and follow next. A running child may return an empty page.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0},"timeout":{"type":"integer","minimum":1,"maximum":60,"default":30}},"required":["child_id"],"additionalProperties":false}}
+{"name":"search","description":"Find archived messages by keyword, identifier, or quoted phrase. Page older hits with next_before.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512},"before":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}},
+` + semanticTool + `
+{"name":"open","description":"Read original message text. Omit reference for latest. Page with next_offset; context adds neighboring messages.","inputSchema":{"type":"object","properties":{"reference":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"context":{"type":"integer","minimum":0,"maximum":8}},"additionalProperties":false}},
+{"name":"models","description":"List child model IDs. Filter by name or provider.","inputSchema":{"type":"object","properties":{"search":{"type":"string"}},"additionalProperties":false}},
+{"name":"delegate","description":"Start a child with a listed model ID and a self-contained task. Returns childId.","inputSchema":{"type":"object","properties":{"model":{"type":"string","minLength":1},"task":{"type":"string","minLength":1}},"required":["model","task"],"additionalProperties":false}},
+{"name":"activity","description":"Read child events and final result immediately. Continue from nextAfter.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0}},"required":["child_id"],"additionalProperties":false}},
+{"name":"wait","description":"Wait for child activity or completion. Returns the same page as activity. Timeout is in seconds.","inputSchema":{"type":"object","properties":{"child_id":{"type":"string","minLength":1},"after":{"type":"integer","minimum":0,"default":0},"timeout":{"type":"integer","minimum":1,"maximum":60,"default":30}},"required":["child_id"],"additionalProperties":false}}
 ]}`)
 }
 
@@ -88,32 +85,41 @@ func (endpoint server) invoke(ctx context.Context, tools Tools, record sessions.
 		return decoder.Decode(dest)
 	}
 	switch name {
+	// Older sessions can retain the original tool catalog across a resume.
 	case "petal_search_history":
 		var args struct {
-			Mode   string
 			Query  string
+			Mode   string
 			Before *int64
 		}
 		if err := decode(&args); err != nil {
 			return nil, "", err
 		}
-		if (args.Mode == "hybrid" || (args.Mode == "" && tools.Embeddings.Provider != "off")) && args.Before == nil {
+		if args.Before == nil && (args.Mode == "hybrid" || (args.Mode == "" && tools.Embeddings.Provider != "off")) {
 			value, err := sessions.SearchHybridHistory(ctx, endpoint.cwd, record.ID, args.Query, tools.Embeddings)
 			return value, "", err
 		}
 		if args.Mode != "" && args.Mode != "fts" {
 			return nil, "", errors.New("invalid search mode or hybrid cursor")
 		}
-		var before int64
-		if args.Before != nil {
-			before = *args.Before
-			if before < 1 {
-				return nil, "", errors.New("before must be positive")
-			}
+		return endpoint.keywordHistory(ctx, record.ID, args.Query, args.Before)
+	case "search":
+		var args struct {
+			Query  string
+			Before *int64
 		}
-		value, err := sessions.SearchHistory(ctx, endpoint.cwd, record.ID, args.Query, before)
+		if err := decode(&args); err != nil {
+			return nil, "", err
+		}
+		return endpoint.keywordHistory(ctx, record.ID, args.Query, args.Before)
+	case "recall", "petal_search_history_by_meaning":
+		var args struct{ Query string }
+		if err := decode(&args); err != nil {
+			return nil, "", err
+		}
+		value, err := sessions.SearchHybridHistory(ctx, endpoint.cwd, record.ID, args.Query, tools.Embeddings)
 		return value, "", err
-	case "petal_read_transcript":
+	case "open", "petal_read_transcript":
 		var args struct {
 			Reference int64
 			Offset    int
@@ -135,7 +141,7 @@ func (endpoint server) invoke(ctx context.Context, tools Tools, record sessions.
 		}
 		value, err := sessions.ReadHistoryWithContext(ctx, endpoint.cwd, record.ID, args.Reference, args.Offset, count)
 		return value, "", err
-	case "petal_capabilities":
+	case "models", "petal_capabilities":
 		var args struct{ Search string }
 		if len(arguments) > 0 {
 			if err := decode(&args); err != nil {
@@ -143,7 +149,7 @@ func (endpoint server) invoke(ctx context.Context, tools Tools, record sessions.
 			}
 		}
 		return tools.Catalog(args.Search), "", nil
-	case "petal_delegate":
+	case "delegate", "petal_delegate":
 		var args struct{ Model, Task string }
 		if err := decode(&args); err != nil {
 			return nil, "", err
@@ -156,7 +162,7 @@ func (endpoint server) invoke(ctx context.Context, tools Tools, record sessions.
 		}
 		value, err := tools.Delegate(ctx, record.ID, endpoint.cwd, args.Model, args.Task)
 		return value, "", err
-	case "petal_read":
+	case "activity", "petal_read":
 		var args struct {
 			ChildID string `json:"child_id"`
 			After   int64
@@ -169,7 +175,7 @@ func (endpoint server) invoke(ctx context.Context, tools Tools, record sessions.
 		}
 		page, err := tools.Read(ctx, record.ID, endpoint.cwd, args.ChildID, args.After)
 		return childDelivery(args.ChildID, page, err)
-	case "petal_wait":
+	case "wait", "petal_wait":
 		args := struct {
 			ChildID string `json:"child_id"`
 			After   int64
@@ -188,6 +194,18 @@ func (endpoint server) invoke(ctx context.Context, tools Tools, record sessions.
 	}
 }
 
+func (endpoint server) keywordHistory(ctx context.Context, parent, query string, cursor *int64) (any, string, error) {
+	var before int64
+	if cursor != nil {
+		before = *cursor
+		if before < 1 {
+			return nil, "", errors.New("before must be positive")
+		}
+	}
+	page, err := sessions.SearchHistory(ctx, endpoint.cwd, parent, query, before)
+	return page, "", err
+}
+
 func childDelivery(child string, page delegation.Page, err error) (any, string, error) {
 	if err != nil {
 		return nil, "", err
@@ -198,10 +216,10 @@ func childDelivery(child string, page delegation.Page, err error) (any, string, 
 	return childPageResponse(page), child, nil
 }
 func childPageResponse(page delegation.Page) any {
-	next := "Call petal_wait with the same child_id and after set to nextAfter when you need more activity."
+	next := "For more events, wait with after=nextAfter."
 	switch {
 	case page.HasMore:
-		next = "Call petal_read with after set to nextAfter to read the rest of the journal."
+		next = "More events: activity with after=nextAfter."
 	case page.Status == "completed":
 		next = "Use result.data.answer as the child's final reply."
 	case page.Result != nil:

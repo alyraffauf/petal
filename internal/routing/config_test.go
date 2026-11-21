@@ -135,13 +135,13 @@ func TestDelegationConfigurationReservesBridgeNameOnlyWhenEnabled(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	const server = "\n[[mcp_servers]]\nname = \"petal-delegation\"\ncommand = \"tool\"\n"
+	const server = "\n[[mcp_servers]]\nname = \"petal\"\ncommand = \"tool\"\n"
 	write("delegation = false\n" + server)
 	if config, err := Load(path, "", ""); err != nil || config.Delegation {
 		t.Fatalf("default delegation = %v, error = %v", config.Delegation, err)
 	}
 	write(server)
-	if _, err := Load(path, "", ""); err == nil || !strings.Contains(err.Error(), DelegationMCPServerName) {
+	if _, err := Load(path, "", ""); err == nil || !strings.Contains(err.Error(), AgentMCPServerName) {
 		t.Fatalf("expected reserved name error, got %v", err)
 	}
 	write("")

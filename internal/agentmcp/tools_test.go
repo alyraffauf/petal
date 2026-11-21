@@ -8,8 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
+
 	"testing"
 
 	"petal/internal/routing"
@@ -18,38 +17,18 @@ import (
 
 func TestHistorySearchAdvertisement(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-
 		var list struct {
-			Tools []struct {
-				Name, Description string
-				InputSchema       struct {
-					Properties map[string]struct{ Enum []string }
-					Not        struct {
-						Required   []string
-						Properties map[string]struct{ Const string }
-					}
-				}
-			}
+			Tools []struct{ Name string }
 		}
 		if err := json.Unmarshal(delegationToolList(enabled), &list); err != nil {
 			t.Fatal(err)
 		}
-		found := false
+		names := map[string]bool{}
 		for _, tool := range list.Tools {
-			if tool.Name != "petal_search_history" {
-				continue
-			}
-			found = true
-
-			if slices.Contains(tool.InputSchema.Properties["mode"].Enum, "hybrid") != enabled || strings.Contains(strings.ToLower(tool.Description), "hybrid") != enabled {
-				t.Fatal(tool)
-			}
-			if enabled && (!slices.Equal(tool.InputSchema.Not.Required, []string{"mode", "before"}) || tool.InputSchema.Not.Properties["mode"].Const != "hybrid") {
-				t.Fatal(tool.InputSchema)
-			}
+			names[tool.Name] = true
 		}
-		if !found {
-			t.Fatal("missing history tool")
+		if !names["search"] || names["recall"] != enabled {
+			t.Fatalf("embeddings enabled=%v: %v", enabled, names)
 		}
 	}
 }
@@ -91,7 +70,14 @@ func TestConfiguredEmbeddingSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := server{cwd: cwd}
-	value, _, err := endpoint.invoke(t.Context(), Tools{Embeddings: cfg.History.Embeddings}, sessions.Record{ID: "p"}, "petal_search_history", json.RawMessage(`{"query":"battery"}`))
+	tools := Tools{Embeddings: cfg.History.Embeddings}
+	record := sessions.Record{ID: "p"}
+	query := json.RawMessage(`{"query":"battery"}`)
+	value, _, err := endpoint.invoke(t.Context(), tools, record, "search", query)
+	if err != nil || len(value.(sessions.HistoryMatches).Hits) != 0 {
+		t.Fatalf("unexpected keyword result: %v, %v", value, err)
+	}
+	value, _, err = endpoint.invoke(t.Context(), tools, record, "recall", query)
 	if err != nil {
 		t.Fatal(err)
 	}

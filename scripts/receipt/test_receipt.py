@@ -24,7 +24,7 @@ def call(tool, ident, args, result, **overrides):
     return dict(
         {
             "toolCallId": ident,
-            "title": "mcp.petal-delegation." + tool,
+            "title": "mcp.petal." + tool,
             "status": "completed",
             "rawInput": args,
             "rawOutput": [{"type": "text", "text": json.dumps(result)}],
@@ -38,13 +38,13 @@ class EvidenceTests(unittest.TestCase):
         receipt = "orchid abcdef"
         row = {"reference": 12, "session": "child", "role": "tool"}
         search = call(
-            "petal_search_history",
+            "search",
             "s",
             {"query": "orchid"},
             {"hits": [row | {"snippet": receipt}]},
         )
         read = call(
-            "petal_read_transcript", "r", {"reference": 12}, row | {"text": receipt}
+            "open", "r", {"reference": 12}, row | {"text": receipt}
         )
 
         def grade(events):
@@ -55,7 +55,7 @@ class EvidenceTests(unittest.TestCase):
         for wrong in [
             dict(read, status="failed"),
             dict(read, rawInput={"reference": 13}),
-            dict(read, title="other.petal_read_transcript"),
+            dict(read, title="other.open"),
         ]:
             self.assertFalse(grade([search, wrong])[1])
         self.assertFalse(grade([read, search])[1])
@@ -121,7 +121,7 @@ class EvidenceTests(unittest.TestCase):
             {"issued"},
         )
         denial = call(
-            "petal_read_transcript",
+            "open",
             "r",
             {"reference": 17},
             {},
@@ -131,7 +131,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(check_denial([denial], 17, "secret"))
         self.assertFalse(
             check_denial(
-                [dict(denial, title="other.petal_read_transcript")], 17, "secret"
+                [dict(denial, title="other.open")], 17, "secret"
             )
         )
         self.assertFalse(check_denial([denial], 18, "secret"))

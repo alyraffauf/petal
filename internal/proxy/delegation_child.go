@@ -38,7 +38,7 @@ func (p *proxy) configureDelegation() {
 			return struct {
 				delegation.Child
 				Next string `json:"next"`
-			}{child, "Continue independent work or finish your turn. Petal will prompt this connected session when the child finishes. Use petal_read or petal_wait if you need activity sooner."}, err
+			}{child, "Use wait for progress or end your turn for a completion wake."}, err
 		},
 		Read: runtime.Read,
 		Wait: runtime.Wait,
@@ -96,7 +96,7 @@ func (p *proxy) openDelegatedChild(ctx context.Context, model, parentID string, 
 	config.Delegation = false
 	config.MCPServers = nil
 	if !slices.Contains(config.ModelNames(), model) {
-		return nil, fmt.Errorf("no configured account offers model %q; use petal_capabilities to find model IDs", model)
+		return nil, fmt.Errorf("no configured account offers model %q; use models to find model IDs", model)
 	}
 	var affinity string
 	if route := decodeRouteID(parentID, 3); route != nil {
