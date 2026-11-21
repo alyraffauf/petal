@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -58,6 +60,7 @@ func (c *Config) discover() {
 		if adapter == "" {
 			bundled = executable(bundled)
 		}
+		var probes []func()
 		missingBridge := false
 		discover := func(a Account) Account {
 			cli := providerCLI(provider, a.Env)
@@ -69,7 +72,7 @@ func (c *Config) discover() {
 			if bridge == "" {
 				return a
 			}
-			return discoverAccount(provider, cli, bridge, a)
+			return discoverAccount(provider, cli, bridge, a, func(probe func()) { probes = append(probes, probe) })
 		}
 		named := false
 		for name, a := range c.Accounts {
@@ -84,13 +87,34 @@ func (c *Config) discover() {
 				c.Accounts[provider] = a
 			}
 		}
+		runCatalogProbes(probes)
 		if missingBridge {
 			c.Hints = append(c.Hints, provider+" installed; ACP bridge missing")
 		}
 	}
 }
 
-func discoverAccount(provider, cli, adapter string, a Account) Account {
+func runCatalogProbes(probes []func()) {
+	if len(probes) == 1 {
+		probes[0]()
+		return
+	}
+	if len(probes) == 0 {
+		return
+	}
+	slots := make(chan struct{}, 4)
+	var group sync.WaitGroup
+	for _, probe := range probes {
+		slots <- struct{}{}
+		group.Go(func() {
+			defer func() { <-slots }()
+			probe()
+		})
+	}
+	group.Wait()
+}
+
+func discoverAccount(provider, cli, adapter string, a Account, schedule func(func())) Account {
 	if a.Models == nil {
 		a.Models = map[string][]string{}
 	}
@@ -100,14 +124,24 @@ func discoverAccount(provider, cli, adapter string, a Account) Account {
 	a.ModelLabels = map[string]string{}
 	a.SelectModel = map[string]bool{}
 	argv := []string{adapter}
-	var ids []string
+	if _, exists := a.Models[provider+"/default"]; !exists {
+		a.Models[provider+"/default"] = argv
+	}
+	addModel := func(id string) {
+		if _, exists := a.Models[id]; id != "" && !exists {
+			a.Models[id] = argv
+			a.SelectModel[id] = true
+		}
+	}
 	switch provider {
 	case "claude":
 		if cli != "" && a.Env["CLAUDE_CODE_EXECUTABLE"] == "" {
 			a.Env["CLAUDE_CODE_EXECUTABLE"] = cli
 		}
 		a.ModelLabels = claudeLabels(a.Env)
-		ids = []string{"sonnet", "opus", "haiku", "fable"}
+		for _, id := range []string{"sonnet", "opus", "haiku", "fable"} {
+			addModel(id)
+		}
 	case "codex":
 		if cli != "" && a.Env["CODEX_PATH"] == "" {
 			a.Env["CODEX_PATH"] = cli
@@ -130,35 +164,29 @@ func discoverAccount(provider, cli, adapter string, a Account) Account {
 		if err == nil {
 			err = json.Unmarshal(data, &cache)
 		}
-		if (err != nil || len(cache.Models) == 0) && cli != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			cmd := a.Command(ctx, []string{cli, "debug", "models"})
-			cmd.WaitDelay = time.Second
-			data, err = cmd.Output()
-			if err == nil {
-				err = json.Unmarshal(data, &cache)
-			}
-		}
-		if err == nil {
+		apply := func() {
 			for _, m := range cache.Models {
 				if m.Visibility == "list" {
-					ids = append(ids, m.Slug)
+					addModel(m.Slug)
 					a.ModelLabels[m.Slug] = m.DisplayName
 				}
 			}
 		}
-
-	}
-	if _, exists := a.Models[provider+"/default"]; !exists {
-		a.Models[provider+"/default"] = argv
-	}
-	for _, id := range ids {
-		if id != "" {
-			if _, exists := a.Models[id]; !exists {
-				a.Models[id] = argv
-				a.SelectModel[id] = true
-			}
+		if err == nil && len(cache.Models) > 0 {
+			apply()
+		} else if cli != "" {
+			// Deferred probes write only to their own account's model map.
+			a.Models = maps.Clone(a.Models)
+			schedule(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				cmd := a.Command(ctx, []string{cli, "debug", "models"})
+				cmd.WaitDelay = time.Second
+				data, err := cmd.Output()
+				if err == nil && json.Unmarshal(data, &cache) == nil {
+					apply()
+				}
+			})
 		}
 	}
 	return a

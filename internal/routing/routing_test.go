@@ -200,7 +200,7 @@ func TestCodexDiscoveryHonorsEmptyAccountHomeOverride(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", ambient)
-	account := discoverAccount("codex", "", "codex-acp", Account{Env: map[string]string{"CODEX_HOME": ""}})
+	account := discoverAccount("codex", "", "codex-acp", Account{Env: map[string]string{"CODEX_HOME": ""}}, func(probe func()) { probe() })
 	if len(account.Models["home-model"]) == 0 || len(account.Models["ambient-model"]) != 0 {
 		t.Fatalf("loaded models from the wrong Codex home: %v", account.Models)
 	}
