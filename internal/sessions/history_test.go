@@ -105,3 +105,28 @@ func TestHistoryContextBudgetAndOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestContextUsesBytesLeftAfterUTF8Clip(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	if _, err := Create(dir, Record{ID: "p", Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveTranscript(dir, "p", []Message{{Role: "tool", Body: ""}, {Role: "tool", Body: "🌺"}, {Role: "tool", Body: strings.Repeat("x", 4093)}}, false); err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := ReadHistory(t.Context(), dir, "p", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveTranscript(dir, "p", []Message{{Role: "tool", Body: "yes"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	page, err := ReadHistoryWithContext(t.Context(), dir, "p", anchor.Reference, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Before) != 2 || page.Before[0].Text != "" || page.Before[0].Truncated || page.Before[1].Text != "" || !page.Before[1].Truncated || len(page.After) != 1 || page.After[0].Text != "yes" {
+		t.Fatalf("before=%+v after=%+v", page.Before, page.After)
+	}
+}

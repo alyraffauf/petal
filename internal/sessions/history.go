@@ -64,7 +64,7 @@ func ReadHistoryWithContext(ctx context.Context, cwd, parent string, reference i
 		reader = tx
 	}
 	// A zero reference opens the latest message in the caller's thread.
-	const query = historyScope + `SELECT m.rowid,m.session_id,m.role,substr(CAST(m.body AS BLOB),?,4097),
+	const query = historyScope + `SELECT m.rowid,m.session_id,m.role,coalesce(substr(CAST(m.body AS BLOB),?,4097), ''),
 		coalesce((SELECT max(rowid) FROM messages WHERE session_id=m.session_id AND rowid<m.rowid),0),
 		coalesce((SELECT min(rowid) FROM messages WHERE session_id=m.session_id AND rowid>m.rowid),0)
 		FROM messages m WHERE m.rowid=coalesce(nullif(?,0),(SELECT max(rowid) FROM messages WHERE session_id=?))
@@ -103,7 +103,7 @@ func ReadHistoryWithContext(ctx context.Context, cwd, parent string, reference i
 			order = "rowid < ? ORDER BY rowid DESC"
 			dest = &passage.Before
 		}
-		rows, err := reader.QueryContext(ctx, `SELECT rowid,role,substr(CAST(body AS BLOB),1,?) FROM messages WHERE session_id=? AND `+order+" LIMIT ?", remaining+1, passage.Session, passage.Reference, count)
+		rows, err := reader.QueryContext(ctx, `SELECT rowid,role,coalesce(substr(CAST(body AS BLOB),1,?), '') FROM messages WHERE session_id=? AND `+order+" LIMIT ?", remaining+1, passage.Session, passage.Reference, count)
 		if err != nil {
 			return passage, err
 		}
@@ -123,9 +123,7 @@ func ReadHistoryWithContext(ctx context.Context, cwd, parent string, reference i
 			}
 			*dest = append(*dest, n)
 			remaining -= len(n.Text)
-			if n.Truncated {
-				remaining = 0
-			}
+
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
