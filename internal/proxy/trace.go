@@ -75,7 +75,7 @@ func traceAdapter(ctx context.Context, w *adapterWire, method string, params Obj
 		w.firstUpdates.Store(session, t)
 	}
 	return func(raw json.RawMessage, err error) {
-		if method == "session/prompt" {
+		if method == "session/prompt" && (!w.nativeV2 || err != nil) {
 			w.firstUpdates.CompareAndDelete(session, t)
 		}
 		fields := []any{"ok", err == nil}
