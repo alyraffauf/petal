@@ -336,49 +336,17 @@ func (r *run) record(kind string, data json.RawMessage) error {
 	return err
 }
 
-// Some adapters expose MCP result blocks only in rawOutput.result.content.
-// Project those blocks without copying call inputs or adapter metadata.
 func (r *run) projectTool(kind string, raw json.RawMessage) {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil {
+	// Skip rawInput and adapter metadata when decoding the journal event.
+	var tool struct {
+		ToolCallID, Name, Title, Status, Content, RawOutput json.RawMessage
+	}
+	if json.Unmarshal(raw, &tool) != nil {
 		return
 	}
-	if kind == "tool_call_content_chunk" {
-		_, _ = r.transcript.Apply(raw)
-		return
-	}
-	if kind == "tool_call" {
-		fields["sessionUpdate"] = json.RawMessage(`"tool_call_update"`)
-	}
-	var content []json.RawMessage
-	_ = json.Unmarshal(fields["content"], &content)
-	if len(content) == 0 {
-		var output struct {
-			Result struct{ Content []json.RawMessage }
-		}
-		var blocks []json.RawMessage
-		if json.Unmarshal(fields["rawOutput"], &output) == nil {
-			blocks = output.Result.Content
-		} else {
-			_ = json.Unmarshal(fields["rawOutput"], &blocks)
-		}
-		for _, block := range blocks {
-			var item struct {
-				Type string
-				Text *string
-			}
-			if json.Unmarshal(block, &item) == nil && item.Type == "text" && item.Text != nil {
-				wrapper, _ := json.Marshal(map[string]any{"type": "content", "content": block})
-				content = append(content, wrapper)
-			}
-		}
-		if len(content) > 0 {
-			fields["content"], _ = json.Marshal(content)
-		}
-	}
-	if r.version == 1 {
-		acpv2.NormalizeV1Tool(fields)
-	}
-	normalized, _ := json.Marshal(fields)
-	_, _ = r.transcript.Apply(normalized)
+	eventKind, _ := json.Marshal(kind)
+	_, _ = r.transcript.ApplyFields(map[string]json.RawMessage{
+		"sessionUpdate": eventKind, "toolCallId": tool.ToolCallID, "name": tool.Name,
+		"title": tool.Title, "status": tool.Status, "content": tool.Content, "rawOutput": tool.RawOutput,
+	}, r.version)
 }

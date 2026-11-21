@@ -93,15 +93,12 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 		case "compaction_update", "compaction_summary_chunk":
 			s.last = ""
 		case "tool_call", "tool_call_update":
-			acpv2.NormalizeV1Tool(u)
-			u["sessionUpdate"] = encoded("tool_call_update")
 			s.last = ""
 		default:
 			return
 		}
 	}
-	raw, _ := json.Marshal(u)
-	changed, _ := s.projection.Apply(raw)
+	changed, _ := s.projection.ApplyFields(u, version)
 	// Manual compaction can complete between turns, with no subsequent
 	// prompt response or idle update to trigger a checkpoint.
 	if changed && !s.replay && (kind == "compaction_update" || kind == "compaction_summary_chunk") {
