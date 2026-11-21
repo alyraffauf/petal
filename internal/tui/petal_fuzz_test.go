@@ -87,7 +87,27 @@ func FuzzPetalBacklog(f *testing.F) {
 				end += newHeight - height
 				height = newHeight
 			case 7:
-				width = 3 + int(op/9)%22
+				newWidth := 3 + int(op/9)%22
+				if pause {
+					start := end - height
+					newStart := 0
+					for j, message := range messages {
+						oldLines := (len(message.Text) + width - 1) / width
+						newLines := (len(message.Text) + newWidth - 1) / newWidth
+						if start < oldLines {
+							newStart += min(start, newLines-1)
+							break
+						}
+						if start == oldLines && j+1 < len(messages) {
+							newStart += newLines
+							break
+						}
+						start -= oldLines + 1
+						newStart += newLines + 1
+					}
+					end = newStart + height
+				}
+				width = newWidth
 			case 8:
 				last := len(messages) - 1
 				if last >= 0 && len(messages[last].Text) < 15 {
