@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -45,8 +46,17 @@ func (p *proxy) modelOption() Object {
 	return Object{"id": encoded("model"), "category": encoded("model"), "name": encoded("Model"), "type": encoded("select"), "currentValue": encoded(p.Model), "options": options}
 }
 
-func editorBindingPath(cwd, id string) (string, error) {
-	return paths.XDG("STATE", fmt.Sprintf("editor-sessions/%x", sha256.Sum256([]byte(filepath.Clean(cwd)+"\x00"+id))))
+func projectKey(cwd string) string {
+	if info, err := os.Stat(cwd); err == nil && info.IsDir() {
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			return fmt.Sprintf("dir:%d:%d", stat.Dev, stat.Ino)
+		}
+	}
+	return filepath.Clean(cwd)
+}
+
+func editorBindingPath(key, id string) (string, error) {
+	return paths.XDG("STATE", fmt.Sprintf("editor-sessions/%x", sha256.Sum256([]byte(key+"\x00"+id))))
 }
 
 func saveEditorBinding(cwd, id, routed string) error {
@@ -141,7 +151,7 @@ func (p *proxy) openEditorSession(ctx context.Context, params Object) (any, erro
 		return nil, acp.NewInvalidParams("cwd must be absolute")
 	}
 	id := "petal-" + rand.Text()
-	s := &editorSession{setup: params, cwd: filepath.Clean(stringField(params, "cwd"))}
+	s := &editorSession{setup: params, cwd: projectKey(stringField(params, "cwd"))}
 	p.editorSessions.sessions.Store(id, s)
 	return map[string]any{"sessionId": id, "configOptions": []Object{p.modelOption()}}, nil
 }
@@ -204,11 +214,23 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	}
 	value, found := e.sessions.Load(id)
 	if !found && strings.HasPrefix(id, "petal-") && (method == "session/load" || method == "session/resume") {
-		path, err := editorBindingPath(stringField(params, "cwd"), id)
+		cwd := filepath.Clean(stringField(params, "cwd"))
+		path, err := editorBindingPath(projectKey(cwd), id)
 		if err != nil {
 			return nil, err
 		}
 		routed, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			legacy, pathErr := editorBindingPath(cwd, id)
+			if pathErr == nil {
+				routed, err = os.ReadFile(legacy)
+				if err == nil {
+					if err = saveEditorBinding(projectKey(cwd), id, string(routed)); err == nil {
+						_ = os.Remove(legacy)
+					}
+				}
+			}
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, unknownSession(id)
 		}
@@ -223,7 +245,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		if err != nil {
 			return nil, err
 		}
-		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: filepath.Clean(stringField(params, "cwd")), routedID: string(routed)})
+		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: projectKey(stringField(params, "cwd")), routedID: string(routed)})
 		found = true
 	}
 	if !found {
@@ -237,7 +259,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		return p.handle(ctx, method, raw)
 	}
 	s := value.(*editorSession)
-	if (method == "session/load" || method == "session/resume") && filepath.Clean(stringField(params, "cwd")) != s.cwd {
+	if (method == "session/load" || method == "session/resume") && projectKey(stringField(params, "cwd")) != s.cwd {
 		return nil, unknownSession(id)
 	}
 	s.mu.Lock()
