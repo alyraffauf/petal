@@ -45,7 +45,7 @@ func TestLocalHybridEvaluation(t *testing.T) {
 	if _, err = db.Exec("INSERT INTO child_bindings(child_id,parent_id) VALUES ('child','p')"); err != nil {
 		t.Fatal(err)
 	}
-	docs := []string{"Retry ERR_SOCKET_901 when connecting.", "The automobile needs a new battery.", "Freeze the leftover soup for dinner tomorrow.", "Rotate the database encryption keys using KEY_ROTATE_712."}
+	docs := []string{"Retry ERR_SOCKET_901 when connecting. See PR #124 and port 5433.", "The automobile needs a new battery.", "Freeze the leftover soup for dinner tomorrow.", "Rotate the database encryption keys using KEY_ROTATE_712."}
 	for i, body := range docs {
 		session := "p"
 		if i == 1 {
@@ -58,14 +58,14 @@ func TestLocalHybridEvaluation(t *testing.T) {
 	if err := SaveTranscript(cwd, "other", []Message{{Role: "tool", Body: "car battery replacement"}}, true); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct{ q, want string }{{"ERR_SOCKET_901", docs[0]}, {"KEY_ROTATE_712", docs[3]}, {"ERR_SOCKET_902", ""}, {"car battery replacement", docs[1]}, {"storing extra soup for another meal", docs[2]}, {"lunar volcanic geology", ""}, {"medieval tapestry weaving", ""}} {
+	for _, c := range []struct{ q, want string }{{"ERR_SOCKET_901", docs[0]}, {"KEY_ROTATE_712", docs[3]}, {"ERR_SOCKET_902", ""}, {"PR #123", ""}, {"port 5432", ""}, {"car battery replacement", docs[1]}, {"storing extra soup for another meal", docs[2]}, {"lunar volcanic geology", ""}, {"medieval tapestry weaving", ""}} {
 		f, err := SearchHistory(t.Context(), cwd, "p", c.q, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		h, err := SearchHybridHistory(t.Context(), cwd, "p", c.q)
 		wantRetrieval := "hybrid"
-		if strings.Contains(c.q, "_") {
+		if strings.Contains(c.q, "_") || c.q == "PR #123" || c.q == "port 5432" {
 			wantRetrieval = "fts"
 		}
 		if err != nil || h.Retrieval != wantRetrieval {
@@ -220,7 +220,7 @@ func tagReply(digit string) *http.Response {
 }
 
 func TestHybridLifecycle(t *testing.T) {
-	for _, scenario := range []string{"replace", "replace during embed", "busy", "offline after mutation", "mutate", "cancel", "initial lock"} {
+	for _, scenario := range []string{"replace", "replace during embed", "busy", "exclusive", "wrong model", "offline after mutation", "mutate", "cancel", "initial lock"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			t.Setenv("PETAL_HISTORY_EMBEDDINGS", "1")
@@ -287,6 +287,9 @@ func TestHybridLifecycle(t *testing.T) {
 				case "cancel":
 					cancel()
 					return nil, context.Canceled
+				case "exclusive":
+					exec("BEGIN EXCLUSIVE")
+					time.AfterFunc(100*time.Millisecond, func() { _, _ = db.Exec("ROLLBACK") })
 				case "busy":
 					exec("BEGIN IMMEDIATE")
 				case "offline after mutation", "mutate":
@@ -310,7 +313,11 @@ func TestHybridLifecycle(t *testing.T) {
 						vec[i][1] = 1
 					}
 				}
-				body, _ := json.Marshal(map[string]any{"embeddings": vec})
+				model := historyModel
+				if scenario == "wrong model" {
+					model = "other:latest"
+				}
+				body, _ := json.Marshal(map[string]any{"model": model, "embeddings": vec})
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body))}, nil
 			})}
 			query := "needle"
@@ -339,7 +346,11 @@ func TestHybridLifecycle(t *testing.T) {
 				if page.Retrieval != "fts" || len(page.Hits) != 0 {
 					t.Fatal(page)
 				}
-			case "busy":
+			case "busy", "exclusive", "wrong model":
+				var cached int
+				if err := db.QueryRow("SELECT count(*) FROM message_embeddings").Scan(&cached); err != nil || cached != 0 {
+					t.Fatal(cached, err)
+				}
 				if page.Retrieval != "fts" || len(page.Hits) != 3 {
 					t.Fatal(page)
 				}

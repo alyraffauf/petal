@@ -16,6 +16,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"time"
 	"unicode/utf8"
 )
@@ -69,9 +70,15 @@ func embedHistory(ctx context.Context, inputs []string) ([][]float32, error) {
 	if res.StatusCode != 200 {
 		return nil, errEmbeddingProvider
 	}
-	var reply struct{ Embeddings [][]float32 }
+	var reply struct {
+		Model      string
+		Embeddings [][]float32
+	}
 	if err = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&reply); err != nil {
 		return nil, err
+	}
+	if reply.Model != historyModel {
+		return nil, errEmbeddingProvider
 	}
 	if len(reply.Embeddings) != len(inputs) {
 		return nil, errors.New("incomplete embeddings")
@@ -172,7 +179,7 @@ func scoreHistory(ctx context.Context, db historyReader, parent, digest string, 
 func HybridHistoryEnabled() bool { return os.Getenv("PETAL_HISTORY_EMBEDDINGS") == "1" }
 
 // Structured identifiers need lexical evidence even when nearby codes embed similarly.
-var historyIdentifier = regexp.MustCompile(`[[:alnum:]]_[[:alnum:]]|[[:alpha:]][[:digit:]]|[[:digit:]][[:alpha:]]|[[:alnum:]]-[[:digit:]]`)
+var historyIdentifier = regexp.MustCompile(`[[:alnum:]]_[[:alnum:]]|[[:alpha:]][[:digit:]]|[[:digit:]][[:alpha:]]|[[:alnum:]]-[[:digit:]]|#[[:digit:]]|\b[[:digit:]]+\b`)
 
 func optionalHistoryVector(ctx context.Context, db *sql.DB, parent, query string) ([]float32, string, error) {
 	select {
@@ -237,6 +244,13 @@ func searchHybridHistory(caller context.Context, cwd, parent, query string, budg
 		}
 	}
 	if err := caller.Err(); err != nil {
+		return page, err
+	}
+	// Optional cache writes yield immediately. Give the authoritative read
+	// the remaining request budget to wait for a concurrent writer.
+	deadline, _ := ctx.Deadline()
+	waitMS := max(int64(0), time.Until(deadline).Milliseconds())
+	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout="+strconv.FormatInt(waitMS, 10)); err != nil {
 		return page, err
 	}
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
