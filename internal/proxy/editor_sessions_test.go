@@ -52,6 +52,29 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 		ids[model] = session["sessionId"]
 		call("session/set_config_option", Object{"configId": encoded("model"), "value": encoded(model), "sessionId": session["sessionId"]})
 	}
+	query := Object{"cwd": encoded(cwd)}
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		page := call("session/list", query)
+		var rows []Object
+		if json.Unmarshal(page["sessions"], &rows) != nil {
+			t.Fatal("invalid session page")
+		}
+		for _, row := range rows {
+			parts := decodeRouteID(stringField(row, "sessionId"), 3)
+			if parts == nil || seen[parts[0]] {
+				t.Fatal("unexpected history row", row)
+			}
+			seen[parts[0]] = true
+		}
+		if page["nextCursor"] == nil {
+			break
+		}
+		query["cursor"] = page["nextCursor"]
+	}
+	if !seen["a"] || !seen["b"] {
+		t.Fatalf("missing account in history: %v", seen)
+	}
 	reopen := launch()
 	for model, account := range map[string]string{"claude/default": "a", "codex/default": "b"} {
 		result := reopen("session/resume", Object{"cwd": encoded(cwd), "sessionId": ids[model], "mcpServers": json.RawMessage("[]")})
