@@ -35,6 +35,7 @@ func (p *picker) cancelChild(n controlNode) tea.Cmd {
 	}
 	p.center.selected = n.id
 	p.center.cancelOutcome = ""
+	p.center.cache.rowsValid = false
 	p.center.cancelling[binding.ChildID] = true
 	delete(p.center.cancelErrors, binding.ChildID)
 	cwd := p.center.cwd
@@ -47,6 +48,7 @@ func (p *picker) cancelChild(n controlNode) tea.Cmd {
 }
 
 func (p *picker) childCancellationFinished(msg childCancellationResult) {
+	p.center.cache.rowsValid = false
 	delete(p.center.cancelling, msg.binding.ChildID)
 	if msg.result != nil {
 		for i, record := range p.saved {
@@ -142,6 +144,9 @@ func (p *picker) refreshChildStatuses(msg childStatusesChanged) tea.Cmd {
 					m.arrivals = make(map[string]time.Time)
 				}
 				m.arrivals[record.ID] = time.Now()
+			}
+			if record.DelegationStatus != status.State || record.UnreadChildResult != status.Unread {
+				p.center.cache.rowsValid = false
 			}
 			record.DelegationStatus = status.State
 			record.UnreadChildResult = status.Unread

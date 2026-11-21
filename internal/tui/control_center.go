@@ -31,7 +31,20 @@ func nodeStatus(n controlNode) string {
 	return ""
 }
 
+type centerCache struct {
+	focus      string
+	links      []graphLink
+	linksValid bool
+	rows       []controlNode
+	rowsValid  bool
+	query      string
+	filter     int
+	savedIndex map[string]int
+	ownership  []graphOwnership
+}
+
 type controlCenter struct {
+	cache         centerCache
 	cwd           string
 	childStatuses *sessions.ChildStatusWatch
 	cancelling    map[string]bool
@@ -61,6 +74,16 @@ type controlNode struct {
 }
 
 func (p *picker) nodes() []controlNode {
+	cache := &p.center.cache
+	query := p.search.Value()
+	if !cache.rowsValid || cache.query != query || cache.filter != p.center.filter {
+		cache.rows = p.buildNodes()
+		cache.query, cache.filter, cache.rowsValid = query, p.center.filter, true
+	}
+	return cache.rows
+}
+
+func (p *picker) buildNodes() []controlNode {
 	var all []controlNode
 	newSession := controlNode{id: "new", title: "new session", kind: "New"}
 	if len(p.models) > 0 && p.center.owner == nil {
@@ -303,6 +326,7 @@ func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
 		if p.center.inspect {
 			p.center.inspect = false
 		} else if n.branch && !p.center.folded[n.id] {
+			p.center.cache.rowsValid = false
 			p.center.folded[n.id] = true
 		} else if n.parent != "" {
 			if j := slices.IndexFunc(rows, func(node controlNode) bool { return node.id == n.parent }); j >= 0 {
@@ -312,6 +336,7 @@ func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
 	case "right":
 		if n.branch {
 			if p.center.folded[n.id] {
+				p.center.cache.rowsValid = false
 				delete(p.center.folded, n.id)
 			} else if i+1 < len(rows) && rows[i+1].parent == n.id {
 				p.selectNode(rows[i+1])
@@ -344,6 +369,7 @@ func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
 			p.search.Reset()
 			p.filter()
 		case "Turns":
+			p.center.cache.rowsValid = false
 			p.center.folded[n.id] = !p.center.folded[n.id]
 		case "Subagent":
 			if m.ask != nil && m.ask.sessionID == n.id {

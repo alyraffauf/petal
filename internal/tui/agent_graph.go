@@ -3,8 +3,6 @@ package tui
 import (
 	"fmt"
 	"image"
-	"petal/internal/sessions"
-	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -36,17 +34,25 @@ func (p *picker) graphName(id string) string {
 			}
 		}
 	}
-	for _, record := range p.saved {
-		if record.ID == id {
-			if record.Title != "" {
-				return petalLabel(record.Title)
-			}
-			return "untitled conversation"
+	p.graphOwnership()
+	if i, ok := p.center.cache.savedIndex[id]; ok {
+		if title := p.saved[i].Title; title != "" {
+			return petalLabel(title)
 		}
+		return "untitled conversation"
 	}
 	return "related session"
 }
 func (p *picker) graphLinks(id string) []graphLink {
+	cache := &p.center.cache
+	if cache.linksValid && cache.focus == id {
+		return cache.links
+	}
+	cache.focus, cache.links, cache.linksValid = id, p.buildGraphLinks(id), true
+	return cache.links
+}
+
+func (p *picker) buildGraphLinks(id string) []graphLink {
 	var links []graphLink
 	seen := map[graphLink]bool{}
 	add := func(edge graphLink) {
@@ -86,10 +92,20 @@ type graphOwnership struct {
 }
 
 func (p *picker) graphOwnership() []graphOwnership {
+	cache := &p.center.cache
+	if cache.savedIndex != nil {
+		return cache.ownership
+	}
+	cache.savedIndex = make(map[string]int, len(p.saved))
+	for i, r := range p.saved {
+		if _, exists := cache.savedIndex[r.ID]; !exists {
+			cache.savedIndex[r.ID] = i
+		}
+	}
 	var edges []graphOwnership
 	bound := make(map[string]bool)
 	for _, record := range p.saved {
-		if record.DelegatedParent != "" && slices.ContainsFunc(p.saved, func(parent sessions.Record) bool { return parent.ID == record.DelegatedParent }) {
+		if _, ok := cache.savedIndex[record.DelegatedParent]; ok && record.DelegatedParent != "" {
 			edges = append(edges, graphOwnership{record.ID, record.DelegatedParent})
 			bound[record.ID] = true
 		}
@@ -101,6 +117,7 @@ func (p *picker) graphOwnership() []graphOwnership {
 			}
 		}
 	}
+	cache.ownership = edges
 	return edges
 }
 
@@ -176,6 +193,7 @@ func (p *picker) revealGraphFocus() {
 	ancestors := map[string]bool{focus: true}
 	for id := parents[focus]; id != "" && !ancestors[id]; id = parents[id] {
 		ancestors[id] = true
+		p.center.cache.rowsValid = false
 		delete(p.center.folded, id)
 	}
 	p.center.graphID = ""
