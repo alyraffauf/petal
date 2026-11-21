@@ -134,3 +134,30 @@ func BenchmarkSessionFrame(b *testing.B) {
 		})
 	}
 }
+
+func TestPlainLogScrollMatchesFullLayout(t *testing.T) {
+	var body strings.Builder
+	for i := range 1050 {
+		fmt.Fprintf(&body, "row %04d  \n", i)
+	}
+	for _, extra := range []string{"", strings.Repeat("word ", 24) + "\n", "wide 界\n", "\n", "```\n# heading\n```text\n"} {
+		source := logFence + body.String() + extra + "```"
+		v := screen{Messages: []entry{{"tool", source}}, backlog: &backlogViewport{}, markdown: &markdownCache{}}
+		for _, width := range []int{40, 13, 10} {
+			want := (&markdownCache{}).renderLines(source, width)
+			for _, top := range []int{len(want) - 11, len(want) - 14, 512, 0, 3, len(want) - 11} {
+				transcript(v, width, 11)
+				v.backlog.move(top - v.backlog.top)
+				rows := transcript(v, width, 11)
+				if len(rows) != 11 {
+					t.Fatalf("got %d rows", len(rows))
+				}
+				for i, row := range rows {
+					if row.Text != want[top+i] {
+						t.Fatalf("width %d row %d: got %q want %q", width, top+i, row.Text, want[top+i])
+					}
+				}
+			}
+		}
+	}
+}

@@ -50,7 +50,7 @@ func transcript(v screen, width, height int) []entry {
 	}
 	// Each message except the last owns the blank row after it.
 	rowsAt := func(i, width int) int {
-		count := len(v.messageLines(i, messageAt(i), width))
+		count := v.layoutMessage(i, messageAt(i), width).rowCount()
 		if i+1 < n {
 			count++
 		}
@@ -96,11 +96,12 @@ func transcript(v screen, width, height int) []entry {
 	visible := make([]entry, 0, min(total, height))
 	skip := b.top
 	for i := b.first; i < n && len(visible) < height; i++ {
-		lines := v.messageLines(i, messageAt(i), width)
-		if skip >= len(lines) {
-			skip -= len(lines)
+		layout := v.layoutMessage(i, messageAt(i), width)
+		count := layout.rowCount()
+		if skip >= count {
+			skip -= count
 		} else {
-			for _, line := range lines[skip:min(len(lines), skip+height-len(visible))] {
+			for _, line := range v.layoutRows(layout, skip, min(count, skip+height-len(visible))) {
 				visible = append(visible, entry{messageAt(i).Role, line})
 			}
 			skip = 0
