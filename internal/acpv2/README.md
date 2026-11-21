@@ -7,8 +7,10 @@ Pass the `update` object from each `session/update` notification to
 position within the transcript, even if its content is empty. An ID can be
 shared across message types and tool calls.
 
-Message chunks append text without a separator. Tool content items are
-separated by blank lines. An upsert with a content array replaces the
+Message chunks append text without a separator. Adjacent ACP v2 text items in a tool call also concatenate. Other tool blocks
+are separated by blank lines. A tool call with no display content field can
+use MCP text from raw output. An explicit display field takes precedence,
+including when the adapter clears it. An upsert with a content array replaces the
 accumulated content. Both `null` and `[]` clear it, and omission preserves it.
 A tool label uses the title, name, or ID in that order. Its default status
 is `pending`. The projection includes text resources, link labels and URIs,

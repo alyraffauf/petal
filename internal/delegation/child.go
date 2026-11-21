@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,7 @@ type run struct {
 	endPermissions context.CancelFunc
 	reply          strings.Builder
 	replyID        string
-	replies        []sessions.Message
+	replyCount     int
 	transcript     acpv2.Transcript
 	permissions    int
 	busy           bool
@@ -97,11 +98,8 @@ func (r *run) execute(conn Connection, task string, closeTransport context.Cance
 	}
 
 	messages := []sessions.Message{{Role: "user", Body: task}}
+	r.finishReply()
 	messages = append(messages, sessions.ProjectTranscript(&r.transcript, r.version == 2)...)
-	if r.version != 2 {
-		r.finishReply()
-		messages = append(messages, r.replies...)
-	}
 	answer := ""
 	for _, message := range messages[1:] {
 		if message.Role == "assistant" {
@@ -253,7 +251,9 @@ func cancelledPermission() json.RawMessage {
 
 func (r *run) finishReply() {
 	if r.reply.Len() != 0 {
-		r.replies = append(r.replies, sessions.Message{Role: "assistant", Body: r.reply.String()})
+		r.replyCount++
+		update, _ := json.Marshal(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": strconv.Itoa(r.replyCount), "content": map[string]string{"type": "text", "text": r.reply.String()}})
+		_, _ = r.transcript.Apply(update)
 		r.reply.Reset()
 	}
 	r.replyID = ""
@@ -305,6 +305,7 @@ func (r *run) update(raw json.RawMessage) error {
 			}
 			return nil
 		}
+		r.projectTool(update.Kind, raw)
 		return r.record(update.Kind, raw)
 	case "state_update":
 		if r.version != 2 {
@@ -333,4 +334,19 @@ func (r *run) record(kind string, data json.RawMessage) error {
 		r.cancel()
 	}
 	return err
+}
+
+func (r *run) projectTool(kind string, raw json.RawMessage) {
+	// Skip rawInput and adapter metadata when decoding the journal event.
+	var tool struct {
+		ToolCallID, Name, Title, Status, Content, RawOutput json.RawMessage
+	}
+	if json.Unmarshal(raw, &tool) != nil {
+		return
+	}
+	eventKind, _ := json.Marshal(kind)
+	_, _ = r.transcript.ApplyFields(map[string]json.RawMessage{
+		"sessionUpdate": eventKind, "toolCallId": tool.ToolCallID, "name": tool.Name,
+		"title": tool.Title, "status": tool.Status, "content": tool.Content, "rawOutput": tool.RawOutput,
+	}, r.version)
 }

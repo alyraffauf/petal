@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -eu
+umask 077
+case ${1:-} in
+  claude) child=codex ;;
+  codex) child=claude ;;
+  *) echo 'usage: scripts/check-receipt {claude|codex}' >&2; exit 2 ;;
+esac
+cd "$(dirname "$0")/.."
+export CODEX_ACP=${CODEX_ACP:-$(command -v codex-acp)}
+export CLAUDE_ACP=${CLAUDE_ACP:-$(command -v claude-agent-acp)}
+test -x "$CODEX_ACP" && test -x "$CLAUDE_ACP" || { echo 'Set CODEX_ACP and CLAUDE_ACP to executable paths.' >&2; exit 2; }
+TRIAL_ROOT=$(mktemp -d)
+export TRIAL_ROOT
+trap 'rm -rf -- "$TRIAL_ROOT"' EXIT
+CGO_ENABLED=0 go build -o "$TRIAL_ROOT/petal" .
+python3 -B scripts/receipt/supervise.py python3 -B scripts/receipt/accept.py "$1" "$child"
