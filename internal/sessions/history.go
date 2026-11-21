@@ -70,6 +70,7 @@ type HistoryMatch struct {
 }
 
 type HistoryMatches struct {
+	Retrieval  string         `json:"retrieval,omitempty"`
 	Hits       []HistoryMatch `json:"hits"`
 	NextBefore int64          `json:"next_before,omitempty"`
 }

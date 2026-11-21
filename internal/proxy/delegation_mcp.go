@@ -461,7 +461,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 }
 
 const delegationToolList = `{"tools":[
-{"name":"petal_search_history","description":"Search archived messages in your session and its delegated descendants by keyword. Quote adjacent words for a phrase. Open a hit with petal_read_transcript using its reference. Matches are newest first. Pass next_before as before for older matches.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512},"before":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}},
+{"name":"petal_search_history","description":"Search archived messages in your session and its delegated descendants by keyword. Quote adjacent words for a phrase. Open a hit with petal_read_transcript using its reference. Matches are newest first. Pass next_before as before for older matches. Optional hybrid mode mixes keyword and local semantic results without pagination.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512},"mode":{"type":"string","enum":["fts","hybrid"]},"before":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}},
 {"name":"petal_read_transcript","description":"Recover a saved message after compaction. With no arguments, open your latest saved message. Pass previous or next as reference to move between messages. For long text, reuse reference with next_offset as offset.","inputSchema":{"type":"object","properties":{"reference":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}},
 {"name":"petal_capabilities","description":"Discover configured child models before delegating. Search by model ID, label or provider if a target is missing. IDs respect the current account pin. Quota is checked at routing time when needed.","inputSchema":{"type":"object","properties":{"search":{"type":"string"}},"additionalProperties":false}},
 {"name":"petal_delegate","description":"Use a model ID from petal_capabilities. Start an independent child in your working directory. Its only prompt is task, so include context, edit scope and expected output. Keep childId and follow next.","inputSchema":{"type":"object","properties":{"model":{"type":"string","minLength":1},"task":{"type":"string","minLength":1}},"required":["model","task"],"additionalProperties":false}},
@@ -516,11 +516,19 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 	switch name {
 	case "petal_search_history":
 		var args struct {
+			Mode   string
 			Query  string
 			Before int64
 		}
 		if err := decode(&args); err != nil {
 			return nil, "", err
+		}
+		if args.Mode == "hybrid" && args.Before == 0 {
+			value, err := sessions.SearchHybridHistory(ctx, endpoint.cwd, endpoint.parent, args.Query)
+			return value, "", err
+		}
+		if args.Mode != "" && args.Mode != "fts" {
+			return nil, "", errors.New("invalid search mode or hybrid cursor")
 		}
 		value, err := sessions.SearchHistory(ctx, endpoint.cwd, endpoint.parent, args.Query, args.Before)
 		return value, "", err

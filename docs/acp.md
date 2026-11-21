@@ -56,3 +56,36 @@ CGO_ENABLED=0 go test ./internal/acphost -run '^$' -bench BenchmarkTerminalOutpu
 ```
 
 Opening a 20-row viewport on 4,000 Markdown messages fell from about 143 ms to 0.27 ms on the test machine. A warm 100×30 TUI frame took 0.60–0.72 ms with 4,000 messages. For a 16,384-line plain-text fence, tokenizing the log as a single span reduced first layout from 114 ms and 208 MB to 76–93 ms and about 37 MB. Resizing while scrolled back can also reflow earlier messages. These figures exclude provider replay and terminal painting.
+
+### Local semantic history search
+
+Start Ollama on 127.0.0.1:11434, run `ollama pull all-minilm`, and start
+Petal with `PETAL_HISTORY_EMBEDDINGS=1`. Call `petal_search_history` with
+`{"query":"car battery replacement","mode":"hybrid"}`. Open a hit with
+`petal_read_transcript` using its original reference. Omitting mode keeps
+keyword search and its newest-first cursor. Hybrid returns one page of up to
+ten hits. It alternates keyword and semantic hits, starting with keyword,
+and removes duplicates. A busy or unavailable provider yields keyword hits
+with `retrieval: "fts"`.
+
+Only hybrid calls send text to the local Ollama service. Petal ignores HTTP
+proxies and redirects for this request. Each call embeds the query and up to
+eight missing message prefixes (1,024 characters each) from the newest 256
+messages in the authenticated session and its delegated descendants. Repeated
+searches fill that window. Older text remains searchable by keyword. Ollama
+can truncate input to the model context. Petal allows one embedding request
+per process at a time and gives semantic retrieval ten seconds.
+
+The project archive stores 1,536 bytes of vector data per indexed message
+plus SQLite overhead. Editing or deleting the message invalidates its vector.
+Older vectors outside the window remain on disk until deletion. If replacing
+the local all-minilm model weights, clear `message_embeddings` in each
+project archive before resuming hybrid search.
+
+With Ollama running, reproduce the fixture using
+`PETAL_EVAL_EMBEDDINGS=1 go test -count=1 -v ./internal/sessions -run TestLocalHybridEvaluation`.
+On all-minilm model ID `1b226e2802db`, both modes ranked both exact identifiers
+first. Hybrid ranked both paraphrases first, while FTS found neither. Both
+returned zero hits for two unrelated queries. This small fixture exercises
+scope, reference reads, invalidation and offline fallback. Its cosine cutoff
+of 0.4 has not been evaluated on a representative production corpus.
