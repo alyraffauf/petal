@@ -196,6 +196,9 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		return p.handle(ctx, method, raw)
 	}
 	id := stringField(params, "sessionId")
+	if method == "session/list" {
+		return p.editorHistory(ctx, params)
+	}
 	if method == "session/options" && id == "" {
 		return map[string]any{"configOptions": []Object{p.modelOption()}}, nil
 	}
