@@ -251,7 +251,72 @@ func TestV1ChildReplyBoundaries(t *testing.T) {
 		}
 	}
 	r.finishReply()
-	if len(r.replies) != 3 || r.replies[0].Body != "Checking." || r.replies[1].Body != "receipt" || r.replies[2].Body != "Done." {
-		t.Fatal(r.replies)
+	replies := sessions.ProjectTranscript(&r.transcript, false)
+	if len(replies) != 3 || replies[0].Body != "Checking." || replies[1].Body != "receipt" || replies[2].Body != "Done." {
+		t.Fatal(replies)
+	}
+}
+
+func TestDelegatedToolResultIsSearchable(t *testing.T) {
+	const block = `{"type":"text","text":"fixtureReceipt"}`
+	const wrapped = `{"type":"content","content":` + block + `}`
+	for _, version := range []uint16{1, 2} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			cwd := testProject(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			binding := sessions.ChildBinding{ParentID: "parent", ChildID: "child"}
+			release, err := sessions.StartChild(ctx, cwd, binding, sessions.Record{ID: "child"}, "task")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			child := run{ctx: ctx, cancel: cancel, binding: binding, cwd: cwd, version: version}
+			adapter := &echoAdapter{done: make(chan struct{}), prompt: func(_ context.Context, _ string) (json.RawMessage, error) {
+				updates := []string{`{"sessionUpdate":"agent_message_chunk","messageId":"a","content":{"type":"text","text":"Checking"}}`}
+				if version == 1 {
+					updates = append(updates, `{"sessionUpdate":"tool_call","toolCallId":"tool","rawInput":{"text":"privateInput"}}`, `{"sessionUpdate":"tool_call_update","toolCallId":"tool","status":"completed","rawOutput":{"result":{"content":[`+block+`]},"error":null}}`)
+				} else {
+					updates = append(updates, `{"sessionUpdate":"tool_call_update","toolCallId":"tool","rawInput":{"text":"privateInput"}}`, `{"sessionUpdate":"tool_call_content_chunk","toolCallId":"tool","content":`+wrapped+`}`, `{"sessionUpdate":"tool_call_update","toolCallId":"tool","status":"completed","content":[`+wrapped+`],"rawOutput":[`+block+`]}`)
+				}
+				updates = append(updates, `{"sessionUpdate":"agent_message_chunk","messageId":"b","content":{"type":"text","text":"Done"}}`)
+				for _, u := range updates {
+					if err := child.update(json.RawMessage(u)); err != nil {
+						return nil, err
+					}
+				}
+				if version == 2 {
+					err := child.update(json.RawMessage(`{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn"}`))
+					return json.RawMessage(`{"messageId":"task"}`), err
+				}
+				return json.RawMessage(`{"stopReason":"end_turn"}`), nil
+			}}
+			if res := child.execute(adapter, "task", func() {}); res.Status != "completed" {
+				t.Fatal(res)
+			}
+			rows, err := sessions.Transcript(cwd, "child")
+			if err != nil || len(rows) != 4 || rows[0].Body != "task" || rows[1].Body != "Checking" || rows[2].Role != "tool" || rows[3].Body != "Done" {
+				t.Fatalf("history = %+v, %v", rows, err)
+			}
+			hits, err := sessions.SearchHistory(t.Context(), cwd, "parent", "fixtureReceipt", 0)
+			if err != nil || len(hits.Hits) != 1 {
+				t.Fatal(hits, err)
+			}
+			ref := hits.Hits[0].Reference
+			passage, err := sessions.ReadHistory(t.Context(), cwd, "parent", ref, 0)
+			if err != nil || passage.Role != "tool" || strings.Count(passage.Text, "fixtureReceipt") != 1 || strings.Contains(passage.Text, "privateInput") {
+				t.Fatal(passage, err)
+			}
+			if _, err := sessions.ReadHistory(t.Context(), cwd, "other-parent", ref, 0); err == nil {
+				t.Fatal("foreign parent read child result")
+			}
+			if err := sessions.Forget(cwd, "", "child"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := sessions.ReadHistory(t.Context(), cwd, "parent", ref, 0); err == nil {
+				t.Fatal("deleted child result remains readable")
+			}
+
+		})
 	}
 }

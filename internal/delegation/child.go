@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,7 @@ type run struct {
 	endPermissions context.CancelFunc
 	reply          strings.Builder
 	replyID        string
-	replies        []sessions.Message
+	replyCount     int
 	transcript     acpv2.Transcript
 	permissions    int
 	busy           bool
@@ -97,11 +98,8 @@ func (r *run) execute(conn Connection, task string, closeTransport context.Cance
 	}
 
 	messages := []sessions.Message{{Role: "user", Body: task}}
+	r.finishReply()
 	messages = append(messages, sessions.ProjectTranscript(&r.transcript, r.version == 2)...)
-	if r.version != 2 {
-		r.finishReply()
-		messages = append(messages, r.replies...)
-	}
 	answer := ""
 	for _, message := range messages[1:] {
 		if message.Role == "assistant" {
@@ -253,7 +251,9 @@ func cancelledPermission() json.RawMessage {
 
 func (r *run) finishReply() {
 	if r.reply.Len() != 0 {
-		r.replies = append(r.replies, sessions.Message{Role: "assistant", Body: r.reply.String()})
+		r.replyCount++
+		update, _ := json.Marshal(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": strconv.Itoa(r.replyCount), "content": map[string]string{"type": "text", "text": r.reply.String()}})
+		_, _ = r.transcript.Apply(update)
 		r.reply.Reset()
 	}
 	r.replyID = ""
@@ -305,6 +305,7 @@ func (r *run) update(raw json.RawMessage) error {
 			}
 			return nil
 		}
+		r.projectTool(update.Kind, raw)
 		return r.record(update.Kind, raw)
 	case "state_update":
 		if r.version != 2 {
@@ -333,4 +334,48 @@ func (r *run) record(kind string, data json.RawMessage) error {
 		r.cancel()
 	}
 	return err
+}
+
+// Some adapters expose MCP result blocks only in rawOutput.result.content.
+// Project those blocks without copying call inputs or adapter metadata.
+func (r *run) projectTool(kind string, raw json.RawMessage) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return
+	}
+	if kind == "tool_call_content_chunk" {
+		_, _ = r.transcript.Apply(raw)
+		return
+	}
+	if kind == "tool_call" {
+		fields["sessionUpdate"] = json.RawMessage(`"tool_call_update"`)
+	}
+	var content []json.RawMessage
+	_ = json.Unmarshal(fields["content"], &content)
+	if len(content) == 0 {
+		var output struct {
+			Result struct{ Content []json.RawMessage }
+		}
+		var blocks []json.RawMessage
+		if json.Unmarshal(fields["rawOutput"], &output) == nil {
+			blocks = output.Result.Content
+		} else {
+			_ = json.Unmarshal(fields["rawOutput"], &blocks)
+		}
+		for _, block := range blocks {
+			var item struct {
+				Type string
+				Text *string
+			}
+			if json.Unmarshal(block, &item) == nil && item.Type == "text" && item.Text != nil {
+				wrapper, _ := json.Marshal(map[string]any{"type": "content", "content": block})
+				content = append(content, wrapper)
+			}
+		}
+		if len(content) > 0 {
+			fields["content"], _ = json.Marshal(content)
+		}
+	}
+	normalized, _ := json.Marshal(fields)
+	_, _ = r.transcript.Apply(normalized)
 }
