@@ -48,3 +48,18 @@ A child starts with an empty session MCP server list, including when Petal or th
 Petal stores bindings, ordered activity, and final results in the project's local session database. A parent can read committed activity and results after reconnecting to the same stored session. Child execution depends on the live runtime. After an abrupt process exit, the next journal read detects the released process lock and records a failed result.
 
 Control Center shows saved delegation links in the thread tree and agent graph. Forgetting either endpoint removes its binding and journal from the local database.
+
+## Live cross-family receipt check
+
+Run one direction at a time from a checkout on Linux. The argument selects the parent. Each run uses both local subscriptions and can consume quota.
+
+```sh
+scripts/check-receipt claude
+scripts/check-receipt codex
+```
+
+Install Go, Python 3.11 or later, and the stock Claude and Codex ACP adapters. If the adapter executables are outside PATH, set `CLAUDE_ACP` and `CODEX_ACP` to their absolute paths. The runner copies `~/.claude/.credentials.json` and `~/.codex/auth.json` into disposable account homes. It builds the current checkout, limits the live phase to four minutes and removes the temporary directory on exit.
+
+Only the child receives the authenticated receipt tool. Its final answer should acknowledge completion without quoting the receipt. The journal may persist the receipt. The check fails if the terminal result exposes it or the parent receives it before archive retrieval. The runner asks the parent to delegate, compacts the parent, restarts Petal, then asks for the child's original receipt and archive reference. It checks the answer against the fixture and correlates archived child text with actual search and read responses. A separate prompt probes a known reference in an unrelated session seeded in the same project database.
+
+The final JSON reports individual observations. A missing completed compaction, receipt visible in the captured parent context or replay, missing retrieval evidence, or inconclusive decoy denial fails the check. Codex ACP v1 uses the parent account's native compacted record as evidence. The check can observe local adapter records and protocol traffic. It cannot inspect provider-side model state.
