@@ -418,7 +418,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 			response.Result = map[string]any{
 				"protocolVersion": params.ProtocolVersion,
 				"capabilities":    map[string]any{"tools": struct{}{}},
-				"instructions":    "Call petal_capabilities before choosing a child model. Use its exact model ID. Give the child a self-contained task with the context, file scope and output you need. The child shares your working directory and starts with fresh conversation history. Keep childId. Finish your turn when you have no independent work. Petal wakes the connected parent for unread child results. Follow next on each response.",
+				"instructions":    "Call petal_capabilities before choosing a child model. Use its exact model ID. Give the child a self-contained task with the context, file scope and output you need. The child shares your working directory and starts with fresh conversation history. Keep childId. Finish your turn when you have no independent work. Petal wakes the connected parent for unread child results. Follow next on each response. To recover earlier context, use petal_search_history and open a matching reference with petal_read_transcript.",
 				"serverInfo":      map[string]string{"name": delegationServerName, "version": "1.0.0"},
 			}
 		case req.Method == "ping":
@@ -464,6 +464,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 }
 
 const delegationToolList = `{"tools":[
+{"name":"petal_search_history","description":"Search archived messages in your session and its delegated descendants by keyword. Quote adjacent words for a phrase. Open a hit with petal_read_transcript using its reference. Pass next_offset as offset for more matches.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512},"offset":{"type":"integer","minimum":0}},"required":["query"],"additionalProperties":false}},
 {"name":"petal_read_transcript","description":"Recover a saved message after compaction. With no arguments, open your latest saved message. Pass previous or next as reference to move between messages. For long text, reuse reference with next_offset as offset.","inputSchema":{"type":"object","properties":{"reference":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}},
 {"name":"petal_capabilities","description":"Discover configured child models before delegating. Search by model ID, label or provider if a target is missing. IDs respect the current account pin. Quota is checked at routing time when needed.","inputSchema":{"type":"object","properties":{"search":{"type":"string"}},"additionalProperties":false}},
 {"name":"petal_delegate","description":"Use a model ID from petal_capabilities. Start an independent child in your working directory. Its only prompt is task, so include context, edit scope and expected output. Keep childId and follow next.","inputSchema":{"type":"object","properties":{"model":{"type":"string","minLength":1},"task":{"type":"string","minLength":1}},"required":["model","task"],"additionalProperties":false}},
@@ -516,6 +517,16 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 		return decoder.Decode(dest)
 	}
 	switch name {
+	case "petal_search_history":
+		var args struct {
+			Query  string
+			Offset int
+		}
+		if err := decode(&args); err != nil {
+			return nil, "", err
+		}
+		value, err := sessions.SearchHistory(ctx, endpoint.cwd, endpoint.parent, args.Query, args.Offset)
+		return value, "", err
 	case "petal_read_transcript":
 		var args struct {
 			Reference int64
