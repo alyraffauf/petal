@@ -7,7 +7,7 @@ Petal is a meta-harness that implements both the client and server sides of the 
 
 Pick a model and Petal [chooses an account](docs/configuration.md#how-quota-windows-affect-routing) based on remaining quota and subscription size. You can also pick the account yourself. Resuming a conversation keeps it on the same account.
 
-![Petal control center showing a thread, its subagents, and the selected subagent's activity](docs/screenshots/control-center.png)
+![A delegated thread finishes in the control center. Its row lights up and shows an unread result while its sibling keeps running.](docs/screenshots/result-arrival.gif)
 
 Petal is not a harness. Models run in their native, first-party harnesses and are controlled via standard, supported APIs, so there's no ToS violation for using it.
 
@@ -25,7 +25,7 @@ To build without Nix, run `go build -o petal .` with Go 1.27.3 or later. Install
 
 ## Use Petal
 
-![Example Petal session showing a tool call and a Markdown table comparing two subscriptions](docs/screenshots/transcript.png)
+![An agent replies with a syntax-highlighted Go function in the Petal chat transcript.](docs/screenshots/go-syntax-chat.gif)
 
 - [Navigate conversations, search transcripts, and send images](docs/terminal.md)
 - [Connect Zed or another ACP client](docs/editors.md)
