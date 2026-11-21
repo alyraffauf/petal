@@ -79,6 +79,12 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 	if !seen["a"] || !seen["b"] {
 		t.Fatalf("missing account in history: %v", seen)
 	}
+	moved := cwd + "-moved"
+	if err := os.Rename(cwd, moved); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(moved) })
+	cwd = moved
 	reopen := launch()
 	for model, account := range map[string]string{"claude/default": "a", "codex/default": "b"} {
 		result := reopen("session/resume", Object{"cwd": encoded(cwd), "sessionId": ids[model], "mcpServers": json.RawMessage("[]")})
