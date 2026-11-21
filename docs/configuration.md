@@ -170,3 +170,11 @@ Enable the integration to use the same stdio and HTTP servers in Petal and other
 ```
 
 Petal imports enabled stdio and HTTP servers. For an HTTP header, `"{env:VARIABLE}"` reads the entire value from Petal’s environment. An entry in `programs.petal.settings.mcp_servers` overrides a shared server with the same name. Home Manager reads file-backed environment variables when the adapter starts the server. With mutable settings, activation replaces the MCP server list with the declared entries while the integration is enabled.
+
+### Diagnose slow ACP requests
+
+Set `PETAL_ACP_TRACE` to an absolute file path in the ACP server's environment and restart the connection. Petal appends JSON lines to the file. Its parent directory must exist. Unset the variable and restart to stop tracing.
+
+Filter by `request` to follow a prompt or configuration change. Each record includes a timestamp and elapsed microseconds. Compare `adapter_response_received` with `editor_response_write` to see how long Petal held a reply. A successful write means the editor transport accepted the bytes. On ACP v2 the prompt reply acknowledges insertion. Match `adapter_session` with a later `adapter_idle` event to see when the adapter reported idle.
+
+The trace records model and effort selections, including the adapter's acknowledged value when supplied. It omits message bodies, tool arguments, and raw session IDs. The file grows until tracing is disabled.

@@ -303,11 +303,18 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
+	doneTrace := traceAdapter(ctx, b.wire, method, params)
 	result, err := forward[json.RawMessage](b.conn, ctx, method, params)
+	doneTrace(result, err)
 	if promptEndpoint != nil && err == nil {
 		result = promptEndpoint.continueV1(wakeCtx, b, native, result)
+		t, _ := ctx.Value(traceKey{}).(*requestTrace)
+		t.event("child_wait_returned")
 	}
+	t, _ := ctx.Value(traceKey{}).(*requestTrace)
+	t.event("transcript_finish_started")
 	err = finishTranscript(err)
+	t.event("transcript_finish_returned", "ok", err == nil)
 	if err != nil {
 		var re *acp.RequestError
 		if public != "" && errors.As(err, &re) && re.Code == -32002 {
@@ -453,6 +460,9 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	b := &backend{close: stop, exited: exited}
 	wire := &adapterWire{Writer: in, lifetime: lifetime, updates: make(chan struct{}, 128), nativeV2: version == 2}
 	reader := incoming(out, wire)
+	if p.editorWire != nil && p.editorWire.traceLog != nil {
+		reader.traceUpdates = p.editorWire.traceLog
+	}
 	if receive == nil && p.recorder != nil {
 		reader.observeUpdate = func(raw json.RawMessage) {
 			var args Object
@@ -661,6 +671,7 @@ func ConnectEmbedded(ctx context.Context, c routing.Config, out io.Writer, in io
 func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Reader, embedded bool, updates chan struct{}) *acp.Connection {
 	lifetime, stop := context.WithCancel(lifetime)
 	editorWire := &adapterWire{Writer: out, lifetime: lifetime}
+	enableTrace(lifetime, editorWire)
 	p := proxy{editorWire: editorWire, editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
 	if !embedded {
 		p.recorder = &transcriptRecorder{}
@@ -689,6 +700,7 @@ func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Re
 	p.editor = acp.NewConnection(func(ctx context.Context, method string, params json.RawMessage) (any, *acp.RequestError) {
 		<-ready
 		method, id := untag(method)
+		ctx = editorWire.traceRequest(ctx, method, id, params)
 		if id != nil {
 			ctx = context.WithValue(ctx, editorRequestID{}, id)
 		}
