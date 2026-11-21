@@ -1,3 +1,5 @@
+import atexit
+import hashlib
 import json
 import os
 import pathlib
@@ -9,7 +11,16 @@ import subprocess
 import sys
 import time
 
-from evidence import check_retrieval, check_denial
+from client import Client
+from evidence import (
+    check_denial,
+    check_retrieval,
+    contains,
+    echo_sources,
+    journal_updates,
+    native_compacted,
+    verify_archive_rows,
+)
 from httpfixture import server, token
 
 root = pathlib.Path(os.environ["TRIAL_ROOT"])
@@ -33,6 +44,41 @@ env.update(
     XDG_DATA_HOME=str(base / "data"),
 )
 adapters = {k: os.environ[k.upper() + "_ACP"] for k in ("claude", "codex")}
+for provider, adapter in adapters.items():
+    path = pathlib.Path(adapter).resolve()
+    version = subprocess.check_output(
+        [path, "--version"], text=True, timeout=10
+    ).strip()
+    print(
+        provider,
+        path,
+        version,
+        hashlib.sha256(path.read_bytes()).hexdigest(),
+        flush=True,
+    )
+
+
+@atexit.register
+def report_models():
+    for role, provider in (("parent", parent), ("child", child)):
+        models = set()
+        for path in (base / (role + "-" + provider)).rglob("*.jsonl"):
+            for line in path.read_bytes().splitlines():
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("type") == "turn_context":
+                    model = record.get("payload", {}).get("model")
+                elif record.get("type") == "assistant":
+                    model = record.get("message", {}).get("model")
+                else:
+                    continue
+                if model:
+                    models.add(model)
+        print(role, "resolved models", sorted(models), flush=True)
+
+
 cfg = base / "petal.toml"
 lines = ["acp_v2 = true", "delegation = true"]
 for role, provider in [("parent", parent), ("child", child)]:
@@ -79,7 +125,7 @@ sid = None
 
 def wait_for_child(
     base: pathlib.Path, label: str
-) -> tuple[str, pathlib.Path, str, tuple[int, str] | None, bool]:
+) -> tuple[str, pathlib.Path, str, tuple[int, str, str] | None, bool, bool]:
     receipts = root / "receipts"
     for _ in range(90):
         database = next(base.glob("state/**/index.sqlite"), None)
@@ -91,38 +137,56 @@ def wait_for_child(
                     bound = db.execute(
                         """
                         SELECT b.child_id, b.result_data FROM child_bindings b
+                        JOIN sessions s ON s.id=b.child_id
                         JOIN messages task ON task.session_id=b.child_id
-                        WHERE b.result_status IS NOT NULL AND task.role='user'
+                        WHERE b.result_status='completed' AND b.parent_id=? AND s.account='child' AND s.model=? AND task.role='user'
                         AND instr(task.body,?)>0 LIMIT 1
                         """,
-                        (label,),
+                        (sid, child + "/echo", label),
                     ).fetchone()
                     if not bound:
                         continue
                     session, terminal = bound
-                    source = db.execute(
-                        """
-                        SELECT rowid, body FROM messages
-                        WHERE session_id=? AND role IN ('tool','assistant')
-                        AND instr(body,?)>0 ORDER BY rowid LIMIT 1
-                        """,
-                        (session, receipt),
-                    ).fetchone()
-                    activities = db.execute(
-                        "SELECT data FROM child_activities WHERE child_id=?",
-                        (session,),
+                    activities = journal_updates(
+                        db.execute(
+                            "SELECT data FROM child_activities WHERE child_id=? ORDER BY sequence",
+                            (session,),
+                        )
+                    )
+                    keys = echo_sources(activities, receipt)
+                    source = next(
+                        (
+                            row
+                            for row in db.execute(
+                                "SELECT rowid, body, source_id FROM messages WHERE session_id=? AND role='tool' AND instr(body,?)>0 ORDER BY rowid",
+                                (session, receipt),
+                            )
+                            if row[2] in keys
+                        ),
+                        None,
                     )
                     suffix = receipt.removeprefix(label).strip()
-                    journal_exposed = any(suffix in json.dumps(json.loads(data))
-                                          for (data,) in activities)
+                    journal_exposed = contains(activities, suffix)
                     result = json.loads(terminal or "{}")
-                    final_exposed = suffix in json.dumps(result)
-                    print(json.dumps({
-                        "receipt_in_archive": bool(source),
-                        "receipt_in_activity": journal_exposed,
-                        "receipt_in_terminal_result": final_exposed,
-                    }), flush=True)
-                    return receipt, database, session, source, journal_exposed or final_exposed
+                    final_exposed = contains([result], suffix)
+                    print(
+                        json.dumps(
+                            {
+                                "receipt_in_archive": bool(source),
+                                "receipt_in_activity": journal_exposed,
+                                "receipt_in_terminal_result": final_exposed,
+                            }
+                        ),
+                        flush=True,
+                    )
+                    return (
+                        receipt,
+                        database,
+                        session,
+                        source,
+                        journal_exposed,
+                        final_exposed,
+                    )
         time.sleep(1)
     raise RuntimeError("child did not archive an issued receipt before deadline")
 
@@ -157,75 +221,10 @@ for phase in ("new", "reopen"):
             start_new_session=False,
             cwd=work,
         )
-        updates = []
-
-        def send(q):
-            q = dict(jsonrpc="2.0", **q)
-            print(json.dumps(["send", q]), file=log, flush=True)
-            p.stdin.write(json.dumps(q) + "\n")
-            p.stdin.flush()
-
-        def call(i, m, params):
-            send({"id": i, "method": m, "params": params})
-
-        def receive(i, stop=False):
-            response = None
-            done = False
-            for line in p.stdout:
-                q = json.loads(line)
-                print(json.dumps(["recv", q]), file=log, flush=True)
-                if "id" in q and "method" in q:
-                    a = q.get("params", {})
-                    if q["method"] == "session/request_permission":
-                        subject = a.get("subject", a)
-                        name = subject.get("toolCall", {}).get("name", "")
-                        allow = (
-                            name.startswith("mcp__petal-delegation__petal_")
-                            or name == "mcp__petal_echo__echo"
-                        )
-                        opt = next(
-                            (
-                                o
-                                for o in a.get("options", [])
-                                if o["kind"]
-                                == ("allow_once" if allow else "reject_once")
-                            ),
-                            None,
-                        )
-                        result = {
-                            "outcome": {
-                                "outcome": "selected",
-                                "optionId": opt["optionId"],
-                            }
-                            if opt
-                            else {"outcome": "cancelled"}
-                        }
-                        send({"id": q["id"], "result": result})
-                    else:
-                        send(
-                            {
-                                "id": q["id"],
-                                "error": {
-                                    "code": -32601,
-                                    "message": "unsupported editor request",
-                                },
-                            }
-                        )
-                elif q.get("method") == "session/update":
-                    u = q["params"]["update"]
-                    updates.append(u)
-                    if u.get("state") == "idle" and u.get("stopReason"):
-                        done = True
-                elif q.get("id") == i:
-                    if "error" in q:
-                        raise RuntimeError("ACP request rejected")
-                    response = q["result"]
-                if response is not None and (not stop or done):
-                    return response
-            raise RuntimeError("ACP stream ended before turn completion")
-
+        client = Client(p, log)
+        call = client.request
         try:
-            call(
+            init, _ = call(
                 1,
                 "initialize",
                 {
@@ -234,31 +233,44 @@ for phase in ("new", "reopen"):
                     "info": {"name": "delegation-live-test", "version": "1"},
                 },
             )
-            v = receive(1)["protocolVersion"]
+            v = init["protocolVersion"]
             params = {"cwd": str(work), "mcpServers": []}
             if sid:
                 params["sessionId"] = sid
                 if v == 2:
                     params["replayFrom"] = {"type": "start"}
-            call(
+            opened_session, _ = call(
                 2,
                 "session/" + ("new" if not sid else "resume" if v == 2 else "load"),
                 params,
             )
-            sid = receive(2).get("sessionId", sid)
+            if sid and opened_session.get("sessionId", sid) != sid:
+                raise RuntimeError("reopened a different parent")
+            sid = opened_session.get("sessionId", sid)
+            print(
+                "adapter",
+                init.get("agentInfo") or init.get("info"),
+                "models",
+                [
+                    o.get("currentValue")
+                    for o in opened_session.get("configOptions", [])
+                    if o.get("category") == "model"
+                ],
+                flush=True,
+            )
             print(phase, "ACP", v, flush=True)
 
-            def turn(i, prompt):
-                updates.clear()
-                call(
+            def turn(i, prompt, call=call, sid=sid, v=v):
+                _, updates = call(
                     i,
                     "session/prompt",
                     {"sessionId": sid, "prompt": [{"type": "text", "text": prompt}]},
+                    wait_idle=v == 2,
                 )
-                receive(i, stop=v == 2)
 
                 if any(u.get("stopReason") == "rate_limit" for u in updates):
                     raise RuntimeError("provider rate limit")
+                return updates
 
             if phase == "new":
                 label = "orchid-" + secrets.token_hex(4)
@@ -267,10 +279,19 @@ for phase in ("new", "reopen"):
                     f"Delegate to child model {child}/echo. Have the child obtain a receipt for {label} from its receipt service. Ask it to give only a completion acknowledgment in its final answer. You yourself should just acknowledge completion without quoting or retrieving the receipt, even on wake.",
                 )
 
-                receipt, database, session, archived, journal_exposed = wait_for_child(base, label)
-                source, body = archived or (None, None)
+                receipt, database, session, archived, journal_exposed, final_exposed = (
+                    wait_for_child(base, label)
+                )
+                if not archived:
+                    raise RuntimeError("missing original child tool row")
+                source, body, tool_id = archived
+                native_id = json.loads(sid)[2]
+                native_logs = list(
+                    (base / "parent-codex/sessions").rglob(f"*-{native_id}.jsonl")
+                )
+                offsets = {f: f.stat().st_size for f in native_logs}
                 for i in (4, 5):
-                    turn(i, "/compact")
+                    updates = turn(i, "/compact")
                     if any(
                         u.get("sessionUpdate") == "compaction_update"
                         and u.get("status") == "completed"
@@ -288,10 +309,8 @@ for phase in ("new", "reopen"):
                         },
                         flush=True,
                     )
-                parent_logs = (base / ("parent-" + parent)).rglob("*.jsonl")
-                prior_context = receipt in (base / "new.wire").read_text() or any(
-                    receipt in f.read_text() for f in parent_logs
-                )
+                suffix = receipt.split()[-1]
+                prior_context = contains(client.events, suffix)
                 with sqlite3.connect(database) as db:
                     unrelated = "unrelated-" + secrets.token_hex(8)
                     db.execute(
@@ -304,11 +323,7 @@ for phase in ("new", "reopen"):
                         (unrelated, label + " " + decoy),
                     ).lastrowid
                 if parent == "codex":
-                    compacted = any(
-                        json.loads(line).get("type") == "compacted"
-                        for f in (base / "parent-codex/sessions").rglob("*.jsonl")
-                        for line in f.open()
-                    )
+                    compacted = native_compacted(offsets, native_id)
                 else:
                     compacted = any(
                         u.get("sessionUpdate") == "compaction_update"
@@ -317,26 +332,43 @@ for phase in ("new", "reopen"):
                     )
             else:
                 log.flush()
-                replay = receipt in (base / "reopen.wire").read_text()
-                turn(
+                updates = turn(
                     3,
                     "What was the verbatim receipt the child received, and what is the original source reference?",
                 )
+                replay = contains(client.events[: client.turn_start], suffix)
                 answer = words(updates)
                 found, opened, prior_tool = check_retrieval(
                     updates, receipt, source, session, body
                 )
-                leaked = decoy in json.dumps(updates)
-                turn(
+                leaked = contains(updates, decoy)
+                updates = turn(
                     4,
                     f"Check whether archive reference {decoy_ref} is accessible. Report whether access succeeded.",
                 )
+                with sqlite3.connect(database) as db:
+                    if not db.execute(
+                        "SELECT 1 FROM child_bindings WHERE child_id=? AND parent_id=? AND result_status='completed'",
+                        (session, sid),
+                    ).fetchone():
+                        raise RuntimeError("child binding changed across reopen")
+                    verify_archive_rows(
+                        db,
+                        [
+                            (source, (session, "tool", body, tool_id)),
+                            (
+                                decoy_ref,
+                                (unrelated, "assistant", label + " " + decoy, None),
+                            ),
+                        ],
+                    )
+                leaked |= contains(client.events, decoy)
                 denied = check_denial(updates, decoy_ref, decoy)
                 report = {
                     "journal_contains_receipt": journal_exposed,
-                    "decoy_exposed": leaked or decoy in json.dumps(updates),
+                    "decoy_exposed": leaked or contains(updates, decoy),
                     "parent_context_contains_receipt": prior_context,
-                    "receipt_before_archive_search": prior_tool,
+                    "receipt_outside_archive_before_original_read": prior_tool,
                     "compacted": compacted,
                     "replay_contains_receipt": replay,
                     "search_hit": found,
@@ -366,12 +398,12 @@ for phase in ("new", "reopen"):
                             "decoy_denied",
                         )
                     )
-                    or journal_exposed
+                    or final_exposed
                     or prior_context
                     or prior_tool
                     or replay
                     or leaked
-                    or decoy in json.dumps(updates)
+                    or contains(updates, decoy)
                 ):
                     sys.exit(1)
         finally:
@@ -381,3 +413,12 @@ for phase in ("new", "reopen"):
             except subprocess.TimeoutExpired:
                 p.kill()
                 p.wait()
+            client.reader.join()
+
+    if phase == "new":
+        prior_context |= contains(client.events, suffix)
+        for path in (base / ("parent-" + parent)).rglob("*.jsonl"):
+            prior_context |= contains(
+                [json.loads(line) for line in path.read_bytes().splitlines() if line],
+                suffix,
+            )

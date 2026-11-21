@@ -14,4 +14,4 @@ TRIAL_ROOT=$(mktemp -d)
 export TRIAL_ROOT
 trap 'rm -rf -- "$TRIAL_ROOT"' EXIT
 CGO_ENABLED=0 go build -o "$TRIAL_ROOT/petal" .
-timeout -k 5 240 python3 -B scripts/receipt/accept.py "$1" "$child"
+python3 -B scripts/receipt/supervise.py python3 -B scripts/receipt/accept.py "$1" "$child"
