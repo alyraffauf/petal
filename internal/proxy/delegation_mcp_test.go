@@ -336,6 +336,9 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				t.Errorf("pinned resume changed the editor session ID: %s", resumed["sessionId"])
 			}
 			reloaded := open(resumed)
+			if page := call(reloaded, "petal_read_transcript", anchor, false); !strings.Contains(page, "receipt") {
+				t.Fatal(page)
+			}
 			if page := call(reloaded, "petal_read", args, false); !strings.Contains(page, "receipt: echo") {
 				t.Errorf("resumed parent did not recover its child: %s", page)
 			}

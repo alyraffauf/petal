@@ -71,13 +71,13 @@ type HistoryMatch struct {
 
 type HistoryMatches struct {
 	Hits       []HistoryMatch `json:"hits"`
-	NextOffset int            `json:"next_offset,omitempty"`
+	NextBefore int64          `json:"next_before,omitempty"`
 }
 
-func SearchHistory(ctx context.Context, cwd, parent, query string, offset int) (HistoryMatches, error) {
+func SearchHistory(ctx context.Context, cwd, parent, query string, before int64) (HistoryMatches, error) {
 	page := HistoryMatches{Hits: []HistoryMatch{}}
-	if utf8.RuneCountInString(query) > 512 || offset < 0 || offset > 1<<30 {
-		return page, errors.New("invalid history query length or offset")
+	if utf8.RuneCountInString(query) > 512 || before < 0 {
+		return page, errors.New("invalid history query length or cursor")
 	}
 	expr := matchExpression(query)
 	if expr == "" {
@@ -88,17 +88,19 @@ func SearchHistory(ctx context.Context, cwd, parent, query string, offset int) (
 		return page, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, historyScope+`SELECT m.rowid,m.session_id,m.role,substr(snippet(message_search,0,'','','…',18),1,512)
+	rows, err := db.QueryContext(ctx, historyScope+`SELECT m.rowid,m.session_id,m.role,CASE WHEN length(snippet(message_search,0,'','','…',18)) <= 512
+		THEN snippet(message_search,0,'','','…',18)
+		ELSE substr(snippet(message_search,0,'','','…',1),1,512) END
 	FROM message_search JOIN messages m ON m.rowid=message_search.rowid
 	WHERE message_search MATCH ? AND m.session_id IN (SELECT id FROM scope)
-	ORDER BY rank,m.rowid DESC LIMIT 11 OFFSET ?`, parent, expr, offset)
+	AND (?=0 OR m.rowid < ?) ORDER BY m.rowid DESC LIMIT 11`, parent, expr, before, before)
 	if err != nil {
 		return page, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		if len(page.Hits) == 10 {
-			page.NextOffset = offset + 10
+			page.NextBefore = page.Hits[len(page.Hits)-1].Reference
 			break
 		}
 		var hit HistoryMatch
