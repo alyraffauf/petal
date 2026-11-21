@@ -59,12 +59,27 @@ func transcript(v screen, width, height int) []entry {
 	b.first = min(b.first, n)
 	total := 0
 	if b.browsing {
-		// A resize preserves the same absolute document row while browsing.
-		if b.width != width {
-			for i := range b.first {
-				b.top += rowsAt(i, b.width)
+		if b.width > 0 && b.width != width && b.first < n {
+			// Resolve any movement since the last frame at the old width.
+			for b.top < 0 && b.first > 0 {
+				b.first--
+				b.top += rowsAt(b.first, b.width)
 			}
-			b.first = 0
+			for b.first+1 < n {
+				rows := rowsAt(b.first, b.width)
+				if b.top < rows {
+					break
+				}
+				b.top -= rows
+				b.first++
+			}
+			oldLines := len(v.messageLines(b.first, messageAt(b.first), b.width))
+			newLines := len(v.messageLines(b.first, messageAt(b.first), width))
+			if b.top == oldLines && b.first+1 < n {
+				b.top = newLines // Keep the separator below the message.
+			} else {
+				b.top = min(b.top, newLines-1)
+			}
 		}
 		if b.width == width && v.transcriptRevision != 0 && b.revision == v.transcriptRevision && b.count == n {
 			total = b.rows
