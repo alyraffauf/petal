@@ -71,3 +71,62 @@ func TestSearchHistoryContinuesAcrossNewTurns(t *testing.T) {
 		t.Fatal(last)
 	}
 }
+
+func TestHistoryContextBudgetAndOrder(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	for _, id := range []string{"parent", "private"} {
+		if _, err := Create(cwd, Record{ID: id, Model: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save := func(id, body string) {
+		t.Helper()
+		if err := SaveTranscript(cwd, id, []Message{{Role: "tool", Body: body}}, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("parent", "first")
+	save("private", "private")
+	save("parent", "second")
+	save("parent", strings.Repeat("x", 4097))
+	anchor, err := ReadHistoryWithContext(t.Context(), cwd, "parent", 0, 0, 8)
+	if err != nil || anchor.NextOffset != 4096 || len(anchor.Before) != 0 {
+		t.Fatal(anchor.NextOffset, err)
+	}
+	save("parent", strings.Repeat("🌺", 1100))
+	page, err := ReadHistoryWithContext(t.Context(), cwd, "parent", anchor.Reference, anchor.NextOffset, 8)
+	if err != nil || page.Text != "x" || len(page.Before) != 2 || page.Before[0].Text != "first" || page.Before[1].Text != "second" || page.Before[1].Reference != anchor.Previous || len(page.After) != 1 || !page.After[0].Truncated || page.After[0].Text != strings.Repeat("🌺", 1021) || page.After[0].Reference != page.Next {
+		t.Fatal(page, err)
+	}
+	for _, count := range []int{-1, 9} {
+		if _, err := ReadHistoryWithContext(t.Context(), cwd, "parent", 0, 0, count); err == nil {
+			t.Fatalf("accepted context %d", count)
+		}
+	}
+}
+
+func TestContextUsesBytesLeftAfterUTF8Clip(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	if _, err := Create(dir, Record{ID: "p", Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveTranscript(dir, "p", []Message{{Role: "tool", Body: ""}, {Role: "tool", Body: "🌺"}, {Role: "tool", Body: strings.Repeat("x", 4093)}}, false); err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := ReadHistory(t.Context(), dir, "p", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveTranscript(dir, "p", []Message{{Role: "tool", Body: "yes"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	page, err := ReadHistoryWithContext(t.Context(), dir, "p", anchor.Reference, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Before) != 2 || page.Before[0].Text != "" || page.Before[0].Truncated || page.Before[1].Text != "" || !page.Before[1].Truncated || len(page.After) != 1 || page.After[0].Text != "yes" {
+		t.Fatalf("before=%+v after=%+v", page.Before, page.After)
+	}
+}
