@@ -12,8 +12,10 @@ import (
 // layouts across animation frames and transcript navigation.
 type messageLayout struct {
 	lines []string
+	log   *plainLog
 	text  string
 	width int
+	role  string
 }
 type markdownCache struct {
 	layouts      map[int]messageLayout
@@ -23,15 +25,43 @@ type markdownCache struct {
 }
 
 func (v screen) messageLines(index int, e entry, width int) []string {
+	layout := v.layoutMessage(index, e, width)
+	return v.layoutRows(layout, 0, layout.rowCount())
+}
+
+func (v screen) layoutMessage(index int, e entry, width int) messageLayout {
 	width = max(1, width)
 	c := v.markdown
 	if c == nil {
 		c = &markdownCache{}
 	}
 	layout := c.layouts[index]
-	if layout.width == width && layout.text == e.Text {
-		return layout.lines
+	if layout.width == width && layout.text == e.Text && layout.role == e.Role {
+		return layout
 	}
+	layout = messageLayout{text: e.Text, role: e.Role, width: width}
+	preview, hasImage := v.images[e.Text]
+	if e.Role == "tool" && !hasImage {
+		layout.log = c.indexPlainLog(e.Text, width)
+	}
+	if layout.log == nil {
+		source := e.Text
+		if hasImage {
+			source = preview.caption
+		}
+		layout.lines = c.renderLines(source, width)
+		if hasImage && width >= preview.cols {
+			layout.lines = append(layout.lines, preview.lines...)
+		}
+	}
+	if c.layouts == nil {
+		c.layouts = make(map[int]messageLayout)
+	}
+	c.layouts[index] = layout
+	return layout
+}
+
+func (c *markdownCache) renderLines(source string, width int) []string {
 	if c.renderer == nil || c.width != width {
 		accent := roseHex
 		style := styles.DarkStyleConfig
@@ -54,12 +84,7 @@ func (v screen) messageLines(index int, e entry, width int) []string {
 		c.renderer = newMarkdownRenderer(style, max(24, width))
 		c.width = width
 	}
-	source := clean(e.Text)
-	preview, hasImage := v.images[e.Text]
-	if hasImage {
-		source = clean(preview.caption)
-	}
-	rendered := renderMarkdown(c.renderer, source)
+	rendered := renderMarkdown(c.renderer, clean(source))
 	lines := strings.Split(strings.Trim(rendered, "\n"), "\n")
 	for len(lines) > 1 && strings.TrimSpace(ansi.Strip(lines[0])) == "" {
 		lines = lines[1:]
@@ -77,13 +102,6 @@ func (v screen) messageLines(index int, e entry, width int) []string {
 		}
 		wrapped = append(wrapped, parts...)
 	}
-	if hasImage && width >= preview.cols {
-		wrapped = append(wrapped, preview.lines...)
-	}
-	if c.layouts == nil {
-		c.layouts = make(map[int]messageLayout)
-	}
-	c.layouts[index] = messageLayout{text: e.Text, width: width, lines: wrapped}
 	return wrapped
 }
 

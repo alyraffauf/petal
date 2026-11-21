@@ -84,7 +84,9 @@ func BenchmarkOpenBacklog(b *testing.B) {
 func BenchmarkOpenLargeToolResult(b *testing.B) {
 	for _, count := range []int{1024, 16384} {
 		b.Run(strconv.Itoa(count)+"_lines", func(b *testing.B) {
-			v := screen{Messages: []entry{{"tool", "```text\n" + strings.Repeat("build output line\n", count) + "```"}}}
+			body := logFence + strings.Repeat("build output line\n", count) + "```"
+			e, _ := (&terminal{}).toolResult(toolEvent{id: "Build", status: "completed", body: &body})
+			v := screen{Messages: []entry{{e.role, e.text}}}
 			for b.Loop() {
 				v.markdown = &markdownCache{}
 				transcript(v, 80, 20)
@@ -132,5 +134,37 @@ func BenchmarkSessionFrame(b *testing.B) {
 				m.View()
 			}
 		})
+	}
+}
+
+func TestPlainLogScrollMatchesFullLayout(t *testing.T) {
+	var body strings.Builder
+	for i := range 1050 {
+		fmt.Fprintf(&body, "row %04d  \n", i)
+	}
+	for _, extra := range []string{"", strings.Repeat("word ", 24) + "\n", "wide 界\n", "\n", "```\n# heading\n```text\n"} {
+		text := logFence + body.String() + extra + "```"
+		e, _ := (&terminal{}).toolResult(toolEvent{id: "Build", status: "completed", body: &text})
+		source := e.text
+		v := screen{Messages: []entry{{"tool", source}}, backlog: &backlogViewport{}, markdown: &markdownCache{}}
+		for _, width := range []int{40, 13, 10} {
+			if extra == "" && width == 40 && v.layoutMessage(0, v.Messages[0], width).log == nil {
+				t.Fatal("adapter log missed viewport layout")
+			}
+			want := (&markdownCache{}).renderLines(source, width)
+			for _, top := range []int{len(want) - 11, len(want) - 14, 512, 0, 3, len(want) - 11} {
+				transcript(v, width, 11)
+				v.backlog.move(top - v.backlog.top)
+				rows := transcript(v, width, 11)
+				if len(rows) != 11 {
+					t.Fatalf("got %d rows", len(rows))
+				}
+				for i, row := range rows {
+					if row.Text != want[top+i] {
+						t.Fatalf("width %d row %d: got %q want %q", width, top+i, row.Text, want[top+i])
+					}
+				}
+			}
+		}
 	}
 }
