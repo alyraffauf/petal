@@ -44,6 +44,16 @@ func (t *Transcript) Entries() []Entry {
 	return entries
 }
 
+// Lookup returns the current visible entry for one adapter ID and role.
+func (t *Transcript) Lookup(role, id string) (Entry, bool) {
+	index, ok := t.positions[transcriptKey{role: role, id: id}]
+	if !ok {
+		return Entry{}, false
+	}
+	text := t.rows[index].text()
+	return Entry{Role: role, Text: text}, text != ""
+}
+
 // Visit yields visible entries with their adapter IDs in first-seen order.
 func (t *Transcript) Visit(yield func(string, Entry)) {
 	for _, row := range t.rows {
