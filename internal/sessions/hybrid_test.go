@@ -1,16 +1,22 @@
 package sessions
 
 import (
+	"bytes"
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 type unavailableProvider struct{}
@@ -176,6 +182,9 @@ func TestHistoryEmbeddingBoundary(t *testing.T) {
 	client := *embeddingClient
 	calls := 0
 	client.Transport = historyTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/api/tags" {
+			return tagReply("a"), nil
+		}
 		calls++
 		if r.URL.String() != "http://127.0.0.1:11434/api/embed" || r.Method != "POST" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL)
@@ -203,5 +212,146 @@ func TestHistoryEmbeddingBoundary(t *testing.T) {
 	page, err := SearchHybridHistory(t.Context(), cwd, "parent", "parent")
 	if err != nil || calls != 1 || page.Retrieval != "fts" || len(page.Hits) != 1 {
 		t.Fatal(page, err, calls)
+	}
+}
+
+func tagReply(digit string) *http.Response {
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"models":[{"name":"all-minilm:latest","digest":"%s"}]}`, strings.Repeat(digit, 64))))}
+}
+
+func TestHybridLifecycle(t *testing.T) {
+	for _, scenario := range []string{"replace", "replace during embed", "busy", "offline after mutation", "mutate", "cancel", "initial lock"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("PETAL_HISTORY_EMBEDDINGS", "1")
+			cwd := t.TempDir()
+			for _, id := range []string{"p", "child"} {
+				if _, err := Create(cwd, Record{ID: id, Model: "test"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			db, err := openStore(cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			exec := func(q string, args ...any) {
+				t.Helper()
+				if _, err := db.Exec(q, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			exec("INSERT INTO child_bindings(child_id,parent_id) VALUES ('child','p')")
+			for _, entry := range []struct{ id, body string }{{"p", "needle original"}, {"p", "needle deleted"}, {"child", "needle secret"}} {
+				if err := SaveTranscript(cwd, entry.id, []Message{{Role: "tool", Body: entry.body}}, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "initial lock" {
+				dir, _ := storeDir(cwd)
+				lock, err := os.Open(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer lock.Close()
+				if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+					t.Fatal(err)
+				}
+				start := time.Now()
+				_, err = searchHybridHistory(t.Context(), cwd, "p", "needle", 50*time.Millisecond)
+				if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+					t.Fatal(err, time.Since(start))
+				}
+				return
+			}
+			// Previously indexed vectors would score perfectly against this query.
+			if strings.HasPrefix(scenario, "replace") {
+				old := make([]byte, 384*4)
+				binary.LittleEndian.PutUint32(old, math.Float32bits(1))
+				exec("INSERT INTO message_embeddings SELECT rowid,?,? FROM messages", old, strings.Repeat("a", 64))
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			tags := 0
+			old := embeddingClient
+			defer func() { embeddingClient = old }()
+			embeddingClient = &http.Client{Transport: historyTransport(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/api/tags" {
+					tags++
+					if scenario == "replace during embed" && tags == 1 {
+						return tagReply("a"), nil
+					}
+					return tagReply("b"), nil
+				}
+				switch scenario {
+				case "cancel":
+					cancel()
+					return nil, context.Canceled
+				case "busy":
+					exec("BEGIN IMMEDIATE")
+				case "offline after mutation", "mutate":
+					exec("UPDATE messages SET body='needle edited' WHERE body='needle original'")
+					exec("DELETE FROM messages WHERE body='needle deleted'")
+					exec("DELETE FROM child_bindings")
+					if scenario == "offline after mutation" {
+						return nil, errors.New("offline")
+					}
+				}
+				var req struct{ Input []string }
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Fatal(err)
+				}
+				vec := make([][]float32, len(req.Input))
+				for i := range vec {
+					vec[i] = make([]float32, 384)
+					if i == 0 {
+						vec[i][0] = 1
+					} else {
+						vec[i][1] = 1
+					}
+				}
+				body, _ := json.Marshal(map[string]any{"embeddings": vec})
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body))}, nil
+			})}
+			query := "needle"
+			if strings.HasPrefix(scenario, "replace") {
+				query = "unrelated"
+			}
+			page, err := SearchHybridHistory(ctx, cwd, "p", query)
+			if scenario == "busy" {
+				exec("ROLLBACK")
+			}
+			if scenario == "cancel" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "replace":
+				if page.Retrieval != "hybrid" || page.Coverage.Indexed != 3 || len(page.Hits) != 0 {
+					t.Fatal(page)
+				}
+			case "replace during embed":
+				if page.Retrieval != "fts" || len(page.Hits) != 0 {
+					t.Fatal(page)
+				}
+			case "busy":
+				if page.Retrieval != "fts" || len(page.Hits) != 3 {
+					t.Fatal(page)
+				}
+			default:
+				want := "hybrid"
+				if scenario == "offline after mutation" {
+					want = "fts"
+				}
+				if page.Retrieval != want || len(page.Hits) != 1 || page.Hits[0].Snippet != "needle edited" {
+					t.Fatal(page)
+				}
+			}
+		})
 	}
 }

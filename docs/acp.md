@@ -81,13 +81,18 @@ searches fill that window. The response reports `coverage.indexed` and
 `coverage.window`. When `coverage.partial` is true, follow `next` to search
 again. Full coverage applies only to prefixes in the recent window. Older text remains searchable by keyword. Ollama
 can truncate input to the model context. Petal allows one embedding request
-per process at a time and gives semantic retrieval ten seconds.
+per process at a time and gives the whole search ten seconds, including the initial archive lock.
+The optional embedding step reserves time for a final scoped read. If the
+provider fails or a concurrent writer blocks vector backfill, Petal returns
+current keyword hits. Caller cancellation ends the search. Both rankings
+use the same archive snapshot taken after embedding.
 
 The project archive stores 1,536 bytes of vector data per indexed message
 plus SQLite overhead. Editing or deleting the message invalidates its vector.
-Older vectors outside the window remain on disk until deletion. If replacing
-the local all-minilm model weights, clear `message_embeddings` in each
-project archive before resuming hybrid search.
+Older vectors outside the window remain on disk until deletion. Petal checks the
+local tag digest from Ollama’s `/api/tags` before and after embedding. A
+changed digest during the request yields keyword results. Cached vectors
+with a different or unknown digest are rebuilt in the usual batches.
 
 With Ollama running, reproduce the fixture using
 `PETAL_EVAL_EMBEDDINGS=1 go test -count=1 -v ./internal/sessions -run TestLocalHybridEvaluation`.

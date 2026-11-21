@@ -5,23 +5,54 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"math"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 	"net/http"
 	"os"
 	"regexp"
 	"sort"
 	"time"
+	"unicode/utf8"
 )
 
 var embeddingClient = &http.Client{Transport: &http.Transport{MaxConnsPerHost: 1}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 var errEmbeddingProvider = errors.New("local embedding provider unavailable")
 var embeddingSlot = make(chan struct{}, 1)
 
+const historyModel = "all-minilm:latest"
+
+func modelDigest(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://127.0.0.1:11434/api/tags", nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := embeddingClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	var tags struct {
+		Models []struct{ Name, Digest string }
+	}
+	if res.StatusCode == 200 && json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&tags) == nil {
+		for _, m := range tags.Models {
+			if m.Name == historyModel && len(m.Digest) == 64 {
+				if _, err := hex.DecodeString(m.Digest); err == nil {
+					return m.Digest, nil
+				}
+			}
+		}
+	}
+	return "", errEmbeddingProvider
+}
+
 func embedHistory(ctx context.Context, inputs []string) ([][]float32, error) {
-	body, err := json.Marshal(map[string]any{"model": "all-minilm:latest", "input": inputs})
+	body, err := json.Marshal(map[string]any{"model": historyModel, "input": inputs})
 	if err != nil {
 		return nil, err
 	}
@@ -55,9 +86,10 @@ func embedHistory(ctx context.Context, inputs []string) ([][]float32, error) {
 
 // Backfill eight missing vectors per call. Compare the input again at write
 // time because a transcript can change while Ollama is running.
-func historyVectors(ctx context.Context, db *sql.DB, parent, query string, coverage *HistoryCoverage) ([]HistoryMatch, error) {
-	const window = historyScope + `, recent AS (SELECT rowid AS ref FROM messages WHERE session_id IN (SELECT id FROM scope) ORDER BY rowid DESC LIMIT 256) `
-	rows, err := db.QueryContext(ctx, window+`SELECT ref,substr(body,1,1024) FROM recent JOIN messages ON rowid=ref LEFT JOIN message_embeddings ON reference=ref WHERE reference IS NULL ORDER BY ref DESC LIMIT 8`, parent)
+const window = historyScope + `, recent AS (SELECT rowid AS ref FROM messages WHERE session_id IN (SELECT id FROM scope) ORDER BY rowid DESC LIMIT 256) `
+
+func backfill(ctx context.Context, db *sql.DB, parent, query, digest string) ([]float32, error) {
+	rows, err := db.QueryContext(ctx, window+`SELECT ref,substr(body,1,1024) FROM recent JOIN messages ON rowid=ref LEFT JOIN message_embeddings ON reference=ref AND digest=? WHERE reference IS NULL ORDER BY ref DESC LIMIT 8`, parent, digest)
 	if err != nil {
 		return nil, err
 	}
@@ -82,15 +114,23 @@ func historyVectors(ctx context.Context, db *sql.DB, parent, query string, cover
 	if err != nil {
 		return nil, errors.Join(errEmbeddingProvider, err)
 	}
+	current, err := modelDigest(ctx)
+	if err != nil || current != digest {
+		return nil, errEmbeddingProvider
+	}
 	for i, id := range ids {
 		buf := new(bytes.Buffer)
 		binary.Write(buf, binary.LittleEndian, vectors[i+1])
-		_, err = db.ExecContext(ctx, historyScope+`INSERT OR IGNORE INTO message_embeddings SELECT rowid,? FROM messages WHERE rowid=? AND session_id IN (SELECT id FROM scope) AND substr(body,1,1024)=?`, parent, buf.Bytes(), id, inputs[i+1])
+		_, err = db.ExecContext(ctx, historyScope+`INSERT OR REPLACE INTO message_embeddings(reference,vector,digest) SELECT rowid,?,? FROM messages WHERE rowid=? AND session_id IN (SELECT id FROM scope) AND substr(body,1,1024)=?`, parent, buf.Bytes(), digest, id, inputs[i+1])
 		if err != nil {
 			return nil, err
 		}
 	}
-	rows, err = db.QueryContext(ctx, window+`SELECT ref,session_id,role,substr(body,1,512),vector FROM recent JOIN messages ON messages.rowid=ref LEFT JOIN message_embeddings ON reference=ref ORDER BY ref DESC`, parent)
+	return vectors[0], nil
+}
+
+func scoreHistory(ctx context.Context, db historyReader, parent, digest string, queryVector []float32, coverage *HistoryCoverage) ([]HistoryMatch, error) {
+	rows, err := db.QueryContext(ctx, window+`SELECT ref,session_id,role,substr(body,1,512),vector FROM recent JOIN messages ON messages.rowid=ref LEFT JOIN message_embeddings ON reference=ref AND digest=? ORDER BY ref DESC`, parent, digest)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +154,7 @@ func historyVectors(ctx context.Context, db *sql.DB, parent, query string, cover
 		hit.Source = "semantic"
 		var score float64
 		// Ollama /api/embed returns unit vectors.
-		for i, q := range vectors[0] {
+		for i, q := range queryVector {
 			score += float64(q) * float64(math.Float32frombits(binary.LittleEndian.Uint32(blob[4*i:])))
 		}
 		if score >= 0.4 {
@@ -134,40 +174,90 @@ func HybridHistoryEnabled() bool { return os.Getenv("PETAL_HISTORY_EMBEDDINGS") 
 // Structured identifiers need lexical evidence even when nearby codes embed similarly.
 var historyIdentifier = regexp.MustCompile(`[[:alnum:]]_[[:alnum:]]|[[:alpha:]][[:digit:]]|[[:digit:]][[:alpha:]]|[[:alnum:]]-[[:digit:]]`)
 
-func SearchHybridHistory(ctx context.Context, cwd, parent, query string) (HistoryMatches, error) {
-	page, err := SearchHistory(ctx, cwd, parent, query, 0)
-	if err != nil {
-		return page, err
-	}
-	if !HybridHistoryEnabled() {
-		return page, errors.New("enable hybrid history with PETAL_HISTORY_EMBEDDINGS=1")
-	}
-	page.Retrieval = "fts"
-	for i := range page.Hits {
-		page.Hits[i].Source = "keyword"
-	}
-	page.NextBefore = 0
-	if historyIdentifier.MatchString(query) {
-		return page, nil
-	}
+func optionalHistoryVector(ctx context.Context, db *sql.DB, parent, query string) ([]float32, string, error) {
 	select {
 	case embeddingSlot <- struct{}{}:
 		defer func() { <-embeddingSlot }()
 	default:
-		return page, nil
+		return nil, "", nil
 	}
-	timed, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Reserve the final tenth of the remaining budget for the scoped read.
+	deadline, _ := ctx.Deadline()
+	optional, stop := context.WithDeadline(ctx, deadline.Add(-time.Until(deadline)/10))
+	defer stop()
+	digest, err := modelDigest(optional)
+	if err != nil {
+		return nil, "", ctx.Err()
+	}
+	// This handle belongs to this search. Yield immediately to an archive writer.
+	if _, err = db.ExecContext(optional, "PRAGMA busy_timeout=0"); err != nil {
+		if optional.Err() != nil {
+			return nil, "", ctx.Err()
+		}
+		return nil, "", err
+	}
+	vector, err := backfill(optional, db, parent, query, digest)
+	var sqliteErr *sqlite.Error
+	busy := errors.As(err, &sqliteErr) && sqliteErr.Code()&255 == sqlite3.SQLITE_BUSY
+	if busy || errors.Is(err, errEmbeddingProvider) || optional.Err() != nil {
+		return nil, "", ctx.Err()
+	}
+	return vector, digest, err
+}
+
+func SearchHybridHistory(ctx context.Context, cwd, parent, query string) (HistoryMatches, error) {
+	return searchHybridHistory(ctx, cwd, parent, query, 10*time.Second)
+}
+
+func searchHybridHistory(caller context.Context, cwd, parent, query string, budget time.Duration) (HistoryMatches, error) {
+	ctx, cancel := context.WithTimeout(caller, budget)
 	defer cancel()
-	db, err := openStoreContext(timed, cwd)
+	var page HistoryMatches
+	if !HybridHistoryEnabled() {
+		return page, errors.New("enable hybrid history with PETAL_HISTORY_EMBEDDINGS=1")
+	}
+	if utf8.RuneCountInString(query) > 512 {
+		return page, errors.New("invalid history query length")
+	}
+	expr := matchExpression(query)
+	if expr == "" {
+		return page, errors.New("invalid history query")
+	}
+	db, err := openStoreContext(ctx, cwd)
 	if err != nil {
 		return page, err
 	}
 	defer db.Close()
-	var coverage HistoryCoverage
-	semantic, err := historyVectors(timed, db, parent, query, &coverage)
-	if errors.Is(err, errEmbeddingProvider) || errors.Is(err, context.DeadlineExceeded) {
+	var digest string
+	var vector []float32
+	if !historyIdentifier.MatchString(query) {
+		vector, digest, err = optionalHistoryVector(ctx, db, parent, query)
+		if err != nil {
+			return page, err
+		}
+	}
+	if err := caller.Err(); err != nil {
+		return page, err
+	}
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return page, err
+	}
+	defer tx.Rollback()
+	page, err = searchHistory(ctx, tx, parent, expr, 0)
+	if err != nil {
+		return page, err
+	}
+	page.Retrieval = "fts"
+	page.NextBefore = 0
+	for i := range page.Hits {
+		page.Hits[i].Source = "keyword"
+	}
+	if vector == nil {
 		return page, ctx.Err()
 	}
+	var coverage HistoryCoverage
+	semantic, err := scoreHistory(ctx, tx, parent, digest, vector, &coverage)
 	if err != nil {
 		return page, err
 	}
@@ -187,10 +277,10 @@ func SearchHybridHistory(ctx context.Context, cwd, parent, query string) (Histor
 				seen[hit.Reference] = true
 				page.Hits = append(page.Hits, hit)
 				if len(page.Hits) == 10 {
-					return page, nil
+					return page, ctx.Err()
 				}
 			}
 		}
 	}
-	return page, nil
+	return page, ctx.Err()
 }
