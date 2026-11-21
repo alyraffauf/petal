@@ -405,6 +405,23 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	}
 	clientCaps := request.member(capabilityField)
 
+	// The recorder consumes v1 compaction events even when the editor does
+	// not. Filter forwarded updates using the editor's original capabilities.
+	if version == 1 && p.recorder != nil && clientCaps.member("session").member("compaction") == nil {
+		caps := request.member(capabilityField)
+		if caps == nil {
+			caps = Object{}
+		}
+		session := caps.member("session")
+		if session == nil {
+			session = Object{}
+		}
+		session["compaction"] = json.RawMessage("{}")
+		caps["session"], _ = json.Marshal(session)
+		request[capabilityField], _ = json.Marshal(caps)
+		init, _ = json.Marshal(request)
+	}
+
 	a := p.Accounts[name]
 	lifetime, stop := context.WithCancel(p.lifetime)
 	cmd := a.Command(lifetime, a.Models[p.Model])

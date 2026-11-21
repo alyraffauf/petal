@@ -44,7 +44,8 @@ func (m *terminal) indexMessages(entries []entry, replace bool) {
 			if c == nil {
 				continue
 			}
-			e = entry{"system", c.display}
+			messages = append(messages, sessions.Message{Role: "compaction", Body: c.display, SourceID: e.Text})
+			continue
 		}
 		if preview, ok := m.images[e.Text]; ok {
 			e.Text = preview.caption

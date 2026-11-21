@@ -95,12 +95,11 @@ func (r *run) execute(conn Connection, task string, closeTransport context.Cance
 	}
 
 	messages := []sessions.Message{{Role: "user", Body: task}}
-	if r.version == 2 {
-		for _, entry := range r.transcript.Entries() {
-			messages = append(messages, sessions.Message{Role: entry.Role, Body: entry.Text})
+	messages = append(messages, sessions.ProjectTranscript(&r.transcript, r.version == 2)...)
+	if r.version != 2 {
+		if answer := r.reply.String(); answer != "" {
+			messages = append(messages, sessions.Message{Role: "assistant", Body: answer})
 		}
-	} else if answer := r.reply.String(); answer != "" {
-		messages = append(messages, sessions.Message{Role: "assistant", Body: answer})
 	}
 	answer := ""
 	for _, message := range messages[1:] {
@@ -267,6 +266,9 @@ func (r *run) update(raw json.RawMessage) error {
 	}
 
 	switch update.Kind {
+	case "compaction_update", "compaction_summary_chunk":
+		_, err := r.transcript.Apply(raw)
+		return err
 	case "agent_message", "agent_message_chunk", "tool_call", "tool_call_update", "tool_call_content_chunk":
 		if update.Kind == "agent_message" || update.Kind == "agent_message_chunk" {
 			if r.version == 2 {

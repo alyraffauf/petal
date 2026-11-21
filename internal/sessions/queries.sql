@@ -23,9 +23,6 @@ ORDER BY COALESCE(NULLIF(updated, ''), opened) DESC, id LIMIT 1;
 -- name: AppendMessage :exec
 INSERT INTO messages (session_id, role, body) VALUES (?, ?, ?);
 
--- name: ClearTranscript :exec
-DELETE FROM messages WHERE session_id = ?;
-
 -- name: ReadTranscript :many
 SELECT rowid, role, body FROM messages WHERE session_id = ? ORDER BY rowid;
 

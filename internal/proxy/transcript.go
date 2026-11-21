@@ -18,6 +18,7 @@ type transcriptRecorder struct{ active sync.Map }
 type recordedSession struct {
 	mu                              sync.Mutex
 	cwd, id                         string
+	version                         uint16
 	projection                      acpv2.Transcript
 	last                            string
 	seq                             int
@@ -35,11 +36,7 @@ func (r *transcriptRecorder) open(key, id, cwd, account, model string) (*recorde
 }
 
 func (s *recordedSession) save(replace bool) error {
-	entries := s.projection.Entries()
-	msgs := make([]sessions.Message, 0, len(entries))
-	for _, e := range entries {
-		msgs = append(msgs, sessions.Message{Role: e.Role, Body: e.Text})
-	}
+	msgs := sessions.ProjectTranscript(&s.projection, s.version == 2)
 	if len(msgs) > 0 || replace {
 		if err := sessions.SaveTranscript(s.cwd, s.id, msgs, replace); err != nil {
 			return err
@@ -59,6 +56,7 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 	s := value.(*recordedSession)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.version = version
 	kind := stringField(u, "sessionUpdate")
 	if kind == "replay_complete" {
 		s.complete = true
@@ -85,6 +83,8 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 				s.last = kind
 			}
 			u["messageId"] = encoded(strconv.Itoa(s.seq))
+		case "compaction_update", "compaction_summary_chunk":
+			s.last = ""
 		case "tool_call", "tool_call_update":
 			normalizeV1Tool(u)
 			u["sessionUpdate"] = encoded("tool_call_update")
@@ -94,7 +94,18 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 		}
 	}
 	raw, _ := json.Marshal(u)
-	_, _ = s.projection.Apply(raw)
+	changed, _ := s.projection.Apply(raw)
+	// Manual compaction can complete between turns, with no subsequent
+	// prompt response or idle update to trigger a checkpoint.
+	if changed && !s.replay && (kind == "compaction_update" || kind == "compaction_summary_chunk") {
+		id := stringField(u, "compactionId")
+		if entry, ok := s.projection.FinishedCompaction(id); ok {
+			message := sessions.Message{Role: entry.Role, Body: entry.Text, SourceID: id}
+			if err := sessions.SaveTranscript(s.cwd, s.id, []sessions.Message{message}, false); err != nil {
+				slog.Error("save ACP compaction", "error", err)
+			}
+		}
+	}
 }
 
 // V1 diffs carry the old and new file text directly. The v2 projection

@@ -25,15 +25,6 @@ func (q *Queries) AppendMessage(ctx context.Context, arg AppendMessageParams) er
 	return err
 }
 
-const clearTranscript = `-- name: ClearTranscript :exec
-DELETE FROM messages WHERE session_id = ?
-`
-
-func (q *Queries) ClearTranscript(ctx context.Context, sessionID string) error {
-	_, err := q.db.ExecContext(ctx, clearTranscript, sessionID)
-	return err
-}
-
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE id = ?
 `

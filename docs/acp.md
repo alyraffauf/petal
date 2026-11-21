@@ -12,7 +12,7 @@ acp_v2 = true
 
 The TUI requests v2. When an editor requests v2, `petal acp` checks the adapters that offer the selected model. If any negotiate v2, Petal routes among those accounts. If none do, it opens fresh v1 connections. An editor that requests v1 continues to use v1.
 
-On v2, the prompt response acknowledges the user's message. The TUI keeps the session busy until the adapter reports idle. Reopening requests a full replay. Petal replaces the local search index after the replay and resume succeed.
+On v2, the prompt response acknowledges the user's message. The TUI keeps the session busy until the adapter reports idle. Reopening requests a full replay. After a successful replay, Petal adds newly observed messages and compaction events to the project archive. Earlier text and its search references survive empty or compacted replays. A revised message body gets its own immutable row. The archive records first-observed order. For messages without adapter IDs, replay matches occurrences by role and exact text. Identical anonymous occurrences cannot always be distinguished across separate compacted snapshots. Explicit session deletion removes the archive and its search entries.
 
 ## Capability negotiation
 

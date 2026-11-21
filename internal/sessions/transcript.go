@@ -2,14 +2,35 @@ package sessions
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 
+	"petal/internal/acpv2"
 	"petal/internal/sessions/sessiondb"
 )
 
-type Message struct{ Role, Body string }
+type Message struct{ Role, Body, SourceID string }
 
-func SaveTranscript(cwd, id string, messages []Message, replace bool) error {
+// ProjectTranscript retains adapter IDs. V1 chunk IDs used by the proxy to
+// assemble text are local to a turn; only tool and compaction IDs survive replay.
+func ProjectTranscript(t *acpv2.Transcript, nativeIDs bool) []Message {
+	var out []Message
+	t.Visit(func(id string, e acpv2.Entry) {
+		if !nativeIDs && e.Role != "tool" && e.Role != "compaction" {
+			id = ""
+		}
+		out = append(out, Message{e.Role, e.Text, id})
+	})
+	return out
+}
+
+// The archive is ordered by first observation. Its row IDs never change.
+// Live unkeyed messages always append. During replay, consume previously
+// observed occurrences once each so repeated identical turns retain multiplicity.
+func SaveTranscript(cwd, id string, messages []Message, replay bool) error {
+	if len(messages) == 0 {
+		return nil
+	}
 	db, err := openStore(cwd)
 	if err != nil {
 		return err
@@ -21,36 +42,93 @@ func SaveTranscript(cwd, id string, messages []Message, replace bool) error {
 		return err
 	}
 	defer tx.Rollback()
-	q := sessiondb.New(tx)
-	if replace {
-		// A load commonly replays exactly what was indexed at turn completion.
-		// Keep the FTS rows (and search result row IDs) for an identical replay.
-		rows, err := q.ReadTranscript(ctx, id)
-		if err != nil {
-			return err
-		}
-		equal := len(rows) == len(messages)
-		if equal {
-			for i, row := range rows {
-				if row.Role != messages[i].Role || row.Body != messages[i].Body {
-					equal = false
-					break
-				}
-			}
-		}
-		if equal {
-			return nil
-		}
-		if err := q.ClearTranscript(ctx, id); err != nil {
+	skip := make([]bool, len(messages))
+	if replay {
+		if err := matchReplay(tx, id, messages, skip); err != nil {
 			return err
 		}
 	}
-	for _, m := range messages {
-		if err := q.AppendMessage(ctx, sessiondb.AppendMessageParams{SessionID: id, Role: m.Role, Body: m.Body}); err != nil {
+	for i, m := range messages {
+		if skip[i] {
+			continue
+		}
+		if !replay && m.SourceID != "" {
+			var exists bool
+			if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=? AND role=? AND source_id=? AND body=?)", id, m.Role, m.SourceID, m.Body).Scan(&exists); err != nil {
+				return err
+			}
+			if exists {
+				continue
+			}
+		}
+		if _, err := tx.Exec("INSERT INTO messages(session_id,role,body,source_id) VALUES(?,?,?,NULLIF(?,''))", id, m.Role, m.Body, m.SourceID); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// Reserve exact source matches before assigning anonymous legacy rows. A
+// keyed and an unkeyed occurrence in one replay cannot claim the same row.
+func matchReplay(tx *sql.Tx, id string, messages []Message, skip []bool) error {
+	type textKey struct{ role, body string }
+	counts := map[textKey]int{}
+	legacy := map[textKey][]int64{}
+	known := map[Message]bool{}
+	rows, err := tx.Query("SELECT rowid,role,body,COALESCE(source_id,'') FROM messages WHERE session_id=? ORDER BY rowid", id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row int64
+		var m Message
+		if err := rows.Scan(&row, &m.Role, &m.Body, &m.SourceID); err != nil {
+			return err
+		}
+		k := textKey{m.Role, m.Body}
+		counts[k]++
+		if m.SourceID == "" {
+			legacy[k] = append(legacy[k], row)
+		} else {
+			known[m] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	seen := map[Message]bool{}
+	for i, m := range messages {
+		if m.SourceID == "" {
+			continue
+		}
+		if seen[m] {
+			skip[i] = true
+			continue
+		}
+		seen[m] = true
+		k := textKey{m.Role, m.Body}
+		if !known[m] {
+			ids := legacy[k]
+			if len(ids) == 0 {
+				continue
+			}
+			if _, err := tx.Exec("UPDATE messages SET source_id=? WHERE rowid=?", m.SourceID, ids[0]); err != nil {
+				return err
+			}
+			legacy[k] = ids[1:]
+		}
+		skip[i] = true
+		counts[k]--
+	}
+	for i, m := range messages {
+		k := textKey{m.Role, m.Body}
+		if m.SourceID == "" && counts[k] > 0 {
+			skip[i] = true
+			counts[k]--
+		}
+	}
+	return nil
 }
 
 func Transcript(cwd, id string) ([]sessiondb.ReadTranscriptRow, error) {

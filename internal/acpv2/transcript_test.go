@@ -73,3 +73,25 @@ func TestTranscriptReplayUsesFreshState(t *testing.T) {
 	apply(t, log, chunk, true)
 	assertEntries(t, log, acpv2.Entry{Role: "assistant", Text: "hi"})
 }
+
+func TestCompactionSummaryAndStableSource(t *testing.T) {
+	log := acpv2.NewTranscript()
+	for _, raw := range []string{
+		`{"sessionUpdate":"compaction_summary_chunk","compactionId":"c2","content":{"type":"text","text":"draft"}}`,
+		`{"sessionUpdate":"compaction_update","compactionId":"c2","status":"completed","summary":[{"type":"text","text":"final"}]}`,
+	} {
+		if _, err := log.Apply([]byte(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := 0
+	log.Visit(func(id string, e acpv2.Entry) {
+		count++
+		if id != "c2" || e.Role != "compaction" || e.Text != "Context compaction completed\n\nfinal" {
+			t.Fatalf("%s %+v", id, e)
+		}
+	})
+	if count != 1 {
+		t.Fatalf("got %d events", count)
+	}
+}

@@ -55,7 +55,7 @@ func usageDetails(u *acp.SessionUsageUpdate) string {
 	return s
 }
 
-const compactionRole = "compaction"
+const compactionRole = "compaction-ref"
 
 type compaction struct {
 	status          acp.CompactionStatus
@@ -78,6 +78,12 @@ func (m *terminal) compaction(id string) *compaction {
 		m.pending.push(event{role: compactionRole, text: id})
 	}
 	return c
+}
+
+func (m *terminal) indexIdleCompaction(id string) {
+	if !m.Busy && m.connection == connected && m.compactions[id].status != acp.CompactionStatusInProgress {
+		m.indexMessages([]entry{{compactionRole, id}}, false)
+	}
 }
 
 func (c *compaction) append(block acp.ContentBlock) {
