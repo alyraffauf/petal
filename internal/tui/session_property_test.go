@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -19,6 +20,10 @@ func TestPropertyACPAdapter(t *testing.T) {
 	account := os.Getenv("PETAL_TEST_ADAPTER_PROFILE")
 	if account == "" {
 		return
+	}
+	nativeID := os.Getenv("PETAL_TEST_NATIVE_ID")
+	if nativeID == "" {
+		nativeID = "shared-native-id"
 	}
 	scan := bufio.NewScanner(os.Stdin)
 	output := json.NewEncoder(os.Stdout)
@@ -41,14 +46,14 @@ func TestPropertyACPAdapter(t *testing.T) {
 			result["protocolVersion"] = 1
 			result["agentCapabilities"] = map[string]any{"loadSession": true, "sessionCapabilities": map[string]any{"fork": map[string]any{}}}
 		case "session/new":
-			result["sessionId"] = "shared-native-id"
+			result["sessionId"] = nativeID
 		case "session/fork":
-			if req.Params.SessionID != "shared-native-id" {
+			if req.Params.SessionID != nativeID {
 				t.Fatal("fork sent to incorrect parent")
 			}
 			result["sessionId"] = "fork-id"
 		case "session/load", "test/whichProfile":
-			if req.Params.SessionID != "shared-native-id" && req.Params.SessionID != "fork-id" {
+			if req.Params.SessionID != nativeID && req.Params.SessionID != "fork-id" {
 				t.Fatalf("invalid native session ID %q", req.Params.SessionID)
 			}
 			result["profile"] = account
@@ -87,6 +92,8 @@ func FuzzSessionResumePlacement(f *testing.F) {
 		// Each operation opens a fresh client in one of two projects.
 		// The oracle remembers only the most recently created account per (project, model).
 		var saved [2][2]string
+		var savedID [2][2]string
+		var created [2]int
 		for step, op := range trace[:min(len(trace), 8)] {
 			project := int(op / 3 % 2)
 			model := int(op / 6 % 2)
@@ -98,6 +105,13 @@ func FuzzSessionResumePlacement(f *testing.F) {
 			if !resume {
 				want = names[action]
 				c.PinnedAccount = want
+				// Each profile has its own ID sequence. Two profiles can issue
+				// the same ID, but a profile never reuses one for a new session.
+				created[action]++
+				savedID[project][model] = strconv.Itoa(created[action])
+			}
+			for _, account := range c.Accounts {
+				account.Env["PETAL_TEST_NATIVE_ID"] = savedID[project][model]
 			}
 			func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
