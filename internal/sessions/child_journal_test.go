@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"reflect"
 	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -278,4 +279,53 @@ func TestChildResultConsumptionIsScopedAndIdempotent(t *testing.T) {
 	}
 	checkJournalPage(t, ctx, cwd, binding, 0, 1, []ChildActivity{}, &result)
 	unread(map[string]bool{"child": false, "sibling": true})
+}
+
+func TestConcurrentChildJournalRejectsInvalidWrites(t *testing.T) {
+	cwd, _ := childJournalFixture(t)
+	binding := ChildBinding{ParentID: "parent", ChildID: "active"}
+	release, err := StartChild(t.Context(), cwd, binding, Record{ID: "active", Model: "model"}, "task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range 12 {
+		wg.Go(func() {
+			<-start
+			ctx := t.Context()
+			b := binding
+			var want error
+			switch i % 3 {
+			case 1:
+				b.ParentID = "other"
+				want = ErrChildNotFound
+			case 2:
+				ctx = canceled
+				want = context.Canceled
+			}
+			_, err := AppendChildActivity(ctx, cwd, b, ChildActivity{Kind: "tool"})
+			if !errors.Is(err, want) {
+				t.Errorf("append %d: got %v, want %v", i, err, want)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	release()
+	page, err := ReadChildActivity(t.Context(), cwd, binding, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Activities) != 4 || page.Result == nil || page.Result.Status != "failed" {
+		t.Fatalf("recovered journal: %+v", page)
+	}
+	for i, a := range page.Activities {
+		if a.Sequence != int64(i+1) {
+			t.Fatalf("sequence %d at index %d", a.Sequence, i)
+		}
+	}
 }

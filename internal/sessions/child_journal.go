@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"petal/internal/paths"
 	"petal/internal/sessions/sessiondb"
+	"sync"
 	"syscall"
 )
 
@@ -104,7 +105,12 @@ func StartChild(ctx context.Context, cwd string, binding ChildBinding, record Re
 		release()
 		return nil, err
 	}
-	err = childTransaction(ctx, cwd, func(tx *sql.Tx) error {
+	store, err := openChildStore(ctx, cwd, dir)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	err = runChildTransaction(ctx, store.db, func(tx *sql.Tx) error {
 		q := sessiondb.New(tx)
 		if _, err := q.GetSession(ctx, binding.ChildID); !errors.Is(err, sql.ErrNoRows) {
 			if err != nil {
@@ -122,10 +128,14 @@ func StartChild(ctx context.Context, cwd string, binding ChildBinding, record Re
 		return q.AppendMessage(ctx, sessiondb.AppendMessageParams{SessionID: record.ID, Role: "user", Body: task})
 	})
 	if err != nil {
+		store.release(dir)
 		release()
 		return nil, err
 	}
-	return release, nil
+	return sync.OnceFunc(func() {
+		release()
+		store.release(dir)
+	}), nil
 }
 
 func recoverInterruptedChild(ctx context.Context, tx *sql.Tx, cwd string, binding ChildBinding) error {
@@ -166,7 +176,7 @@ func AppendChildActivity(ctx context.Context, cwd string, binding ChildBinding, 
 		return 0, errors.New("child activity requires a kind and optional valid JSON")
 	}
 	var sequence int64
-	err := childTransaction(ctx, cwd, func(tx *sql.Tx) error {
+	write := func(tx *sql.Tx) error {
 		result, err := childResult(ctx, tx, binding)
 		if err != nil {
 			return err
@@ -178,7 +188,18 @@ func AppendChildActivity(ctx context.Context, cwd string, binding ChildBinding, 
 			INSERT INTO child_activities (child_id, sequence, kind, data)
 			SELECT ?, COALESCE(MAX(sequence), 0) + 1, ?, ? FROM child_activities WHERE child_id = ?
 			RETURNING sequence`, binding.ChildID, activity.Kind, []byte(activity.Data), binding.ChildID).Scan(&sequence)
-	})
+	}
+	dir, err := storeDir(cwd)
+	if err != nil {
+		return 0, err
+	}
+	if store := retainChildStore(dir); store != nil {
+		defer store.release(dir)
+		err = store.append(ctx, write)
+	} else {
+		err = childTransaction(ctx, cwd, write)
+	}
+
 	if err != nil {
 		return 0, err
 	}
@@ -307,6 +328,10 @@ func childTransaction(ctx context.Context, cwd string, run func(*sql.Tx) error) 
 		return err
 	}
 	defer db.Close()
+	return runChildTransaction(ctx, db, run)
+}
+
+func runChildTransaction(ctx context.Context, db *sql.DB, run func(*sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
