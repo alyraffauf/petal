@@ -42,6 +42,28 @@ func SaveTranscript(cwd, id string, messages []Message, replay bool) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Bound index probes so a full replay still uses one archive scan.
+	const maxReplayProbes = 16
+	if replay && len(messages) <= maxReplayProbes {
+		allKnown := true
+		for _, m := range messages {
+			if m.SourceID == "" {
+				allKnown = false
+				break
+			}
+			known, err := hasTranscriptMessage(tx, id, m)
+			if err != nil {
+				return err
+			}
+			if !known {
+				allKnown = false
+				break
+			}
+		}
+		if allKnown {
+			return tx.Commit()
+		}
+	}
 	skip := make([]bool, len(messages))
 	if replay {
 		if err := matchReplay(tx, id, messages, skip); err != nil {
@@ -53,8 +75,8 @@ func SaveTranscript(cwd, id string, messages []Message, replay bool) error {
 			continue
 		}
 		if !replay && m.SourceID != "" {
-			var exists bool
-			if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=? AND role=? AND source_id=? AND body=?)", id, m.Role, m.SourceID, m.Body).Scan(&exists); err != nil {
+			exists, err := hasTranscriptMessage(tx, id, m)
+			if err != nil {
 				return err
 			}
 			if exists {
@@ -66,6 +88,12 @@ func SaveTranscript(cwd, id string, messages []Message, replay bool) error {
 		}
 	}
 	return tx.Commit()
+}
+
+func hasTranscriptMessage(tx *sql.Tx, id string, m Message) (bool, error) {
+	var exists bool
+	err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=? AND role=? AND source_id=? AND body=?)", id, m.Role, m.SourceID, m.Body).Scan(&exists)
+	return exists, err
 }
 
 // Reserve exact source matches before assigning anonymous legacy rows. A

@@ -149,9 +149,15 @@ func TestCompactedReplayKeepsReferencesUntilDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	c1 := Message{"compaction", "first summary", "c1"}
-	c2 := Message{"compaction", "second summary", "c2"}
+	// Adapters may revise a summary under the same source ID.
+	c2 := Message{"compaction", "second summary", c1.SourceID}
 	sameText := Message{"assistant", "yes", "a2"}
 	save(true, c1, reply)
+	save(true, c2)
+	rowsAfterRevision, err := Transcript(cwd, id)
+	if err != nil || len(rowsAfterRevision) != 4 || rowsAfterRevision[3].Body != c2.Body {
+		t.Fatalf("revised summary: %+v, %v", rowsAfterRevision, err)
+	}
 	save(true, c2, sameText)
 	save(true, c2, sameText)
 	save(true)
