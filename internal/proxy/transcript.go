@@ -93,7 +93,7 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 		case "compaction_update", "compaction_summary_chunk":
 			s.last = ""
 		case "tool_call", "tool_call_update":
-			normalizeV1Tool(u)
+			acpv2.NormalizeV1Tool(u)
 			u["sessionUpdate"] = encoded("tool_call_update")
 			s.last = ""
 		default:
@@ -112,28 +112,6 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 				slog.Error("save ACP compaction", "error", err)
 			}
 		}
-	}
-}
-
-// V1 diffs carry the old and new file text directly. The v2 projection
-// expects structured changes, so turn these into ordinary text blocks.
-func normalizeV1Tool(u Object) {
-	var blocks []Object
-	if json.Unmarshal(u["content"], &blocks) != nil || len(blocks) == 0 {
-		return
-	}
-	changed := false
-	for i, part := range blocks {
-		if stringField(part, "type") != "diff" {
-			continue
-		}
-		body := stringField(part, "path") + "\nBefore:\n" + stringField(part, "oldText") + "\nAfter:\n" + stringField(part, "newText")
-		content, _ := json.Marshal(Object{"type": encoded("text"), "text": encoded(body)})
-		blocks[i] = Object{"type": encoded("content"), "content": content}
-		changed = true
-	}
-	if changed {
-		u["content"], _ = json.Marshal(blocks)
 	}
 }
 

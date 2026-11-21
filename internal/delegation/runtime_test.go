@@ -320,3 +320,12 @@ func TestDelegatedToolResultIsSearchable(t *testing.T) {
 		})
 	}
 }
+
+func TestV1ChildEditDiffInTranscript(t *testing.T) {
+	r := run{version: 1}
+	r.projectTool("tool_call_update", []byte(`{"sessionUpdate":"tool_call_update","toolCallId":"edit","content":[{"type":"diff","path":"main.go","oldText":"old","newText":"new"}]}`))
+	entries := r.transcript.Entries()
+	if len(entries) != 1 || !strings.Contains(entries[0].Text, "main.go\nBefore:\nold\nAfter:\nnew") {
+		t.Fatalf("unexpected archived edit: %+v", entries)
+	}
+}

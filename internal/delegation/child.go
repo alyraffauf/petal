@@ -376,6 +376,9 @@ func (r *run) projectTool(kind string, raw json.RawMessage) {
 			fields["content"], _ = json.Marshal(content)
 		}
 	}
+	if r.version == 1 {
+		acpv2.NormalizeV1Tool(fields)
+	}
 	normalized, _ := json.Marshal(fields)
 	_, _ = r.transcript.Apply(normalized)
 }

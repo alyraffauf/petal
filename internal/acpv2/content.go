@@ -98,3 +98,24 @@ func projectDiff(fields map[string]json.RawMessage) (string, bool) {
 	}
 	return strings.Join(paths, "\n"), true
 }
+
+// NormalizeV1Tool converts v1 edit diffs to text for the transcript projector.
+func NormalizeV1Tool(fields map[string]json.RawMessage) {
+	var blocks []json.RawMessage
+	if json.Unmarshal(fields["content"], &blocks) != nil {
+		return
+	}
+	changed := false
+	for i, raw := range blocks {
+		var diff struct{ Type, Path, OldText, NewText string }
+		if json.Unmarshal(raw, &diff) != nil || diff.Type != "diff" {
+			continue
+		}
+		body := diff.Path + "\nBefore:\n" + diff.OldText + "\nAfter:\n" + diff.NewText
+		blocks[i], _ = json.Marshal(map[string]any{"type": "content", "content": map[string]string{"type": "text", "text": body}})
+		changed = true
+	}
+	if changed {
+		fields["content"], _ = json.Marshal(blocks)
+	}
+}
