@@ -16,6 +16,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"petal/internal/agentmcp"
 	"petal/internal/delegation"
 	"petal/internal/processgroup"
 	"petal/internal/routing"
@@ -63,7 +64,7 @@ type proxy struct {
 	backends            map[string]*backend
 	accounts            []string
 	capabilities        acp.AgentCapabilities
-	delegation          *delegationTools
+	delegation          *agentmcp.Tools
 	delegationRuntime   *delegation.Runtime
 	delegationMu        sync.Mutex
 	delegationEndpoints map[string]*delegationEndpoint
