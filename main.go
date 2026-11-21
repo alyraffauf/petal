@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"petal/internal/agentmcp"
 	"petal/internal/proxy"
 	"petal/internal/routing"
 	"petal/internal/tui"
@@ -64,7 +65,7 @@ func main() {
 	bridge := &cobra.Command{
 		Use: "delegation-mcp SOCKET", Hidden: true, Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return proxy.RelayDelegationMCP(cmd.Context(), args[0], os.Stdin, os.Stdout)
+			return agentmcp.Relay(cmd.Context(), args[0], os.Getenv(agentmcp.TokenEnv), os.Stdin, os.Stdout)
 		},
 	}
 	root.AddCommand(server, bridge)

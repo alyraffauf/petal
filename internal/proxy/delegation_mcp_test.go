@@ -8,17 +8,15 @@ import (
 	"io"
 	"maps"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"petal/internal/agentmcp"
 	"petal/internal/delegation"
 	"petal/internal/routing"
 	"petal/internal/sessions"
@@ -188,11 +186,11 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 					t.Fatalf("expected just the Petal MCP server: %s", result["fixtureMCP"])
 				}
 				var env []routing.MCPEnvVariable
-				if json.Unmarshal(servers[0]["env"], &env) != nil || len(env) != 1 || env[0].Name != delegationTokenEnv || env[0].Value == "" {
+				if json.Unmarshal(servers[0]["env"], &env) != nil || len(env) != 1 || env[0].Name != agentmcp.TokenEnv || env[0].Value == "" {
 					t.Fatal("missing bridge credential")
 				}
 				server := servers[0]
-				if stringField(server, "name") != delegationServerName || !filepath.IsAbs(stringField(server, "command")) || (version == 2 && stringField(server, "type") != "stdio") {
+				if stringField(server, "name") != routing.DelegationMCPServerName || !filepath.IsAbs(stringField(server, "command")) || (version == 2 && stringField(server, "type") != "stdio") {
 					t.Fatalf("invalid stdio definition: %s", jsonValue(server))
 				}
 				var args []string
@@ -206,7 +204,7 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				}
 				go func() {
 					defer relay.Close()
-					_ = relayDelegationMCP(t.Context(), args[1], env[0].Value, relay, relay)
+					_ = agentmcp.Relay(t.Context(), args[1], env[0].Value, relay, relay)
 				}()
 				wire := proxyWireTest{t, bufio.NewScanner(client), json.NewEncoder(client)}
 				wire.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
@@ -220,7 +218,10 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 				t.Helper()
 				w.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, name, args))
 				frame := w.read()
-				var result mcpToolResult
+				var result struct {
+					Content []struct{ Text string }
+					IsError bool
+				}
 				if json.Unmarshal(frame["result"], &result) != nil || len(result.Content) != 1 || result.IsError != wantError {
 					t.Fatalf("%s: unexpected MCP response %s", name, jsonValue(frame))
 				}
@@ -389,7 +390,7 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 }
 
 func TestDelegationSocketRejectsMissingCredential(t *testing.T) {
-	endpoint, err := newDelegationEndpoint(t.Context(), t.TempDir(), delegationTools{})
+	endpoint, err := newDelegationEndpoint(t.Context(), t.TempDir(), agentmcp.Tools{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,12 +424,12 @@ func TestDelegationResultRemainsUnreadWhenRelayOutputFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := delegation.New(ctx, nil, nil)
-	endpoint, err := newDelegationEndpoint(ctx, cwd, delegationTools{read: runtime.Read, wait: runtime.Wait})
+	endpoint, err := newDelegationEndpoint(ctx, cwd, agentmcp.Tools{Read: runtime.Read, Wait: runtime.Wait})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer endpoint.cancel()
-	endpoint.parent = binding.ParentID
+	endpoint.record.ID = binding.ParentID
 	close(endpoint.ready)
 
 	start := func(failDelivery bool) (proxyWireTest, <-chan error) {
@@ -442,7 +443,7 @@ func TestDelegationResultRemainsUnreadWhenRelayOutputFails(t *testing.T) {
 		go func() {
 			defer relay.Close()
 			output := terminalResultWriter{relay, failDelivery}
-			done <- relayDelegationMCP(ctx, endpoint.server.Args[1], endpoint.server.Env[0].Value, relay, output)
+			done <- agentmcp.Relay(ctx, endpoint.server.Args[1], endpoint.server.Env[0].Value, relay, output)
 		}()
 		wire := proxyWireTest{t, bufio.NewScanner(client), json.NewEncoder(client)}
 		wire.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
@@ -530,7 +531,7 @@ func TestDelegationResultRemainsUnreadWhenRelayOutputFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	wire.send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}`)
-	wire.send(fmt.Sprintf(`{"jsonrpc":"2.0","method":%q,"params":%s}`, deliveryAckMethod, frame["delivery"]))
+	wire.send(fmt.Sprintf(`{"jsonrpc":"2.0","method":%q,"params":%s}`, "petal/ackResultDelivery", frame["delivery"]))
 	wire.send(`{"jsonrpc":"2.0","id":3,"method":"ping"}`)
 	if result := wire.read(); !strings.Contains(string(result["response"]), `"id":3`) {
 		t.Fatalf("missing ping response while the store is locked: %s", jsonValue(result))
@@ -558,89 +559,4 @@ func (w terminalResultWriter) Write(data []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 	return w.Writer.Write(data)
-}
-
-func TestHistorySearchAdvertisement(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-
-		var list struct {
-			Tools []struct {
-				Name, Description string
-				InputSchema       struct {
-					Properties map[string]struct{ Enum []string }
-					Not        struct {
-						Required   []string
-						Properties map[string]struct{ Const string }
-					}
-				}
-			}
-		}
-		if err := json.Unmarshal(delegationToolList(enabled), &list); err != nil {
-			t.Fatal(err)
-		}
-		found := false
-		for _, tool := range list.Tools {
-			if tool.Name != "petal_search_history" {
-				continue
-			}
-			found = true
-
-			if slices.Contains(tool.InputSchema.Properties["mode"].Enum, "hybrid") != enabled || strings.Contains(strings.ToLower(tool.Description), "hybrid") != enabled {
-				t.Fatal(tool)
-			}
-			if enabled && (!slices.Equal(tool.InputSchema.Not.Required, []string{"mode", "before"}) || tool.InputSchema.Not.Properties["mode"].Const != "hybrid") {
-				t.Fatal(tool.InputSchema)
-			}
-		}
-		if !found {
-			t.Fatal("missing history tool")
-		}
-	}
-}
-
-func TestConfiguredEmbeddingSearch(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("PETAL_TEST_EMBED_KEY", "fixture")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/embeddings" || r.Header.Get("Authorization") != "Bearer fixture" {
-			t.Error("incorrect endpoint or credential")
-			http.Error(w, "denied", 401)
-			return
-		}
-		var req struct {
-			Model string
-			Input []string
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Model != "MixedCase" || (len(req.Input) != 1 || (req.Input[0] != "battery" && req.Input[0] != "vehicle")) {
-			t.Errorf("unexpected request: %+v", req)
-			http.Error(w, "bad request", 400)
-			return
-		}
-		io.WriteString(w, `{"model":"MixedCase-v2","data":[{"index":0,"embedding":[0,2]}]}`)
-	}))
-	defer srv.Close()
-	cwd := t.TempDir()
-	file := filepath.Join(cwd, "config.toml")
-	if err := os.WriteFile(file, []byte(fmt.Sprintf("[history.embeddings]\nprovider='openai-compatible'\nbase_url='%s/v1'\nmodel='MixedCase'\napi_key_env='PETAL_TEST_EMBED_KEY'\n", srv.URL)), 0600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := routing.Load(file, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = sessions.Create(cwd, sessions.Record{ID: "p", Model: "test"}); err != nil {
-		t.Fatal(err)
-	}
-	if err = sessions.SaveTranscript(cwd, "p", []sessions.Message{{Role: "user", Body: "vehicle"}}, false); err != nil {
-		t.Fatal(err)
-	}
-	endpoint := delegationEndpoint{cwd: cwd, parent: "p"}
-	value, _, err := endpoint.invoke(t.Context(), delegationTools{embeddings: cfg.History.Embeddings}, "petal_search_history", json.RawMessage(`{"query":"battery"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	page := value.(sessions.HistoryMatches)
-	if page.Retrieval != "hybrid" || len(page.Hits) != 1 || page.Hits[0].Snippet != "vehicle" || page.Hits[0].Source != "semantic" {
-		t.Fatal(page)
-	}
 }

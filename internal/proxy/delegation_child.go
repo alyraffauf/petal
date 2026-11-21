@@ -11,6 +11,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"petal/internal/agentmcp"
 	"petal/internal/delegation"
 	"petal/internal/routing"
 )
@@ -21,10 +22,10 @@ func (p *proxy) configureDelegation() {
 	}
 	runtime := delegation.New(p.lifetime, p.openDelegatedChild, p.requestDelegatedPermission)
 	p.delegationRuntime = runtime
-	p.delegation = &delegationTools{
-		embeddings: p.History.Embeddings,
-		catalog:    p.delegationCatalog,
-		delegate: func(ctx context.Context, parent, cwd, model, task string) (any, error) {
+	p.delegation = &agentmcp.Tools{
+		Embeddings: p.History.Embeddings,
+		Catalog:    p.delegationCatalog,
+		Delegate: func(ctx context.Context, parent, cwd, model, task string) (any, error) {
 			endpoint := p.endpoint(parent)
 			if endpoint == nil || endpoint.cwd != cwd {
 				return nil, fmt.Errorf("parent session is no longer connected")
@@ -39,8 +40,8 @@ func (p *proxy) configureDelegation() {
 				Next string `json:"next"`
 			}{child, "Continue independent work or finish your turn. Petal will prompt this connected session when the child finishes. Use petal_read or petal_wait if you need activity sooner."}, err
 		},
-		read: runtime.Read,
-		wait: runtime.Wait,
+		Read: runtime.Read,
+		Wait: runtime.Wait,
 	}
 }
 
@@ -80,24 +81,6 @@ func (p *proxy) delegationCatalog(search string) any {
 		Omitted     int                `json:"omitted"`
 		ParentModel string             `json:"parentModel"`
 	}{targets, omitted, p.Model}
-}
-
-func childPageResponse(page delegation.Page) any {
-	next := "Call petal_wait with the same child_id and after set to nextAfter when you need more activity."
-	switch {
-	case page.HasMore:
-		next = "Call petal_read with after set to nextAfter to read the rest of the journal."
-	case page.Status == "completed":
-		next = "Use result.data.answer as the child's final reply."
-	case page.Result != nil:
-		next = "The child stopped. Inspect result.status and result.data before deciding whether to retry."
-	case page.Status == "needs_input":
-		next = "A child permission request needs the user's decision. Surface it to the user."
-	}
-	return struct {
-		delegation.Page
-		Next string `json:"next"`
-	}{page, next}
 }
 
 type delegatedConnection struct {
