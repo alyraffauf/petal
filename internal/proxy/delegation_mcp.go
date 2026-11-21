@@ -42,6 +42,7 @@ type delegationEndpoint struct {
 	wakes  wakeQueue
 	cancel context.CancelFunc
 	ready  chan struct{}
+	record sessions.Record
 	parent string // published by closing ready
 	cwd    string
 	server routing.MCPServer
@@ -229,11 +230,7 @@ func (p *proxy) bindDelegation(endpoint *delegationEndpoint, account, parent str
 	if cwd := p.delegationCwds[parent]; cwd != "" && cwd != endpoint.cwd {
 		return acp.NewInvalidParams("parent session belongs to a different working directory")
 	}
-	if _, err := sessions.Create(endpoint.cwd, sessions.Record{
-		ID: parent, Model: p.Model, Account: account, Opened: time.Now(),
-	}); err != nil {
-		return fmt.Errorf("record delegation parent session: %w", err)
-	}
+	endpoint.record = sessions.Record{ID: parent, Model: p.Model, Account: account, Opened: time.Now()}
 	p.closeDelegationLocked(parent)
 	if p.delegationEndpoints == nil {
 		p.delegationEndpoints = make(map[string]*delegationEndpoint)
@@ -554,6 +551,9 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 		}
 		if strings.TrimSpace(args.Model) == "" || strings.TrimSpace(args.Task) == "" {
 			return nil, "", errors.New("model and task are required")
+		}
+		if _, err := sessions.Create(endpoint.cwd, endpoint.record); err != nil {
+			return nil, "", err
 		}
 		value, err := tools.delegate(ctx, endpoint.parent, endpoint.cwd, args.Model, args.Task)
 		return value, "", err
