@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bloomfx.dev/bloom"
 	"context"
 	"fmt"
 	"strings"
@@ -136,7 +137,7 @@ func TestControlCenterFollowsSavedDelegationWithoutLiveSession(t *testing.T) {
 	if !strings.Contains(view, "Unread result") || !strings.Contains(view, "completed") {
 		t.Fatalf("reopened center did not show the unread result and terminal status:\n%s", view)
 	}
-	p.saved[0].UnreadChildResult = false
+	p.refreshChildStatuses(childStatusesChanged{statuses: map[sessions.ChildBinding]sessions.ChildStatus{nodes[1].binding: {State: "completed"}}})
 	p.selectNode(p.nodes()[1])
 	if view := ansi.Strip(p.View().Content); strings.Contains(view, "Unread result") {
 		t.Fatalf("center still shows the consumed result as unread:\n%s", view)
@@ -279,4 +280,21 @@ func runningChildrenPicker(t *testing.T) *picker {
 	p.saved = records
 	t.Cleanup(p.stopWatchingChildStatuses)
 	return p
+}
+
+func TestControlCenterUpdatesAfterChildPermissionDismissal(t *testing.T) {
+	p := newPicker(routing.Config{})
+	p.history = true
+	p.saved = []sessions.Record{{ID: "root"}}
+	q := &permission{sessionID: "child"}
+	m := &terminal{root: bloom.New(), launch: p, h: &harness{record: p.saved[0]}, ask: q, screen: screen{connection: connected}}
+	p.center.owner = m
+	m.agents.children = []agentDetail{{id: "child", parent: "root", state: "running"}}
+	if rows := p.nodes(); rows[1].state != "needs input" {
+		t.Fatalf("pending permission: %+v", rows)
+	}
+	m.Update(dismissedQuestion{q: q})
+	if rows := p.nodes(); rows[1].state != "running" {
+		t.Fatalf("dismissed permission: %+v", rows)
+	}
 }

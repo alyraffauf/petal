@@ -431,6 +431,9 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}()
 	}
 	if batch, ok := msg.(outputBatch); ok {
+		if m.launch != nil {
+			m.launch.center.cache = centerCache{}
+		}
 		visibleBefore := len(m.Messages)
 		for _, e := range batch.events {
 			m.recordOutput(e)
@@ -517,6 +520,13 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, cmd
+		}
+		// Session events can change permissions, ownership and conversation turns.
+		// Picker navigation and animation reuse the current tree.
+		switch msg.(type) {
+		case animationFrame, tea.KeyReleaseMsg:
+		default:
+			m.launch.center.cache = centerCache{}
 		}
 	}
 	ui := m.root.Update(msg)

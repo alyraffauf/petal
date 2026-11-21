@@ -77,6 +77,7 @@ func newPicker(c routing.Config) *picker {
 func (m *picker) showHistory() {
 	m.history = true
 	m.historyError = ""
+	m.center.cache = centerCache{}
 	m.saved = nil
 	cwd, err := os.Getwd()
 	if err == nil {
@@ -278,6 +279,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t.picker != m || !m.history {
 			return m, nil
 		}
+		m.center.cache = centerCache{}
 		known := make(map[string]int, len(m.saved))
 		for index, r := range m.saved {
 			known[r.ID] = index
