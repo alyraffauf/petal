@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -528,14 +529,23 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 		var args struct {
 			Reference int64
 			Offset    int
-			Context   int
+			Context   json.RawMessage
 		}
 		if len(arguments) > 0 {
 			if err := decode(&args); err != nil {
 				return nil, "", err
 			}
 		}
-		value, err := sessions.ReadHistoryWithContext(ctx, endpoint.cwd, endpoint.parent, args.Reference, args.Offset, args.Context)
+		count := 0
+		if args.Context != nil {
+			// JSON Schema integers include decimal and exponent spellings.
+			n, ok := new(big.Rat).SetString(string(args.Context))
+			if !ok || !n.IsInt() || !n.Num().IsInt64() || n.Sign() < 0 || n.Num().Int64() > 8 {
+				return nil, "", errors.New("context must be an integer between 0 and 8")
+			}
+			count = int(n.Num().Int64())
+		}
+		value, err := sessions.ReadHistoryWithContext(ctx, endpoint.cwd, endpoint.parent, args.Reference, args.Offset, count)
 		return value, "", err
 	case "petal_capabilities":
 		var args struct{ Search string }
