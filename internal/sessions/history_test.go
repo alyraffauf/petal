@@ -13,7 +13,7 @@ func TestReadHistoryAfterCompaction(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	body := strings.Repeat("🌺", 4096) + "tail"
+	body := "x\x00" + strings.Repeat("🌺", 1024) + "tail"
 	for _, message := range []Message{{Role: "tool", Body: body}, {Role: "compaction", Body: "summary one"}, {Role: "compaction", Body: "summary two"}} {
 		if err := SaveTranscript(project, "parent", []Message{message}, true); err != nil {
 			t.Fatal(err)
@@ -30,7 +30,7 @@ func TestReadHistoryAfterCompaction(t *testing.T) {
 	last := read(0, 0)
 	first := read(read(last.Previous, 0).Previous, 0)
 	tail := read(first.Reference, first.NextOffset)
-	if last.Text != "summary two" || first.NextOffset != 4096 || first.Text+tail.Text != body || tail.NextOffset != 0 {
+	if last.Text != "summary two" || first.NextOffset != 4094 || first.Text+tail.Text != body || tail.NextOffset != 0 {
 		t.Fatal("incomplete archive traversal")
 	}
 	if _, err := ReadHistory(t.Context(), project, "other", first.Reference, 0); err == nil {
