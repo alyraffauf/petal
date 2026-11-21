@@ -42,6 +42,7 @@ type backend struct {
 	hello  acp.InitializeResponse
 }
 type proxy struct {
+	recorder       *transcriptRecorder
 	editorSessions *editorSessions
 
 	embedded      bool
@@ -298,10 +299,15 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 			defer stop()
 		}
 	}
+	finishTranscript, err := p.beforeTranscript(method, name, native, delegationParent, params)
+	if err != nil {
+		return nil, err
+	}
 	result, err := forward[json.RawMessage](b.conn, ctx, method, params)
 	if promptEndpoint != nil && err == nil {
 		result = promptEndpoint.continueV1(wakeCtx, b, native, result)
 	}
+	err = finishTranscript(err)
 	if err != nil {
 		var re *acp.RequestError
 		if public != "" && errors.As(err, &re) && re.Code == -32002 {
@@ -350,6 +356,12 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	}
 	if endpoint != nil {
 		if err := p.bindDelegation(endpoint, name, delegationParent); err != nil {
+			return nil, err
+		}
+	}
+	if p.recorder != nil && (method == "session/new" || method == "session/fork") {
+		id := stringField(session, "sessionId")
+		if _, err := p.recorder.open(id, id, stringField(params, "cwd"), name, p.Model); err != nil {
 			return nil, err
 		}
 	}
@@ -426,6 +438,14 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	b := &backend{close: stop, exited: exited}
 	wire := &adapterWire{Writer: in, lifetime: lifetime, updates: make(chan struct{}, 128), nativeV2: version == 2}
 	reader := incoming(out, wire)
+	if receive == nil && p.recorder != nil {
+		reader.observeUpdate = func(raw json.RawMessage) {
+			var args Object
+			if json.Unmarshal(raw, &args) == nil {
+				p.recorder.observe(p.publicID(name, stringField(args, "sessionId")), version, args.member("update"))
+			}
+		}
+	}
 	if receive != nil {
 		reader.sessionUpdate = func(raw json.RawMessage) {
 			_, _ = receive(lifetime, "session/update", p.routeChildParams(name, raw), true)
@@ -622,6 +642,9 @@ func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Re
 	lifetime, stop := context.WithCancel(lifetime)
 	editorWire := &adapterWire{Writer: out, lifetime: lifetime}
 	p := proxy{editorWire: editorWire, editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
+	if !embedded {
+		p.recorder = &transcriptRecorder{}
+	}
 	if !embedded && c.Model == "" {
 		p.Model = c.DefaultModel()
 		if len(c.ModelNames()) > 1 {

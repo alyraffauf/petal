@@ -156,6 +156,7 @@ type wireReader struct {
 	scan          *bufio.Scanner
 	pending       []byte
 	adapter       *adapterWire
+	observeUpdate func(json.RawMessage)
 	sessionUpdate func(json.RawMessage)
 }
 
@@ -199,12 +200,17 @@ func (r *wireReader) Read(dst []byte) (int, error) {
 					return 0, fmt.Errorf("invalid ACP method name")
 				}
 				if head.ID == nil {
-					if method == "session/update" && r.sessionUpdate != nil {
+					if method == "session/update" && (r.sessionUpdate != nil || r.observeUpdate != nil) {
 						// Journal child updates before a later ACP response can complete.
 						var update struct{ Params json.RawMessage }
 						_ = json.Unmarshal(line, &update)
-						r.sessionUpdate(update.Params)
-						continue
+						if r.observeUpdate != nil {
+							r.observeUpdate(update.Params)
+						}
+						if r.sessionUpdate != nil {
+							r.sessionUpdate(update.Params)
+							continue
+						}
 					}
 					// Bound incoming replay updates before the SDK's notification
 					// queue, which disconnects on overflow. The proxy forwards

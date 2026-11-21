@@ -343,7 +343,12 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 		p.cancelDelegation(canonical)
 	}
 	closingEndpoint := p.delegationEndpointToClose(method, canonical)
+	finishTranscript, err := p.beforeTranscript(method, name, stringField(params, "sessionId"), canonical, params)
+	if err != nil {
+		return nil, err
+	}
 	result, err := p.relayV2Backend(ctx, b, method, params, notification)
+	err = finishTranscript(err)
 	if err != nil {
 		var rpc *acp.RequestError
 		if public != "" && errors.As(err, &rpc) && rpc.Code == -32002 {
@@ -382,6 +387,11 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			}
 		}
 		fork["sessionId"] = encoded(routed)
+		if p.recorder != nil {
+			if _, err := p.recorder.open(routed, routed, stringField(params, "cwd"), name, p.Model); err != nil {
+				return nil, err
+			}
+		}
 		return fork, nil
 	}
 	if method != "session/new" {
@@ -397,6 +407,10 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 		if err := p.bindDelegation(endpoint, name, stringField(session, "sessionId")); err != nil {
 			return nil, err
 		}
+	}
+	if err == nil && p.recorder != nil {
+		id := stringField(session, "sessionId")
+		_, err = p.recorder.open(id, id, stringField(params, "cwd"), name, p.Model)
 	}
 	return session, err
 }

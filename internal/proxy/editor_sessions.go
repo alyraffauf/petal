@@ -97,7 +97,7 @@ func (p *proxy) editorRoute(ctx context.Context, model string) (*proxy, error) {
 	if !slices.Contains(p.ModelNames(), model) {
 		return nil, acp.NewInvalidParams("unknown Petal model")
 	}
-	route := &proxy{Config: p.Config, editor: p.editor, editorWire: p.editorWire, lifetime: p.lifetime}
+	route := &proxy{recorder: p.recorder, Config: p.Config, editor: p.editor, editorWire: p.editorWire, lifetime: p.lifetime}
 	route.Model = model
 	route.configureDelegation()
 	var hello Object

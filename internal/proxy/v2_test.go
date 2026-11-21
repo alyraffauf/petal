@@ -139,6 +139,12 @@ func TestNativeV2Adapter(t *testing.T) {
 				}
 			}
 			reply(id, Object{"messageId": encoded("accepted")})
+			if stringField(params, "idempotencyKey") == "transcript" {
+				update(`{"sessionUpdate":"user_message","messageId":"u","content":[{"type":"text","text":"lookup"}]}`)
+				update(`{"sessionUpdate":"agent_message_chunk","messageId":"a","content":{"type":"text","text":"nee"}}`)
+				update(`{"sessionUpdate":"agent_message_chunk","messageId":"a","content":{"type":"text","text":"dle"}}`)
+				update(`{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn"}`)
+			}
 		case "auth/login":
 			if !hasString(params, "methodId") || stringField(params, "methodId") != "" {
 				t.Fatal("native auth ID changed", params)

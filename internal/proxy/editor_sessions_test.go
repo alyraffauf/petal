@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"net"
@@ -9,7 +10,9 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+
 	"petal/internal/routing"
+	"petal/internal/sessions"
 )
 
 func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
@@ -91,5 +94,37 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 		if stringField(result, "account") != account {
 			t.Fatalf("%s resumed on %s", model, result["account"])
 		}
+	}
+}
+
+func TestExternalV2TurnIsSearchableAtIdle(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	editor, server := net.Pipe()
+	t.Cleanup(func() { editor.Close(); server.Close() })
+	if err := editor.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	cfg := routing.Config{ACPv2: true, Model: "m", Accounts: map[string]routing.Account{"work": nativeAccount(t, `{"session":{}}`)}}
+	connect(t.Context(), cfg, server, server, false, nil)
+	wire := proxyWireTest{t, bufio.NewScanner(editor), json.NewEncoder(editor)}
+	wire.send(v2Initialize)
+	wire.read()
+	wire.send(`{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":` + string(encoded(cwd)) + `,"mcpServers":[]}}`)
+	id := wire.read().member("result")["sessionId"]
+	wire.send(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":` + string(id) + `,"idempotencyKey":"transcript","prompt":[{"type":"text","text":"lookup"}]}}`)
+	for {
+		frame := wire.read()
+		if stringField(frame.member("params").member("update"), "state") == "idle" {
+			break
+		}
+	}
+	hits, err := sessions.Search(cwd, "work", "needle", 0, 5)
+	if err != nil || len(hits) != 1 || hits[0].Role != "assistant" {
+		t.Fatalf("persisted hits %v: %v", hits, err)
+	}
+	rows, err := sessions.Transcript(cwd, hits[0].Session)
+	if err != nil || len(rows) != 2 || rows[0].Body != "lookup" || rows[1].Body != "needle" {
+		t.Fatalf("persisted transcript %v: %v", rows, err)
 	}
 }
