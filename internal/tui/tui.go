@@ -821,13 +821,12 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case acp.SessionCompactionUpdate:
 		id := string(t.CompactionId)
 		m.compaction(id).update(t)
-		if !m.Busy && m.connection == connected && t.Status != acp.CompactionStatusInProgress {
-			m.indexMessages([]entry{{compactionRole, id}}, false)
-		}
+		m.indexIdleCompaction(id)
 		cmd = m.listen
 	case acp.SessionUpdateCompactionSummaryChunk:
-		c := m.compaction(string(t.CompactionId))
-		c.append(t.Content)
+		id := string(t.CompactionId)
+		m.compaction(id).append(t.Content)
+		m.indexIdleCompaction(id)
 		cmd = m.listen
 	case agentCommandUpdate:
 		m.agentCommands = t

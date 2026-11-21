@@ -97,9 +97,9 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 	changed, _ := s.projection.Apply(raw)
 	// Manual compaction can complete between turns, with no subsequent
 	// prompt response or idle update to trigger a checkpoint.
-	if changed && !s.replay && kind == "compaction_update" && stringField(u, "status") != "in_progress" {
+	if changed && !s.replay && (kind == "compaction_update" || kind == "compaction_summary_chunk") {
 		id := stringField(u, "compactionId")
-		if entry, ok := s.projection.Lookup("compaction", id); ok {
+		if entry, ok := s.projection.FinishedCompaction(id); ok {
 			message := sessions.Message{Role: entry.Role, Body: entry.Text, SourceID: id}
 			if err := sessions.SaveTranscript(s.cwd, s.id, []sessions.Message{message}, false); err != nil {
 				slog.Error("save ACP compaction", "error", err)

@@ -44,14 +44,19 @@ func (t *Transcript) Entries() []Entry {
 	return entries
 }
 
-// Lookup returns the current visible entry for one adapter ID and role.
-func (t *Transcript) Lookup(role, id string) (Entry, bool) {
+// FinishedCompaction returns the latest summary after its terminal status arrives.
+func (t *Transcript) FinishedCompaction(id string) (Entry, bool) {
+	const role = "compaction"
 	index, ok := t.positions[transcriptKey{role: role, id: id}]
 	if !ok {
 		return Entry{}, false
 	}
-	text := t.rows[index].text()
-	return Entry{Role: role, Text: text}, text != ""
+	row := &t.rows[index]
+	switch row.status {
+	case "completed", "failed", "cancelled":
+		return Entry{Role: role, Text: row.text()}, true
+	}
+	return Entry{}, false
 }
 
 // Visit yields visible entries with their adapter IDs in first-seen order.

@@ -80,6 +80,12 @@ func (m *terminal) compaction(id string) *compaction {
 	return c
 }
 
+func (m *terminal) indexIdleCompaction(id string) {
+	if !m.Busy && m.connection == connected && m.compactions[id].status != acp.CompactionStatusInProgress {
+		m.indexMessages([]entry{{compactionRole, id}}, false)
+	}
+}
+
 func (c *compaction) append(block acp.ContentBlock) {
 	c.writeBlock(block)
 	if c.status != acp.CompactionStatusInProgress {
