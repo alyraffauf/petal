@@ -22,7 +22,8 @@ func (p *proxy) configureDelegation() {
 	runtime := delegation.New(p.lifetime, p.openDelegatedChild, p.requestDelegatedPermission)
 	p.delegationRuntime = runtime
 	p.delegation = &delegationTools{
-		catalog: p.delegationCatalog,
+		embeddings: p.History.Embeddings,
+		catalog:    p.delegationCatalog,
 		delegate: func(ctx context.Context, parent, cwd, model, task string) (any, error) {
 			endpoint := p.endpoint(parent)
 			if endpoint == nil || endpoint.cwd != cwd {

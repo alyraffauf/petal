@@ -178,3 +178,30 @@ Set `PETAL_ACP_TRACE` to an absolute file path in the ACP server's environment a
 Filter by `request` to follow a prompt or configuration change. Each record includes a timestamp and elapsed microseconds. Compare `adapter_response_received` with `editor_response_write` to see how long Petal held a reply. A successful write means the editor transport accepted the bytes. On ACP v2 the prompt reply acknowledges insertion. Match `adapter_session` with a later `adapter_idle` event to see when the adapter reported idle.
 
 The trace records model and effort selections, including the adapter's acknowledged value when supplied. It omits message bodies, tool arguments, and raw session IDs. The file grows until tracing is disabled.
+
+## History embeddings
+
+With no settings, Petal tries the local Ollama model `all-minilm:latest` on
+ordinary archive searches. To always use keyword search, set `provider = "off"`
+under `[history.embeddings]`. This setting replaces `PETAL_HISTORY_EMBEDDINGS`.
+An installation that previously left embeddings disabled should set `off`
+to keep keyword-only searches.
+
+To send search queries and scoped transcript excerpts to a configured
+OpenAI-compatible embeddings API, add the following table to `config.toml`.
+Petal appends `/embeddings` to the base URL. Set `model` to the embedding
+model served there. Omit `api_key_env` if the endpoint accepts anonymous requests.
+
+```toml
+[history.embeddings]
+provider = "openai-compatible"
+base_url = "https://inference.example.org/v1"
+model = "my-embedding-model"
+api_key_env = "INFERENCE_TOKEN"
+```
+
+For native Ollama, set `provider = "ollama"` and supply its model name and
+server root URL. Both providers support HTTPS and loopback HTTP. Petal reads
+the bearer token from the named environment variable when making a request.
+If the token is missing, the search falls back to keywords. Petal follows
+no redirects. [Search scope, coverage and limits](acp.md#local-semantic-history-search)

@@ -59,12 +59,12 @@ Opening a 20-row viewport on 4,000 Markdown messages fell from about 143 ms to 0
 
 ### Local semantic history search
 
-Start Ollama on 127.0.0.1:11434, run `ollama pull all-minilm`, and start
-Petal with `PETAL_HISTORY_EMBEDDINGS=1`. Call `petal_search_history` with
-`{"query":"car battery replacement","mode":"hybrid"}`. Open a hit with
-`petal_read_transcript` using its original reference. Omitting mode keeps
-keyword search and its newest-first cursor. Hybrid returns one page of up to
-ten hits. It alternates keyword and semantic hits, starting with keyword,
+By default, `petal_search_history` tries local Ollama at `127.0.0.1:11434`
+with `all-minilm:latest`. Install the model with `ollama pull all-minilm` to
+enable semantic matches. Petal uses keyword search if the model or service
+is unavailable. Use `mode: "fts"` to request keyword search explicitly.
+A request with a `before` cursor continues a keyword search. Hybrid search
+returns a single page of up to ten hits. It alternates keyword and semantic hits, starting with keyword,
 and removes duplicates. A busy or unavailable provider yields keyword hits
 with `retrieval: "fts"`. Hybrid requests label each hit's `source` as
 `keyword` or `semantic`. Queries containing an underscore between letters
@@ -73,7 +73,7 @@ a letter or digit use keyword retrieval. This keeps similar codes such as
 `ERR_SOCKET_902` from matching `ERR_SOCKET_901` by vector similarity.
 Keyword matching still uses the archive's FTS tokenizer.
 
-Only hybrid calls send text to the local Ollama service. Petal ignores HTTP
+Automatic and explicitly hybrid calls can send text to the configured service. Petal ignores HTTP
 proxies and redirects for this request. Each call embeds the query and up to
 eight missing message prefixes (1,024 characters each) from the newest 256
 messages in the authenticated session and its delegated descendants. Repeated
@@ -87,12 +87,14 @@ provider fails or a concurrent writer blocks vector backfill, Petal returns
 current keyword hits. Caller cancellation ends the search. Both rankings
 use the same archive snapshot taken after embedding.
 
-The project archive stores 1,536 bytes of vector data per indexed message
+The project archive stores four bytes per embedding dimension per indexed message
 plus SQLite overhead. Editing or deleting the message invalidates its vector.
 Older vectors outside the window remain on disk until deletion. Petal checks the
-local tag digest from Ollama’s `/api/tags` before and after embedding. A
+model tag digest from Ollama’s `/api/tags` before and after embedding. A
 changed digest during the request yields keyword results. Cached vectors
 with a different or unknown digest are rebuilt in the usual batches.
+
+For OpenAI-compatible endpoints the cache uses the provider, base URL, configured model, returned model ID and vector dimensions. Use a versioned model ID when replacing a deployment. Set the endpoint and credential reference in [configuration.md](configuration.md#history-embeddings).
 
 With Ollama running, reproduce the fixture using
 `PETAL_EVAL_EMBEDDINGS=1 go test -count=1 -v ./internal/sessions -run TestLocalHybridEvaluation`.
