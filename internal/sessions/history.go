@@ -6,6 +6,8 @@ import (
 	"errors"
 	"slices"
 	"unicode/utf8"
+
+	"petal/internal/sessions/sessiondb"
 )
 
 // Message references are stable within the endpoint's project archive.
@@ -51,13 +53,23 @@ func ReadHistoryWithContext(ctx context.Context, cwd, parent string, reference i
 		return passage, err
 	}
 	defer db.Close()
+	var reader sessiondb.DBTX = db
+	if count > 0 {
+		// Keep the scope check, navigation references, and neighbors on one snapshot.
+		tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return passage, err
+		}
+		defer tx.Rollback()
+		reader = tx
+	}
 	// A zero reference opens the latest message in the caller's thread.
 	const query = historyScope + `SELECT m.rowid,m.session_id,m.role,substr(CAST(m.body AS BLOB),?,4097),
 		coalesce((SELECT max(rowid) FROM messages WHERE session_id=m.session_id AND rowid<m.rowid),0),
 		coalesce((SELECT min(rowid) FROM messages WHERE session_id=m.session_id AND rowid>m.rowid),0)
 		FROM messages m WHERE m.rowid=coalesce(nullif(?,0),(SELECT max(rowid) FROM messages WHERE session_id=?))
 		AND m.session_id IN (SELECT id FROM scope)`
-	err = db.QueryRowContext(ctx, query, parent, int64(offset)+1, reference, parent).Scan(&passage.Reference, &passage.Session, &passage.Role, &passage.Text, &passage.Previous, &passage.Next)
+	err = reader.QueryRowContext(ctx, query, parent, int64(offset)+1, reference, parent).Scan(&passage.Reference, &passage.Session, &passage.Role, &passage.Text, &passage.Previous, &passage.Next)
 	if errors.Is(err, sql.ErrNoRows) {
 		return passage, errors.New("no saved message at this reference")
 	}
@@ -91,7 +103,7 @@ func ReadHistoryWithContext(ctx context.Context, cwd, parent string, reference i
 			order = "rowid < ? ORDER BY rowid DESC"
 			dest = &passage.Before
 		}
-		rows, err := db.QueryContext(ctx, `SELECT rowid,role,substr(CAST(body AS BLOB),1,?) FROM messages WHERE session_id=? AND `+order+" LIMIT ?", remaining+1, passage.Session, passage.Reference, count)
+		rows, err := reader.QueryContext(ctx, `SELECT rowid,role,substr(CAST(body AS BLOB),1,?) FROM messages WHERE session_id=? AND `+order+" LIMIT ?", remaining+1, passage.Session, passage.Reference, count)
 		if err != nil {
 			return passage, err
 		}
