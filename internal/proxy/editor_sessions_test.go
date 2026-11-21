@@ -49,6 +49,9 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 		if err := json.Unmarshal(session["configOptions"], &opts); err != nil || len(opts) != 1 || len(opts[0].Options) != 2 || opts[0].Options[0].Value != "claude/default" || opts[0].Options[1].Value != "codex/default" {
 			t.Fatalf("editor picker: %s", session["configOptions"])
 		}
+		if model == "codex/default" {
+			call("session/set_config_option", Object{"sessionId": session["sessionId"], "configId": encoded("model"), "value": encoded("claude/default")})
+		}
 		ids[model] = session["sessionId"]
 		call("session/set_config_option", Object{"configId": encoded("model"), "value": encoded(model), "sessionId": session["sessionId"]})
 	}

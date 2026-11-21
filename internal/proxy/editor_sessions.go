@@ -34,6 +34,7 @@ type editorSession struct {
 	setup    Object
 	route    *proxy
 	routedID string
+	options  json.RawMessage
 }
 
 func (p *proxy) modelOption() Object {
@@ -164,9 +165,21 @@ func (p *proxy) bindEditorSession(ctx context.Context, s *editorSession, id, mod
 	if err = saveEditorBinding(s.cwd, id, routed); err != nil {
 		return nil, err
 	}
-	s.route, s.routedID, s.setup = route, routed, nil
+	s.route, s.routedID = route, routed
+	s.options = opened["configOptions"]
 	route.aliases.Store(routed, id)
 	return opened, nil
+}
+
+func (p *proxy) pendingModelOptions(s *editorSession) Object {
+	picker := p.modelOption()
+	picker["currentValue"] = encoded(s.route.Model)
+	var options []Object
+	_ = json.Unmarshal(s.options, &options)
+	options = slices.DeleteFunc(options, func(o Object) bool { return stringField(o, "category") == "model" || stringField(o, "id") == "model" })
+	options = append([]Object{picker}, options...)
+	data, _ := json.Marshal(options)
+	return Object{"configOptions": data}
 }
 
 func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMessage) (any, error) {
@@ -244,7 +257,21 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		return nil, unknownSession(id)
 	}
 	s.mu.Lock()
-	if s.route == nil {
+	selecting := method == "session/set_model" || method == "session/set_config_option" && stringField(params, "configId") == "model"
+	requested := stringField(params, "value")
+	if method == "session/set_model" {
+		requested = stringField(params, "modelId")
+	}
+	repick := selecting && s.route != nil && s.setup != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
+	if selecting && s.route != nil && s.setup != nil && requested == s.route.Model {
+		options := p.pendingModelOptions(s)
+		s.mu.Unlock()
+		if method == "session/set_model" {
+			return Object{}, nil
+		}
+		return options, nil
+	}
+	if s.route == nil || repick {
 		if method == "session/options" {
 			s.mu.Unlock()
 			return map[string]any{"configOptions": []Object{p.modelOption()}}, nil
@@ -254,41 +281,51 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			s.mu.Unlock()
 			return Object{}, nil
 		}
+		if method == "session/cancel" {
+			s.mu.Unlock()
+			return Object{}, nil
+		}
+		if !selecting && method != "session/prompt" && !strings.HasPrefix(method, notificationPrefix) {
+			s.mu.Unlock()
+			return nil, acp.NewInvalidParams("choose a model before configuring adapter options")
+		}
 		if strings.HasPrefix(method, notificationPrefix) {
 			s.mu.Unlock()
 			return nil, nil
 		}
 		model := p.Model
-		selecting := method == "session/set_model" || method == "session/set_config_option" && stringField(params, "configId") == "model"
+		oldRoute, oldID := s.route, s.routedID
 		if selecting {
 			model = stringField(params, "value")
 			if method == "session/set_model" {
 				model = stringField(params, "modelId")
 			}
 		}
-		opened, err := p.bindEditorSession(ctx, s, id, model)
+		_, err := p.bindEditorSession(ctx, s, id, model)
 		if err != nil {
 			s.mu.Unlock()
 			return nil, err
 		}
+		if repick && oldID != s.routedID {
+			oldRoute.aliases.Delete(oldID)
+			closeParams, _ := json.Marshal(Object{"sessionId": encoded(oldID)})
+			_, _ = oldRoute.handle(ctx, "session/close", closeParams)
+		}
 		if selecting {
+			returnOptions := p.pendingModelOptions(s)
 			s.mu.Unlock()
 			if method == "session/set_model" {
 				return Object{}, nil
 			}
-			opts := opened["configOptions"]
-			if opts == nil {
-				opts = json.RawMessage("[]")
-			}
-			return Object{"configOptions": opts}, nil
+			return returnOptions, nil
 		}
-		if opts := opened["configOptions"]; opts != nil {
-			update := Object{"sessionUpdate": encoded("config_option_update"), "configOptions": opts}
-			data, _ := json.Marshal(update)
-			if err := p.editor.SendNotification(ctx, "session/update", Object{"sessionId": encoded(id), "update": data}); err != nil {
-				s.mu.Unlock()
-				return nil, err
-			}
+
+	}
+	if method == "session/prompt" && s.setup != nil {
+		s.setup = nil
+		if s.options != nil {
+			update, _ := json.Marshal(Object{"sessionUpdate": encoded("config_option_update"), "configOptions": s.options})
+			_ = p.editor.SendNotification(ctx, "session/update", Object{"sessionId": encoded(id), "update": update})
 		}
 	}
 	route, routed := s.route, s.routedID
@@ -297,6 +334,20 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	params["sessionId"] = encoded(routed)
 	raw, _ = json.Marshal(params)
 	result, err := route.handle(ctx, method, raw)
+	if err == nil && method == "session/set_config_option" {
+		if data, ok := result.(json.RawMessage); ok {
+			var response Object
+			if json.Unmarshal(data, &response) == nil && response["configOptions"] != nil {
+				s.mu.Lock()
+				if s.route == route && s.setup != nil {
+					s.options = response["configOptions"]
+					response["configOptions"] = p.pendingModelOptions(s)["configOptions"]
+					result = response
+				}
+				s.mu.Unlock()
+			}
+		}
+	}
 	if err == nil && method == "session/delete" {
 		if path, err := editorBindingPath(s.cwd, id); err == nil {
 			_ = os.Remove(path)
