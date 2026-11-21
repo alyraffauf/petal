@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	bloomfx.dev/bloom v0.0.0-alpha.9
 	charm.land/bubbles/v2 v2.2.1
+	charm.land/bubbles/v2/petaltextarea v0.0.0
 	charm.land/bubbletea/v2 v2.1.2
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.1.1
@@ -68,3 +69,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
+
+replace charm.land/bubbles/v2/petaltextarea => ./third_party/textarea
