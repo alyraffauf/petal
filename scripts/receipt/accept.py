@@ -79,7 +79,7 @@ sid = None
 
 def wait_for_child(
     base: pathlib.Path, label: str
-) -> tuple[str, pathlib.Path, tuple[int, str, str]]:
+) -> tuple[str, pathlib.Path, str, tuple[int, str] | None, bool]:
     receipts = root / "receipts"
     for _ in range(90):
         database = next(base.glob("state/**/index.sqlite"), None)
@@ -88,17 +88,41 @@ def wait_for_child(
                 for receipt in receipts.read_text().splitlines():
                     if not receipt.startswith(label + " "):
                         continue
+                    bound = db.execute(
+                        """
+                        SELECT b.child_id, b.result_data FROM child_bindings b
+                        JOIN messages task ON task.session_id=b.child_id
+                        WHERE b.result_status IS NOT NULL AND task.role='user'
+                        AND instr(task.body,?)>0 LIMIT 1
+                        """,
+                        (label,),
+                    ).fetchone()
+                    if not bound:
+                        continue
+                    session, terminal = bound
                     source = db.execute(
                         """
-                        SELECT m.rowid, m.session_id, m.body
-                        FROM messages m JOIN child_bindings b ON b.child_id=m.session_id
-                        WHERE m.role='assistant' AND instr(m.body,?)>0
-                        AND b.result_status IS NOT NULL ORDER BY m.rowid LIMIT 1
-                    """,
-                        (receipt,),
+                        SELECT rowid, body FROM messages
+                        WHERE session_id=? AND role IN ('tool','assistant')
+                        AND instr(body,?)>0 ORDER BY rowid LIMIT 1
+                        """,
+                        (session, receipt),
                     ).fetchone()
-                    if source:
-                        return receipt, database, source
+                    activities = db.execute(
+                        "SELECT data FROM child_activities WHERE child_id=?",
+                        (session,),
+                    )
+                    suffix = receipt.removeprefix(label).strip()
+                    journal_exposed = any(suffix in json.dumps(json.loads(data))
+                                          for (data,) in activities)
+                    result = json.loads(terminal or "{}")
+                    final_exposed = suffix in json.dumps(result)
+                    print(json.dumps({
+                        "receipt_in_archive": bool(source),
+                        "receipt_in_activity": journal_exposed,
+                        "receipt_in_terminal_result": final_exposed,
+                    }), flush=True)
+                    return receipt, database, session, source, journal_exposed or final_exposed
         time.sleep(1)
     raise RuntimeError("child did not archive an issued receipt before deadline")
 
@@ -240,10 +264,11 @@ for phase in ("new", "reopen"):
                 label = "orchid-" + secrets.token_hex(4)
                 turn(
                     3,
-                    f"Delegate to child model {child}/echo. Tell the child to call its echo MCP tool with text {label} and save the exact entire returned receipt in its final message. You yourself should just acknowledge completion without quoting or retrieving the receipt, even on wake.",
+                    f"Delegate to child model {child}/echo. Have the child obtain a receipt for {label} from its receipt service. Ask it to give only a completion acknowledgment in its final answer. You yourself should just acknowledge completion without quoting or retrieving the receipt, even on wake.",
                 )
 
-                receipt, database, (source, session, body) = wait_for_child(base, label)
+                receipt, database, session, archived, journal_exposed = wait_for_child(base, label)
+                source, body = archived or (None, None)
                 for i in (4, 5):
                     turn(i, "/compact")
                     if any(
@@ -295,7 +320,7 @@ for phase in ("new", "reopen"):
                 replay = receipt in (base / "reopen.wire").read_text()
                 turn(
                     3,
-                    "What exact receipt did the child get? Quote the original child message and give me its archive reference.",
+                    "What was the verbatim receipt the child received, and what is the original source reference?",
                 )
                 answer = words(updates)
                 found, opened, prior_tool = check_retrieval(
@@ -304,10 +329,11 @@ for phase in ("new", "reopen"):
                 leaked = decoy in json.dumps(updates)
                 turn(
                     4,
-                    f"Check whether archive reference {decoy_ref} can be opened with the transcript reader. Report whether access succeeded.",
+                    f"Check whether archive reference {decoy_ref} is accessible. Report whether access succeeded.",
                 )
                 denied = check_denial(updates, decoy_ref, decoy)
                 report = {
+                    "journal_contains_receipt": journal_exposed,
                     "decoy_exposed": leaked or decoy in json.dumps(updates),
                     "parent_context_contains_receipt": prior_context,
                     "receipt_before_archive_search": prior_tool,
@@ -340,6 +366,7 @@ for phase in ("new", "reopen"):
                             "decoy_denied",
                         )
                     )
+                    or journal_exposed
                     or prior_context
                     or prior_tool
                     or replay
