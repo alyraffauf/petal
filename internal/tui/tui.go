@@ -501,7 +501,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch msg.(type) {
-		case tea.MouseClickMsg, tea.MouseWheelMsg, tea.WindowSizeMsg, tea.KeyPressMsg, tea.PasteMsg, routeBalances, remoteSessions, transcriptResults, childCancellationResult, childStatusesChanged:
+		case tea.MouseClickMsg, tea.MouseWheelMsg, tea.WindowSizeMsg, tea.KeyPressMsg, tea.PasteMsg, routeBalances, remoteSessions, transcriptResults, childCancellationResult, childStatusesChanged, centerFrame:
 			_, cmd := m.launch.Update(msg)
 			if m.launch == nil {
 				return m, cmd

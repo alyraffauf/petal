@@ -78,6 +78,10 @@ func petalMasthead(w, frame int, title, status string, working bool, background 
 		statusColor = ribbonPalette[195+int(26*math.Sin(phase*2))]
 	}
 	sample := func(x, y float64) string {
+		if working {
+			wave := (1 + math.Cos(2*math.Pi*(x*1.85+y*.34)-float64(frame)*.13)) / 2
+			return ribbonPalette[25+int(190*wave*wave)]
+		}
 		center := .51 + .46*math.Sin(8*x+phase) + .18*math.Sin(17*x-phase*.55)
 		edge := y - center
 		envelope := math.Exp(-13 * (x - .55) * (x - .55))

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"image"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -446,7 +447,7 @@ func (p *picker) centerView() tea.View {
 	}
 	w, h := max(1, p.width), max(1, p.height)
 	project := p.center.project
-	rows := []string{petalMasthead(w, 0, "control center", petalLabel(project), false, p.background)}
+	rows := []string{petalMasthead(w, p.motion.frame, "control center", petalLabel(project), p.workingTide(), p.background)}
 	filtering := !p.center.inspect && (p.center.finding || p.search.Value() != "")
 	nodes := p.nodes()
 	index := p.selectedNode(nodes)
@@ -524,6 +525,7 @@ func (p *picker) centerView() tea.View {
 	spaceBelow := height - treeRows
 	showOrchid := !p.monochrome && left < w && left >= orchidWidth+4 && spaceBelow >= len(orchidRows)+2 && !filtering
 	orchidTop := treeRows + (spaceBelow-len(orchidRows))/2
+	orchid := p.motion.orchid()
 	for y := range height {
 		row := richBand("", left, petalText, p.background, false)
 		i := first + y - headerGap
@@ -538,7 +540,7 @@ func (p *picker) centerView() tea.View {
 			}
 			row = richBand(line, left, petalMuted, p.background, false)
 		} else if showOrchid && y >= orchidTop && y < orchidTop+len(orchidRows) {
-			art := strings.Repeat(" ", (left-orchidWidth)/2) + orchidRows[y-orchidTop]
+			art := strings.Repeat(" ", (left-orchidWidth)/2) + orchid[y-orchidTop]
 			row = richBand(art, left, petalText, p.background, false)
 		}
 		if left < w {
@@ -653,10 +655,11 @@ func (p *picker) nodeLine(n controlNode, width int, selected bool) string {
 	titleWidth := labelWidth - iconWidth
 	bg := p.background
 	span := func(text string, cols, offset int, fg string, bold bool) string {
-		if !selected {
+		progress := p.motion.arrival(n.id)
+		if !selected && progress < 0 {
 			return richBand(text, cols, fg, bg, bold)
 		}
-		return selectedTreeSpan(text, cols, offset, width-indent, fg, bold)
+		return selectedTreeSpan(text, cols, offset, width-indent, fg, bold, selected, progress, bg)
 	}
 	row := richBand("", indent, petalText, bg, false)
 	row += span(" "+mark+" ", iconWidth, 0, iconColor, false)
@@ -694,7 +697,7 @@ func (p *picker) permissionPreview(n controlNode, width int) []entry {
 }
 
 // Color terminal cells by their displayed column, including wide graphemes.
-func selectedTreeSpan(text string, width, offset, total int, fg string, bold bool) string {
+func selectedTreeSpan(text string, width, offset, total int, fg string, bold, selected bool, progress float64, bg string) string {
 	if width <= 0 {
 		return ""
 	}
@@ -706,13 +709,27 @@ func selectedTreeSpan(text string, width, offset, total int, fg string, bold boo
 		weight = "1"
 	}
 	fmt.Fprintf(&b, "\x1b[%s;38;2;%sm", weight, fg)
-	last := -1
+	last := "unset"
 	for len(text) > 0 {
 		cluster, cells := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
 		step := min(12, offset*13/max(1, total))
-		if step != last {
-			fmt.Fprintf(&b, "\x1b[48;2;%d;%d;%dm", 42+step, 31+step/2, 47+step/2)
-			last = step
+		color := bg
+		if selected {
+			color = treeBands[step]
+		}
+		if progress >= 0 {
+			distance := math.Abs(float64(offset)/float64(max(1, total)) - (progress*1.5 - .25))
+			if distance < .24 {
+				color = arrivalBands[int((1-distance/.24)*15)]
+			}
+		}
+		if color != last {
+			if color == "" {
+				b.WriteString("\x1b[49m")
+			} else {
+				fmt.Fprintf(&b, "\x1b[48;2;%sm", color)
+			}
+			last = color
 		}
 		b.WriteString(cluster)
 		offset += cells

@@ -136,6 +136,13 @@ func (p *picker) refreshChildStatuses(msg childStatusesChanged) tea.Cmd {
 		// A cancellation response may already have applied a newer result.
 		binding := sessions.ChildBinding{ParentID: record.DelegatedParent, ChildID: record.ID}
 		if status, ok := msg.statuses[binding]; ok && (childIsRunning(record.DelegationStatus) || status.State == record.DelegationStatus) {
+			if !record.UnreadChildResult && status.Unread {
+				m := &p.motion
+				if m.arrivals == nil {
+					m.arrivals = make(map[string]time.Time)
+				}
+				m.arrivals[record.ID] = time.Now()
+			}
 			record.DelegationStatus = status.State
 			record.UnreadChildResult = status.Unread
 		}

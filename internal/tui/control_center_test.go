@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"bloomfx.dev/bloom/anim"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	acp "github.com/coder/acp-go-sdk"
@@ -203,6 +204,9 @@ func TestControlCenterCancelsOnlySelectedDelegation(t *testing.T) {
 }
 
 func TestControlCenterRefreshesAfterIndependentChildCompletion(t *testing.T) {
+	previous := anim.Motion()
+	anim.SetMotion(false)
+	t.Cleanup(func() { anim.SetMotion(previous) })
 	p := runningChildrenPicker(t)
 	p.center.filter = 2
 	initial := p.Init()

@@ -190,7 +190,7 @@ func (p *picker) graphView() tea.View {
 	w, h := max(1, p.width), max(1, p.height)
 	focus := p.graphName(p.center.graphID)
 	links := p.graphLinks(p.center.graphID)
-	rows := []string{petalMasthead(w, 0, "agent graph", fmt.Sprintf("%d agents", len(p.graphOwnership())), false, p.background)}
+	rows := []string{petalMasthead(w, p.motion.frame, "agent graph", fmt.Sprintf("%d agents", len(p.graphOwnership())), p.workingTide(), p.background)}
 	if h >= 6 {
 		rows = append(rows, richBand("", w, petalText, p.background, false))
 	}

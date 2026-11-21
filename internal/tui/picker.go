@@ -27,6 +27,7 @@ import (
 
 type balances []routing.Quota
 type picker struct {
+	motion                                  centerMotion
 	monochrome                              bool
 	transcripts                             *transcriptSearch
 	pointerPane, pointerRows, pointerDetail image.Rectangle
@@ -51,7 +52,10 @@ type picker struct {
 
 func (m *picker) Init() tea.Cmd {
 	if m.history {
-		return m.watchChildStatuses()
+		if !m.embedded && m.motion.started.IsZero() {
+			m.motion.started = time.Now()
+		}
+		return tea.Batch(m.watchChildStatuses(), m.motionTick())
 	}
 	return nil
 }
@@ -200,8 +204,16 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch t := msg.(type) {
+	case centerFrame:
+		if t.owner != m {
+			return m, nil
+		}
+		m.motion.pending = false
+		m.motion.frame++
+		return m, m.motionTick()
 	case childStatusesChanged:
-		return m, m.refreshChildStatuses(t)
+		cmd := m.refreshChildStatuses(t)
+		return m, tea.Batch(cmd, m.motionTick())
 	case childCancellationResult:
 		if t.picker == m {
 			m.childCancellationFinished(t)
