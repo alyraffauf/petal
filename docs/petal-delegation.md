@@ -23,6 +23,8 @@ Delegation is enabled by default. The parent adapter must support stdio MCP serv
 | `petal_read` | `child_id`, optional `after` | A page of journal entries after the cursor. |
 | `petal_wait` | `child_id`, optional `after` and `timeout` | The same page as `petal_read`. Waits for new activity, a final result, or the timeout. The timeout is in seconds, defaults to 30, and ranges from 1 to 60. |
 
+For a question about earlier work that asks for an exact quote or a source, search the archive for an identifier or keyword from the original task. Open the matching tool or message reference to read the original text and cite that reference. Use the child activity journal to follow a run and retrieve its completion result.
+
 With positive `context`, the reader returns available neighbors from the anchor’s thread in chronological `before` and `after` arrays. Empty arrays are omitted. The anchor and neighbors share 4096 UTF-8 bytes of message text. A page with `next_offset` contains only anchor text. On the final page, preceding neighbors use the remaining budget first, nearest first, followed by subsequent neighbors. A neighbor marked `truncated` contains the prefix that fit. Open its `reference` to read it in full. The anchor’s navigation references work with any context size.
 
 Look up a model before delegating. Send its exact ID and a self-contained brief. The child shares the project directory and receives only the task as its prompt. Keep the returned `childId` and follow the `next` instruction in delegate, read and wait responses.
