@@ -89,11 +89,12 @@ func (a Account) Command(ctx context.Context, argv []string) *exec.Cmd {
 const DelegationMCPServerName = "petal-delegation"
 
 type Config struct {
-	Delegation            bool   `toml:"delegation" json:"delegation"`
-	ACPv2                 bool   `json:"acp_v2"`
-	StreamResponses       bool   `json:"stream_responses"`
-	TransparentBackground bool   `toml:"transparent_background" json:"transparent_background"`
-	BusyInput             string `toml:"busy_input" json:"busy_input"`
+	History               HistorySettings `json:"history"`
+	Delegation            bool            `toml:"delegation" json:"delegation"`
+	ACPv2                 bool            `json:"acp_v2"`
+	StreamResponses       bool            `json:"stream_responses"`
+	TransparentBackground bool            `toml:"transparent_background" json:"transparent_background"`
+	BusyInput             string          `toml:"busy_input" json:"busy_input"`
 	Accounts              map[string]Account
 	Tiers                 map[string]map[string]float64
 	MCPServers            []MCPServer `toml:"mcp_servers" json:"mcp_servers"`

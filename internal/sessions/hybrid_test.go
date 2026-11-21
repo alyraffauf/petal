@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"petal/internal/embeddings"
 	"reflect"
 	"strings"
 	"syscall"
@@ -29,8 +30,16 @@ func TestLocalHybridEvaluation(t *testing.T) {
 	if os.Getenv("PETAL_EVAL_EMBEDDINGS") != "1" {
 		t.Skip("requires local Ollama all-minilm")
 	}
+	for name, cfg := range map[string]embeddings.Settings{
+		"native":     {},
+		"compatible": {Provider: "openai-compatible", BaseURL: "http://127.0.0.1:11434/v1", Model: "all-minilm:latest"},
+	} {
+		t.Run(name, func(t *testing.T) { evaluateHistory(t, cfg) })
+	}
+}
+
+func evaluateHistory(t *testing.T, cfg embeddings.Settings) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("PETAL_HISTORY_EMBEDDINGS", "1")
 	cwd := t.TempDir()
 	for _, id := range []string{"p", "child", "other"} {
 		if _, err := Create(cwd, Record{ID: id, Model: "test"}); err != nil {
@@ -63,7 +72,7 @@ func TestLocalHybridEvaluation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		h, err := SearchHybridHistory(t.Context(), cwd, "p", c.q)
+		h, err := SearchHybridHistory(t.Context(), cwd, "p", c.q, cfg)
 		wantRetrieval := "hybrid"
 		if strings.Contains(c.q, "_") || c.q == "PR #123" || c.q == "port 5432" {
 			wantRetrieval = "fts"
@@ -102,7 +111,7 @@ func TestLocalHybridEvaluation(t *testing.T) {
 		t.Fatal(err)
 	}
 	count(2)
-	h, err := SearchHybridHistory(t.Context(), cwd, "p", "car battery replacement")
+	h, err := SearchHybridHistory(t.Context(), cwd, "p", "car battery replacement", cfg)
 	if err != nil || h.Retrieval != "hybrid" {
 		t.Fatal(h, err)
 	}
@@ -121,7 +130,7 @@ func TestLocalHybridEvaluation(t *testing.T) {
 		}
 	}
 	q := "storing extra soup for another meal"
-	cold, err := SearchHybridHistory(t.Context(), cwd, "p", q)
+	cold, err := SearchHybridHistory(t.Context(), cwd, "p", q, cfg)
 	if err != nil || cold.Coverage == nil || *cold.Coverage != (HistoryCoverage{Indexed: 8, Window: 11, Partial: true}) || cold.Next == "" {
 		t.Fatal(cold, err)
 	}
@@ -130,7 +139,7 @@ func TestLocalHybridEvaluation(t *testing.T) {
 			t.Fatalf("unindexed answer returned: %v", hit)
 		}
 	}
-	warm, err := SearchHybridHistory(t.Context(), cwd, "p", q)
+	warm, err := SearchHybridHistory(t.Context(), cwd, "p", q, cfg)
 	if err != nil || warm.Coverage == nil || warm.Coverage.Partial || warm.Coverage.Indexed != 11 || len(warm.Hits) < 2 || warm.Hits[0].Source != "keyword" {
 		t.Fatal(warm, err)
 	}
@@ -147,7 +156,7 @@ func TestLocalHybridEvaluation(t *testing.T) {
 	old := embeddingClient
 	embeddingClient = &http.Client{Transport: unavailableProvider{}}
 	defer func() { embeddingClient = old }()
-	h, err = SearchHybridHistory(t.Context(), cwd, "p", "replacement")
+	h, err = SearchHybridHistory(t.Context(), cwd, "p", "replacement", cfg)
 	if err != nil || h.Retrieval != "fts" || len(h.Hits) != 1 {
 		t.Fatal(h, err)
 	}
@@ -201,15 +210,13 @@ func TestHistoryEmbeddingBoundary(t *testing.T) {
 	old := embeddingClient
 	embeddingClient = &client
 	t.Cleanup(func() { embeddingClient = old })
-	t.Setenv("PETAL_HISTORY_EMBEDDINGS", "0")
-	if _, err := SearchHybridHistory(t.Context(), cwd, "parent", "parent"); err == nil {
+	if _, err := SearchHybridHistory(t.Context(), cwd, "parent", "parent", embeddings.Settings{Provider: "off"}); err == nil {
 		t.Fatal("disabled hybrid accepted")
 	}
-	t.Setenv("PETAL_HISTORY_EMBEDDINGS", "1")
 	if _, err := SearchHistory(t.Context(), cwd, "parent", "parent", 0); err != nil || calls != 0 {
 		t.Fatal(err, calls)
 	}
-	page, err := SearchHybridHistory(t.Context(), cwd, "parent", "parent")
+	page, err := SearchHybridHistory(t.Context(), cwd, "parent", "parent", embeddings.Settings{})
 	if err != nil || calls != 1 || page.Retrieval != "fts" || len(page.Hits) != 1 {
 		t.Fatal(page, err, calls)
 	}
@@ -223,7 +230,6 @@ func TestHybridLifecycle(t *testing.T) {
 	for _, scenario := range []string{"replace", "replace during embed", "busy", "exclusive", "wrong model", "offline after mutation", "mutate", "cancel", "initial lock"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
-			t.Setenv("PETAL_HISTORY_EMBEDDINGS", "1")
 			cwd := t.TempDir()
 			for _, id := range []string{"p", "child"} {
 				if _, err := Create(cwd, Record{ID: id, Model: "test"}); err != nil {
@@ -258,7 +264,7 @@ func TestHybridLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				start := time.Now()
-				_, err = searchHybridHistory(t.Context(), cwd, "p", "needle", 50*time.Millisecond)
+				_, err = searchHybridHistory(t.Context(), cwd, "p", "needle", embeddings.Settings{}, 50*time.Millisecond)
 				if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
 					t.Fatal(err, time.Since(start))
 				}
@@ -313,7 +319,7 @@ func TestHybridLifecycle(t *testing.T) {
 						vec[i][1] = 1
 					}
 				}
-				model := historyModel
+				model := "all-minilm:latest"
 				if scenario == "wrong model" {
 					model = "other:latest"
 				}
@@ -324,7 +330,7 @@ func TestHybridLifecycle(t *testing.T) {
 			if strings.HasPrefix(scenario, "replace") {
 				query = "unrelated"
 			}
-			page, err := SearchHybridHistory(ctx, cwd, "p", query)
+			page, err := SearchHybridHistory(ctx, cwd, "p", query, embeddings.Settings{})
 			if scenario == "busy" {
 				exec("ROLLBACK")
 			}

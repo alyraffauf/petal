@@ -5,97 +5,30 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"io"
 	"math"
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"time"
 	"unicode/utf8"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
+	"petal/internal/embeddings"
 )
 
 var embeddingClient = &http.Client{Transport: &http.Transport{MaxConnsPerHost: 1}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-var errEmbeddingProvider = errors.New("local embedding provider unavailable")
+
 var embeddingSlot = make(chan struct{}, 1)
-
-const historyModel = "all-minilm:latest"
-
-func modelDigest(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://127.0.0.1:11434/api/tags", nil)
-	if err != nil {
-		return "", err
-	}
-	res, err := embeddingClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer res.Body.Close()
-	var tags struct {
-		Models []struct{ Name, Digest string }
-	}
-	if res.StatusCode == 200 && json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&tags) == nil {
-		for _, m := range tags.Models {
-			if m.Name == historyModel && len(m.Digest) == 64 {
-				if _, err := hex.DecodeString(m.Digest); err == nil {
-					return m.Digest, nil
-				}
-			}
-		}
-	}
-	return "", errEmbeddingProvider
-}
-
-func embedHistory(ctx context.Context, inputs []string) ([][]float32, error) {
-	body, err := json.Marshal(map[string]any{"model": historyModel, "input": inputs})
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://127.0.0.1:11434/api/embed", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := embeddingClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		return nil, errEmbeddingProvider
-	}
-	var reply struct {
-		Model      string
-		Embeddings [][]float32
-	}
-	if err = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&reply); err != nil {
-		return nil, err
-	}
-	if reply.Model != historyModel {
-		return nil, errEmbeddingProvider
-	}
-	if len(reply.Embeddings) != len(inputs) {
-		return nil, errors.New("incomplete embeddings")
-	}
-	for _, v := range reply.Embeddings {
-		if len(v) != 384 {
-			return nil, errors.New("unexpected embedding dimensions")
-		}
-	}
-	return reply.Embeddings, nil
-}
 
 // Backfill eight missing vectors per call. Compare the input again at write
 // time because a transcript can change while Ollama is running.
 const window = historyScope + `, recent AS (SELECT rowid AS ref FROM messages WHERE session_id IN (SELECT id FROM scope) ORDER BY rowid DESC LIMIT 256) `
 
-func backfill(ctx context.Context, db *sql.DB, parent, query, digest string) ([]float32, error) {
+func backfill(ctx context.Context, db *sql.DB, cfg embeddings.Settings, parent, query, digest string) ([]float32, error) {
 	rows, err := db.QueryContext(ctx, window+`SELECT ref,substr(body,1,1024) FROM recent JOIN messages ON rowid=ref LEFT JOIN message_embeddings ON reference=ref AND digest=? WHERE reference IS NULL ORDER BY ref DESC LIMIT 8`, parent, digest)
 	if err != nil {
 		return nil, err
@@ -117,13 +50,13 @@ func backfill(ctx context.Context, db *sql.DB, parent, query, digest string) ([]
 	if err != nil {
 		return nil, err
 	}
-	vectors, err := embedHistory(ctx, inputs)
+	vectors, err := cfg.Embed(ctx, embeddingClient, inputs)
 	if err != nil {
-		return nil, errors.Join(errEmbeddingProvider, err)
+		return nil, errors.Join(embeddings.ErrUnavailable, err)
 	}
-	current, err := modelDigest(ctx)
+	current, err := cfg.CacheKey(ctx, embeddingClient)
 	if err != nil || current != digest {
-		return nil, errEmbeddingProvider
+		return nil, embeddings.ErrUnavailable
 	}
 	for i, id := range ids {
 		buf := new(bytes.Buffer)
@@ -154,13 +87,13 @@ func scoreHistory(ctx context.Context, db historyReader, parent, digest string, 
 			return nil, err
 		}
 		coverage.Window++
-		if len(blob) != 384*4 {
+		if len(blob) != len(queryVector)*4 {
 			continue
 		}
 		coverage.Indexed++
 		hit.Source = "semantic"
 		var score float64
-		// Ollama /api/embed returns unit vectors.
+		// Vectors are normalized before storage and scoring.
 		for i, q := range queryVector {
 			score += float64(q) * float64(math.Float32frombits(binary.LittleEndian.Uint32(blob[4*i:])))
 		}
@@ -176,12 +109,10 @@ func scoreHistory(ctx context.Context, db historyReader, parent, digest string, 
 	return hits, rows.Err()
 }
 
-func HybridHistoryEnabled() bool { return os.Getenv("PETAL_HISTORY_EMBEDDINGS") == "1" }
-
 // Structured identifiers need lexical evidence even when nearby codes embed similarly.
 var historyIdentifier = regexp.MustCompile(`[[:alnum:]]_[[:alnum:]]|[[:alpha:]][[:digit:]]|[[:digit:]][[:alpha:]]|[[:alnum:]]-[[:digit:]]|#[[:digit:]]|\b[[:digit:]]+\b`)
 
-func optionalHistoryVector(ctx context.Context, db *sql.DB, parent, query string) ([]float32, string, error) {
+func optionalHistoryVector(ctx context.Context, db *sql.DB, cfg embeddings.Settings, parent, query string) ([]float32, string, error) {
 	select {
 	case embeddingSlot <- struct{}{}:
 		defer func() { <-embeddingSlot }()
@@ -192,7 +123,7 @@ func optionalHistoryVector(ctx context.Context, db *sql.DB, parent, query string
 	deadline, _ := ctx.Deadline()
 	optional, stop := context.WithDeadline(ctx, deadline.Add(-time.Until(deadline)/10))
 	defer stop()
-	digest, err := modelDigest(optional)
+	digest, err := cfg.CacheKey(optional, embeddingClient)
 	if err != nil {
 		return nil, "", ctx.Err()
 	}
@@ -203,25 +134,29 @@ func optionalHistoryVector(ctx context.Context, db *sql.DB, parent, query string
 		}
 		return nil, "", err
 	}
-	vector, err := backfill(optional, db, parent, query, digest)
+	vector, err := backfill(optional, db, cfg, parent, query, digest)
 	var sqliteErr *sqlite.Error
 	busy := errors.As(err, &sqliteErr) && sqliteErr.Code()&255 == sqlite3.SQLITE_BUSY
-	if busy || errors.Is(err, errEmbeddingProvider) || optional.Err() != nil {
+	if busy || errors.Is(err, embeddings.ErrUnavailable) || optional.Err() != nil {
 		return nil, "", ctx.Err()
 	}
 	return vector, digest, err
 }
 
-func SearchHybridHistory(ctx context.Context, cwd, parent, query string) (HistoryMatches, error) {
-	return searchHybridHistory(ctx, cwd, parent, query, 10*time.Second)
+func SearchHybridHistory(ctx context.Context, cwd, parent, query string, cfg embeddings.Settings) (HistoryMatches, error) {
+	return searchHybridHistory(ctx, cwd, parent, query, cfg, 10*time.Second)
 }
 
-func searchHybridHistory(caller context.Context, cwd, parent, query string, budget time.Duration) (HistoryMatches, error) {
+func searchHybridHistory(caller context.Context, cwd, parent, query string, cfg embeddings.Settings, budget time.Duration) (HistoryMatches, error) {
 	ctx, cancel := context.WithTimeout(caller, budget)
 	defer cancel()
 	var page HistoryMatches
-	if !HybridHistoryEnabled() {
-		return page, errors.New("enable hybrid history with PETAL_HISTORY_EMBEDDINGS=1")
+	cfg, err := cfg.Resolve()
+	if err != nil {
+		return page, err
+	}
+	if cfg.Provider == "off" {
+		return page, errors.New("hybrid history disabled in config")
 	}
 	if utf8.RuneCountInString(query) > 512 {
 		return page, errors.New("invalid history query length")
@@ -238,7 +173,7 @@ func searchHybridHistory(caller context.Context, cwd, parent, query string, budg
 	var digest string
 	var vector []float32
 	if !historyIdentifier.MatchString(query) {
-		vector, digest, err = optionalHistoryVector(ctx, db, parent, query)
+		vector, digest, err = optionalHistoryVector(ctx, db, cfg, parent, query)
 		if err != nil {
 			return page, err
 		}
@@ -263,7 +198,7 @@ func searchHybridHistory(caller context.Context, cwd, parent, query string, budg
 		return page, err
 	}
 	page.Retrieval = "fts"
-	page.NextBefore = 0
+
 	for i := range page.Hits {
 		page.Hits[i].Source = "keyword"
 	}
@@ -280,6 +215,7 @@ func searchHybridHistory(caller context.Context, cwd, parent, query string, budg
 	if coverage.Partial {
 		page.Next = "Repeat this hybrid query to index up to eight more messages in the recent window."
 	}
+	page.NextBefore = 0
 	page.Retrieval = "hybrid"
 	seen := map[int64]bool{}
 	lexical := page.Hits

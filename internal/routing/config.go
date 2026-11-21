@@ -3,11 +3,16 @@ package routing
 import (
 	"fmt"
 	"path/filepath"
+	"petal/internal/embeddings"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
+
+type HistorySettings struct {
+	Embeddings embeddings.Settings `mapstructure:"embeddings" json:"embeddings"`
+}
 
 type MCPServer struct {
 	URL     string           `json:"-"`
@@ -25,12 +30,13 @@ type MCPEnvVariable struct {
 
 // Keep identifiers in values because Viper folds configuration keys to lowercase.
 type fileSettings struct {
-	Delegation            bool        `mapstructure:"delegation"`
-	ACPv2                 bool        `mapstructure:"acp_v2"`
-	StreamResponses       bool        `mapstructure:"stream_responses"`
-	TransparentBackground bool        `mapstructure:"transparent_background"`
-	BusyInput             string      `mapstructure:"busy_input"`
-	MCPServers            []MCPServer `mapstructure:"mcp_servers"`
+	History               HistorySettings `mapstructure:"history"`
+	Delegation            bool            `mapstructure:"delegation"`
+	ACPv2                 bool            `mapstructure:"acp_v2"`
+	StreamResponses       bool            `mapstructure:"stream_responses"`
+	TransparentBackground bool            `mapstructure:"transparent_background"`
+	BusyInput             string          `mapstructure:"busy_input"`
+	MCPServers            []MCPServer     `mapstructure:"mcp_servers"`
 	Accounts              []struct {
 		Name, Provider, Home string
 		Capacity             *float64
@@ -75,6 +81,10 @@ func (c *Config) readSettings(path string) error {
 			}
 		}
 	}
+	if _, err := file.History.Embeddings.Resolve(); err != nil {
+		return err
+	}
+	c.History = file.History
 	c.Delegation = file.Delegation
 	c.MCPServers = file.MCPServers
 	c.ACPv2 = file.ACPv2

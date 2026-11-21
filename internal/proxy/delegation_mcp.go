@@ -22,6 +22,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"petal/internal/delegation"
+	"petal/internal/embeddings"
 	"petal/internal/routing"
 	"petal/internal/sessions"
 )
@@ -32,10 +33,11 @@ const deliveryAckMethod = "petal/ackResultDelivery"
 const delegationServerName = routing.DelegationMCPServerName
 
 type delegationTools struct {
-	catalog  func(string) any
-	delegate func(context.Context, string, string, string, string) (any, error)
-	read     func(context.Context, string, string, string, int64) (delegation.Page, error)
-	wait     func(context.Context, string, string, string, int64, time.Duration) (delegation.Page, error)
+	embeddings embeddings.Settings
+	catalog    func(string) any
+	delegate   func(context.Context, string, string, string, string) (any, error)
+	read       func(context.Context, string, string, string, int64) (delegation.Page, error)
+	wait       func(context.Context, string, string, string, int64, time.Duration) (delegation.Page, error)
 }
 
 type delegationEndpoint struct {
@@ -424,7 +426,7 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 		case !initialized:
 			response.Error = &mcpError{-32002, "Server not initialized"}
 		case req.Method == "tools/list":
-			response.Result = delegationToolList()
+			response.Result = delegationToolList(tools.embeddings.Provider != "off")
 		case req.Method == "tools/call":
 			key := string(req.ID)
 			mu.Lock()
@@ -461,13 +463,13 @@ func (endpoint *delegationEndpoint) serve(lifetime context.Context, conn net.Con
 	}
 }
 
-func delegationToolList() json.RawMessage {
+func delegationToolList(enabled bool) json.RawMessage {
 	mode := `"enum":["fts"]`
 	description := ""
 	constraint := ""
-	if sessions.HybridHistoryEnabled() {
+	if enabled {
 		mode = `"enum":["fts","hybrid"]`
-		description = " Hybrid mixes keyword and semantic hits without pagination. Repeat partial searches to extend coverage."
+		description = " By default Petal tries hybrid search. Hybrid mixes keyword and semantic hits without pagination. Repeat partial searches to extend coverage."
 		constraint = `,"not":{"required":["mode","before"],"properties":{"mode":{"const":"hybrid"}}}`
 	}
 	return json.RawMessage(`{"tools":[
@@ -534,8 +536,8 @@ func (endpoint *delegationEndpoint) invoke(ctx context.Context, tools delegation
 		if err := decode(&args); err != nil {
 			return nil, "", err
 		}
-		if args.Mode == "hybrid" && args.Before == nil {
-			value, err := sessions.SearchHybridHistory(ctx, endpoint.cwd, endpoint.parent, args.Query)
+		if (args.Mode == "hybrid" || (args.Mode == "" && tools.embeddings.Provider != "off")) && args.Before == nil {
+			value, err := sessions.SearchHybridHistory(ctx, endpoint.cwd, endpoint.parent, args.Query, tools.embeddings)
 			return value, "", err
 		}
 		if args.Mode != "" && args.Mode != "fts" {

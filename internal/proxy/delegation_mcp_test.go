@@ -8,6 +8,8 @@ import (
 	"io"
 	"maps"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -308,7 +310,8 @@ func TestDelegationBridgeThroughACP(t *testing.T) {
 			call(secondMCP, "petal_read_transcript", window, true)
 			call(secondMCP, "petal_read_transcript", anchor, true)
 			private := call(secondMCP, "petal_search_history", `{"query":"receipt"}`, false)
-			if private != `{"hits":[]}` {
+			var scoped sessions.HistoryMatches
+			if err := json.Unmarshal([]byte(private), &scoped); err != nil || scoped.Hits == nil || len(scoped.Hits) != 0 {
 				t.Fatalf("unrelated thread saw child output: %s", private)
 			}
 			for _, teardown := range []struct {
@@ -558,8 +561,8 @@ func (w terminalResultWriter) Write(data []byte) (int, error) {
 }
 
 func TestHistorySearchAdvertisement(t *testing.T) {
-	for _, flag := range []string{"0", "1"} {
-		t.Setenv("PETAL_HISTORY_EMBEDDINGS", flag)
+	for _, enabled := range []bool{false, true} {
+
 		var list struct {
 			Tools []struct {
 				Name, Description string
@@ -572,7 +575,7 @@ func TestHistorySearchAdvertisement(t *testing.T) {
 				}
 			}
 		}
-		if err := json.Unmarshal(delegationToolList(), &list); err != nil {
+		if err := json.Unmarshal(delegationToolList(enabled), &list); err != nil {
 			t.Fatal(err)
 		}
 		found := false
@@ -581,7 +584,7 @@ func TestHistorySearchAdvertisement(t *testing.T) {
 				continue
 			}
 			found = true
-			enabled := flag == "1"
+
 			if slices.Contains(tool.InputSchema.Properties["mode"].Enum, "hybrid") != enabled || strings.Contains(strings.ToLower(tool.Description), "hybrid") != enabled {
 				t.Fatal(tool)
 			}
@@ -592,5 +595,52 @@ func TestHistorySearchAdvertisement(t *testing.T) {
 		if !found {
 			t.Fatal("missing history tool")
 		}
+	}
+}
+
+func TestConfiguredEmbeddingSearch(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PETAL_TEST_EMBED_KEY", "fixture")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" || r.Header.Get("Authorization") != "Bearer fixture" {
+			t.Error("incorrect endpoint or credential")
+			http.Error(w, "denied", 401)
+			return
+		}
+		var req struct {
+			Model string
+			Input []string
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Model != "MixedCase" || !slices.Equal(req.Input, []string{"battery", "vehicle"}) {
+			t.Errorf("unexpected request: %+v", req)
+			http.Error(w, "bad request", 400)
+			return
+		}
+		io.WriteString(w, `{"model":"MixedCase","data":[{"index":1,"embedding":[0,3]},{"index":0,"embedding":[0,2]}]}`)
+	}))
+	defer srv.Close()
+	cwd := t.TempDir()
+	file := filepath.Join(cwd, "config.toml")
+	if err := os.WriteFile(file, []byte(fmt.Sprintf("[history.embeddings]\nprovider='openai-compatible'\nbase_url='%s/v1'\nmodel='MixedCase'\napi_key_env='PETAL_TEST_EMBED_KEY'\n", srv.URL)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := routing.Load(file, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sessions.Create(cwd, sessions.Record{ID: "p", Model: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = sessions.SaveTranscript(cwd, "p", []sessions.Message{{Role: "user", Body: "vehicle"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := delegationEndpoint{cwd: cwd, parent: "p"}
+	value, _, err := endpoint.invoke(t.Context(), delegationTools{embeddings: cfg.History.Embeddings}, "petal_search_history", json.RawMessage(`{"query":"battery"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := value.(sessions.HistoryMatches)
+	if page.Retrieval != "hybrid" || len(page.Hits) != 1 || page.Hits[0].Snippet != "vehicle" || page.Hits[0].Source != "semantic" {
+		t.Fatal(page)
 	}
 }
