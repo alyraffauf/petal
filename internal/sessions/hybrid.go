@@ -25,6 +25,21 @@ var embeddingSlot = make(chan struct{}, 1)
 
 const scopedMessages = historyScope + ` SELECT messages.rowid AS ref,substr(body,1,1024) FROM messages LEFT JOIN message_embeddings ON reference=messages.rowid AND digest=? WHERE session_id IN (SELECT id FROM scope) AND reference IS NULL ORDER BY messages.rowid LIMIT 8`
 
+func embedHistory(ctx context.Context, cfg embeddings.Settings, digest string, inputs []string) ([][]float32, string, error) {
+	vectors, model, err := cfg.Embed(ctx, embeddingClient, inputs)
+	if err != nil {
+		return nil, "", err
+	}
+	if cfg.Provider == "openai-compatible" {
+		return vectors, digest + ":" + model + ":" + strconv.Itoa(len(vectors[0])), nil
+	}
+	current, err := cfg.CacheKey(ctx, embeddingClient)
+	if err != nil || current != digest {
+		return nil, "", embeddings.ErrUnavailable
+	}
+	return vectors, digest, nil
+}
+
 func indexHistoryBatch(ctx context.Context, cwd, parent string, cfg embeddings.Settings, lastDigest *string) (bool, error) {
 	db, err := openStoreContext(ctx, cwd)
 	if err != nil {
@@ -67,17 +82,11 @@ func indexHistoryBatch(ctx context.Context, cwd, parent string, cfg embeddings.S
 	if len(inputs) == 0 {
 		return false, nil
 	}
-	vectors, model, err := cfg.Embed(ctx, embeddingClient, inputs)
+	vectors, digest, err := embedHistory(ctx, cfg, digest, inputs)
 	if err != nil {
 		return false, err
 	}
-	if cfg.Provider == "ollama" {
-		current, err := cfg.CacheKey(ctx, embeddingClient)
-		if err != nil || current != digest {
-			return false, embeddings.ErrUnavailable
-		}
-	} else {
-		digest += ":" + model + ":" + strconv.Itoa(len(vectors[0]))
+	if cfg.Provider == "openai-compatible" {
 		*lastDigest = digest
 	}
 	for i, id := range ids {
@@ -190,17 +199,9 @@ func optionalHistoryVector(ctx context.Context, cfg embeddings.Settings, query s
 	if err != nil {
 		return nil, "", ctx.Err()
 	}
-	vectors, model, err := cfg.Embed(optional, embeddingClient, []string{query})
+	vectors, digest, err := embedHistory(optional, cfg, digest, []string{query})
 	if err != nil {
 		return nil, "", ctx.Err()
-	}
-	if cfg.Provider == "openai-compatible" {
-		digest += ":" + model + ":" + strconv.Itoa(len(vectors[0]))
-	} else {
-		current, err := cfg.CacheKey(optional, embeddingClient)
-		if err != nil || current != digest {
-			return nil, "", ctx.Err()
-		}
 	}
 	return vectors[0], digest, nil
 }
