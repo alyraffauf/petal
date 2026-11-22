@@ -36,6 +36,13 @@ func mergeMCPServers(params Object, configured []routing.MCPServer, supportsHTTP
 		if editorNames[server.Name] {
 			continue
 		}
+		server, ready, err := server.SessionServer()
+		if err != nil {
+			return nil, err
+		}
+		if !ready {
+			continue
+		}
 		if server.URL != "" && !supportsHTTP {
 			return nil, fmt.Errorf("adapter does not support HTTP MCP server %q", server.Name)
 		}
@@ -85,7 +92,14 @@ func mergeMCPServersV2(params Object, configured []routing.MCPServer, sharedCaps
 		return params, nil
 	}
 	for _, server := range configured {
-		if names[server.Name] {
+		if names[server.Name] || (server.URL != "" && len(server.Headers) == 0 && backendCaps.member("stdio") == nil) {
+			continue
+		}
+		server, ready, err := server.SessionServer()
+		if err != nil {
+			return nil, err
+		}
+		if !ready {
 			continue
 		}
 		kind := "stdio"
