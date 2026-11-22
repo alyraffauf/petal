@@ -245,6 +245,13 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	await("ready")
 	write("\x1b[5~") // Page up past the settings confirmation in the short viewport.
 	await("restored transcript")
+	if err := os.Mkdir(filepath.Join(dir, "second"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	write("/new second\r")
+	await("ready")
+	write("/config\r")
+	await("Model · Alternate")
 }
 
 func TestACPCLIRejectsUnrunnableDefaultAccount(t *testing.T) {
