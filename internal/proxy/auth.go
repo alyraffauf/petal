@@ -18,6 +18,12 @@ type terminalLogin struct {
 	Args    []string
 }
 
+func encodeTerminalAuthArgs(account, model string, args []string) json.RawMessage {
+	token, _ := json.Marshal(terminalLogin{Account: account, Model: model, Args: args})
+	wire, _ := json.Marshal([]string{"--terminal-auth=" + string(token)})
+	return wire
+}
+
 func LoginCommand(ctx context.Context, c routing.Config, token string) (*exec.Cmd, error) {
 	var login terminalLogin
 	if json.Unmarshal([]byte(token), &login) != nil || login.Account == "" || login.Model == "" {
