@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"petal/internal/paths"
 	"petal/internal/sessions/sessiondb"
 	"sync"
 	"syscall"
@@ -92,7 +91,7 @@ func BindChild(ctx context.Context, cwd string, binding ChildBinding) error {
 // StartChild creates the history row and journal together. The lease is held
 // until the terminal result is committed, or released by the OS on exit.
 func StartChild(ctx context.Context, cwd string, binding ChildBinding, record Record, task string) (func(), error) {
-	dir, err := paths.XDG("STATE", filepath.Join("conversations", key(cwd)))
+	dir, err := storeDir(cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -147,10 +146,11 @@ func recoverInterruptedChild(ctx context.Context, tx *sql.Tx, cwd string, bindin
 	if err != nil || !name.Valid {
 		return err
 	}
-	path, err := paths.XDG("STATE", filepath.Join("conversations", key(cwd), filepath.Base(name.String)))
+	dir, err := storeDir(cwd)
 	if err != nil {
 		return err
 	}
+	path := filepath.Join(dir, filepath.Base(name.String))
 	f, err := os.Open(path)
 	if err == nil {
 		defer f.Close()
