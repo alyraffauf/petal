@@ -5,7 +5,7 @@ import (
 
 	"fmt"
 	"image"
-	"os"
+
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -60,7 +60,7 @@ func (m *picker) Init() tea.Cmd {
 	}
 	return nil
 }
-func newPicker(c routing.Config) *picker {
+func newPicker(cwd string, c routing.Config) *picker {
 	search := textinput.New()
 	search.Prompt = "  Search  "
 	search.SetVirtualCursor(true)
@@ -70,7 +70,7 @@ func newPicker(c routing.Config) *picker {
 	search.SetStyles(styles)
 	search.KeyMap.Paste.SetEnabled(false) // Terminal pastes arrive as tea.PasteMsg.
 	search.Focus()
-	m := &picker{cfg: c, background: canvasBackground(c.TransparentBackground), models: c.ModelNames(), search: search}
+	m := &picker{center: controlCenter{cwd: cwd}, cfg: c, background: canvasBackground(c.TransparentBackground), models: c.ModelNames(), search: search}
 	m.filter()
 	return m
 }
@@ -80,17 +80,15 @@ func (m *picker) showHistory() {
 	m.historyError = ""
 	m.center.cache = centerCache{}
 	m.saved = nil
-	cwd, err := os.Getwd()
-	if err == nil {
-		m.center.cwd = cwd
-		m.center.project = filepath.Base(cwd)
-		ctx, stop := context.WithTimeout(context.Background(), 300*time.Millisecond)
-		defer stop()
-		if branch, err := exec.CommandContext(ctx, "git", "-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD").Output(); err == nil {
-			m.center.project += " / " + strings.TrimSpace(string(branch))
-		}
-		m.saved, err = sessions.List(cwd, m.models)
+	cwd := m.center.cwd
+	m.center.project = filepath.Base(cwd)
+	ctx, stop := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer stop()
+	if branch, err := exec.CommandContext(ctx, "git", "-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD").Output(); err == nil {
+		m.center.project += " / " + strings.TrimSpace(string(branch))
 	}
+	saved, err := sessions.List(cwd, m.models)
+	m.saved = saved
 	if err != nil {
 		m.historyError = err.Error()
 	}
@@ -553,13 +551,13 @@ func (m *picker) resultRow(i, w int) string {
 	return richBand("    "+label, w, petalText, m.background, false)
 }
 
-func pick(c routing.Config, resume bool) (sessionStart, bool, error) {
-	m := newPicker(c)
+func pick(cwd string, c routing.Config, resume bool) (sessionStart, bool, error) {
+	m := newPicker(cwd, c)
 	m.showHistory()
 	if resume && len(m.saved) > 0 {
 		m.center.selected = m.saved[0].ID
 	}
 	defer m.stopWatchingChildStatuses()
 	_, err := tea.NewProgram(&frame{Model: m, background: m.background}).Run()
-	return sessionStart{cfg: m.cfg, resume: m.resume, id: m.id}, m.chosen, err
+	return sessionStart{cwd: cwd, cfg: m.cfg, resume: m.resume, id: m.id}, m.chosen, err
 }

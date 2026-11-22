@@ -62,7 +62,7 @@ func (m *terminal) commandMatches() []chatCommand {
 		if m.h.record.Parent != "" {
 			add("/parent", "Return to the conversation this fork came from")
 		}
-		add("/new", "Start a new thread")
+		add("/new", "Start a new thread · /new [directory]")
 		if m.h.canDelete {
 			add("/delete", "Delete this conversation")
 		}
@@ -99,7 +99,7 @@ func (m *terminal) commandMatches() []chatCommand {
 func (m *terminal) openPicker(routeOnly bool) tea.Cmd {
 	c := m.cfg
 	c.PinnedAccount = ""
-	m.launch = newPicker(c)
+	m.launch = newPicker(m.Cwd, c)
 	m.launch.monochrome = m.monochrome
 	m.launch.embedded = true
 	m.launch.width, m.launch.height = m.Width, m.Height
@@ -139,7 +139,7 @@ func (m *terminal) runCommand(command chatCommand) tea.Cmd {
 	case "/agents":
 		return m.showAgents()
 	case "/parent":
-		m.next = &sessionStart{cfg: m.cfg, id: m.h.record.Parent, resume: true}
+		m.next = &sessionStart{cwd: m.Cwd, cfg: m.cfg, id: m.h.record.Parent, resume: true}
 		return tea.Quit
 	case "/fork":
 		return m.fork()

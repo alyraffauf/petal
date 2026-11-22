@@ -19,6 +19,7 @@ Type `/` to list the commands from Petal and from the agent. Petal shows only th
 | Command                            | Action                                                    |
 | ---------------------------------- | --------------------------------------------------------- |
 | `/new`, `/resume`                  | Start a thread, or resume a saved one.                    |
+| `/new <directory>`                 | Start a fresh thread there using the current model. Relative paths start from the current thread’s directory. |
 | `/model`, `/subscription`          | Change the model, or start a thread on a chosen account.  |
 | `/effort`, `/mode`, `/permissions` | Change reasoning effort, agent mode, or the Codex preset. |
 | `/config`                          | Change any other setting that the agent offers.           |

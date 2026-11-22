@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 func TestRemoteActivityReordersSavedHistory(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cwd := t.TempDir()
-	t.Chdir(cwd)
 
 	cfg := routing.Config{Accounts: map[string]routing.Account{
 		"work": {Models: map[string][]string{"model": {"adapter"}}},
@@ -30,7 +30,7 @@ func TestRemoteActivityReordersSavedHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p := newPicker(cfg)
+	p := newPicker(cwd, cfg)
 	p.showHistory()
 
 	latest := time.Unix(4, 0)
@@ -46,5 +46,19 @@ func TestRemoteActivityReordersSavedHistory(t *testing.T) {
 	if !got.LastActivity().Equal(latest) || !got.Opened.Equal(older.Opened) || got.Title != older.Title ||
 		len(got.Selections) != 1 || got.Selections[0] != older.Selections[0] {
 		t.Fatalf("merged history record: %+v", got)
+	}
+}
+
+func TestNewThreadDirectoryRelativeToSession(t *testing.T) {
+	cwd := t.TempDir()
+	m := &terminal{screen: screen{Cwd: cwd, connection: connected, editor: testComposer("/new missing", 0)}}
+	m.submit()
+	if m.next != nil || m.editor.Value() != "/new missing" {
+		t.Fatal("invalid directory discarded the current input or session")
+	}
+	m.editor.SetValue("/new ..")
+	m.submit()
+	if m.next == nil || m.next.resume || m.next.cwd != filepath.Dir(cwd) {
+		t.Fatalf("new session in parent directory: %+v", m.next)
 	}
 }

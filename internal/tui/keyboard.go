@@ -36,7 +36,7 @@ func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
 	if m.connection == connectionFailed {
 		switch t.String() {
 		case "enter", "r":
-			m.next = &sessionStart{cfg: m.cfg, resume: m.resume, id: m.resumeID, editor: m.editor}
+			m.next = &sessionStart{cwd: m.Cwd, cfg: m.cfg, resume: m.resume, id: m.resumeID, editor: m.editor}
 			return tea.Quit
 		case "tab":
 			return m.openPicker(true)
