@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Scripted ACP v1 agent for the demo recording.
 
 Petal starts one copy per account. DEMO_ROLE selects the part to play. The
@@ -138,7 +139,9 @@ def quote_original_output(session_id):
 
 
 def answer_as_parent(session_id, prompt, request_id):
-    if "second opinion" in prompt:
+    if prompt == "Draft release notes":
+        say(session_id, "Release draft saved.")
+    elif "second opinion" in prompt:
         delegate_review(session_id)
     elif "exactly" in prompt:
         quote_original_output(session_id)
@@ -177,7 +180,7 @@ def main():
             prompt = " ".join(block.get("text", "") for block in params.get("prompt", []))
             if ROLE == "parent" and session_id not in titled_sessions:
                 titled_sessions.add(session_id)
-                update(session_id, {"sessionUpdate": "session_info_update", "title": "Review the retry change"})
+                update(session_id, {"sessionUpdate": "session_info_update", "title": "Draft release notes" if prompt == "Draft release notes" else "Review the retry change"})
             answer = answer_as_parent if ROLE == "parent" else answer_as_child
             threading.Thread(target=answer, args=(session_id, prompt, request_id), daemon=True).start()
         elif request_id is not None and method:

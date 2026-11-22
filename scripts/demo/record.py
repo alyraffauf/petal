@@ -6,7 +6,7 @@ The output holds the timed frames of the workbench session and three named
 stills. render.py turns it into the GIF and the screenshots.
 """
 
-import glob
+import hashlib
 import json
 import os
 import shutil
@@ -27,15 +27,16 @@ TMUX = ["tmux", "-L", "petal-demo", "-f", "/dev/null"]
 def write_config(root):
     """Two Claude accounts with different quota, and one Codex account."""
     accounts = [
-        ("work", "claude/default", "parent", 30, 5),
-        ("personal", "claude/default", "parent", 90, 1),
-        ("team", "codex/default", "child", 80, 1),
+        ("work", "claude", "parent", 30, 5),
+        ("personal", "claude", "parent", 90, 1),
+        ("team", "codex", "child", 80, 1),
     ]
     lines = ['[history.embeddings]', 'provider = "off"', ""]
-    for name, model, role, quota_left, capacity in accounts:
+    for name, provider, role, quota_left, capacity in accounts:
         lines += [
             "[[accounts]]",
             f'name = "{name}"',
+            f'provider = "{provider}"',
             f"capacity = {capacity}",
             f'usage = ["echo", "{quota_left}"]',
             "[[accounts.env]]",
@@ -44,9 +45,6 @@ def write_config(root):
             "[[accounts.env]]",
             'name = "DEMO_CHILD_MODEL"',
             'value = "codex/default"',
-            "[[accounts.models]]",
-            f'id = "{model}"',
-            f'command = ["python3", "{AGENT}"]',
             "",
         ]
     config = root / "config.toml"
@@ -61,15 +59,19 @@ def isolated_path(root, petal):
     (bin_directory / "petal").symlink_to(petal)
     for tool in ("python3", "git", "echo"):
         (bin_directory / tool).symlink_to(shutil.which(tool))
+    for name in ("codex-acp", "claude-agent-acp"):
+        (bin_directory / name).symlink_to(AGENT.resolve())
+    for name in ("claude", "codex"):
+        (bin_directory / name).symlink_to(Path(__file__).with_name("provider.py").resolve())
     return bin_directory
 
 
 class Session:
     """One Petal process in a detached tmux window."""
 
-    def __init__(self, root, petal, config):
-        self.state = root / f"state-{time.monotonic_ns()}"
-        self.state.mkdir()
+    def __init__(self, root, petal, config, state, project):
+        self.state = state
+        self.project = project
         self.frames = []
         self.stills = {}
         self.started = time.monotonic()
@@ -81,11 +83,11 @@ class Session:
             "XDG_CONFIG_HOME": str(root / "config"),
             "PATH": str(root / "bin"),
         }
-        command = ["new-session", "-d", "-s", "demo", "-x", str(COLUMNS), "-y", str(ROWS), "-c", str(PROJECT)]
+        command = ["new-session", "-d", "-s", "demo", "-x", str(COLUMNS), "-y", str(ROWS), "-c", str(project)]
         for name, value in environment.items():
             command += ["-e", f"{name}={value}"]
         # Petal only emits 24-bit color when it does not detect tmux.
-        launch = f"env -u TMUX -u TMUX_PANE TERM=xterm-256color {petal} --config {config}"
+        launch = f"env -u TMUX -u TMUX_PANE TERM=xterm-256color PATH={root}/bin {petal} --config {config}"
         started = self.tmux(*command, launch)
         if started.returncode != 0:
             raise RuntimeError(started.stderr)
@@ -131,7 +133,8 @@ class Session:
 
     def title_child(self, title):
         """Petal leaves a delegated child untitled. Title it so the thread tree reads well."""
-        database = sqlite3.connect(glob.glob(f"{self.state}/petal/conversations/*/index.sqlite")[0], timeout=5)
+        project_key = hashlib.sha256(os.fsencode(self.project)).hexdigest()
+        database = sqlite3.connect(self.state / "petal/conversations" / project_key / "index.sqlite", timeout=5)
         database.execute("update sessions set title = ? where title = ''", (title,))
         database.commit()
         database.close()
@@ -141,7 +144,9 @@ class Session:
 
 
 def start_review(session):
-    session.wait_for("control center")
+    session.wait_for("Draft release notes")
+    session.wait_for("gpt-6.2-sol")
+    session.wait_for("claude-opus-5-5")
     session.record(1.8)
     session.press("Enter", 1.0)
     session.press("Tab", 2.6)  # Show the accounts and their quota.
@@ -193,7 +198,21 @@ def main():
         isolated_path(root, petal)
         stills = {}
         for scene in (record_commands, record_workbench):
-            session = Session(root, petal, config)
+            state = root / f"state-{scene.__name__}"
+            state.mkdir()
+            notes = PROJECT / "release-notes"
+            notes.mkdir(exist_ok=True)
+            seed = Session(root, petal, config, state, notes)
+            try:
+                seed.wait_for("claude-opus-5-5")
+                seed.press("C-n")
+                seed.wait_for("ready")
+                seed.type("Draft release notes")
+                seed.press("Enter")
+                seed.wait_for("Release draft saved")
+            finally:
+                seed.close()
+            session = Session(root, petal, config, state, PROJECT)
             try:
                 scene(session)
             finally:

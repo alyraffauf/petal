@@ -10,7 +10,7 @@ Petal is a unified workbench for agents. It runs Claude Code and Codex in one te
 - **Route.** Petal [load balances](docs/configuration.md#route-across-subscriptions) across your work and personal subscriptions. Each new session starts on the account with the most quota left.
 - **Integrate.** Run `petal acp` to add the same orchestration, memory, and routing to [any editor](docs/editors.md) that speaks the [Agent Client Protocol](https://agentclientprotocol.com/).
 
-![A Petal session. Petal picks the work account for Claude. Claude delegates a test run to Codex, which runs as a child in the control center and then completes. Claude reports the bug, then searches the saved transcript and quotes the original failing test output.](docs/screenshots/workbench.gif)
+![The control center shows the resolved Claude and Codex models and a saved thread from another project. Petal picks the work account for Claude. Claude delegates a test run to Codex, which runs as a child in the control center and then completes. Claude reports the bug, then searches the saved transcript and quotes the original failing test output.](docs/screenshots/workbench.gif)
 
 Petal does not replace the Claude Code or Codex CLI. Each model runs in its vendor's CLI, and Petal controls that CLI through standard, supported APIs. Using Petal does not violate the vendor's terms of service.
 
