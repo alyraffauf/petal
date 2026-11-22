@@ -67,8 +67,7 @@ func (p *proxy) initializeV2(ctx context.Context, raw json.RawMessage, names []s
 				}
 				var args []string
 				_ = json.Unmarshal(method["args"], &args)
-				token, _ := json.Marshal(terminalLogin{name, p.Model, args})
-				method["args"], _ = json.Marshal([]string{"--terminal-auth=" + string(token)})
+				method["args"] = encodeTerminalAuthArgs(name, p.Model, args)
 			}
 			wire, _ := json.Marshal([]string{name, id})
 			method["methodId"] = encoded(string(wire))

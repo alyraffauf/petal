@@ -214,8 +214,7 @@ func (p *proxy) initializeV1(ctx context.Context, raw json.RawMessage, names []s
 				if !req.ClientCapabilities.Auth.Terminal {
 					continue
 				}
-				token, _ := json.Marshal(terminalLogin{name, p.Model, method.Terminal.Args})
-				m["args"], _ = json.Marshal([]string{"--terminal-auth=" + string(token)})
+				m["args"] = encodeTerminalAuthArgs(name, p.Model, method.Terminal.Args)
 			}
 			_ = json.Unmarshal(m["name"], &label)
 			wire, _ := json.Marshal([]string{name, id})
