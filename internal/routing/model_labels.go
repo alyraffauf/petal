@@ -97,7 +97,7 @@ func claudeLabels(env map[string]string) map[string]string {
 
 // ResolveDefaultLabels asks the installed CLIs which model a new session would
 // use. Keep the route ID so selecting a default still follows provider settings.
-func (c Config) ResolveDefaultLabels(parent context.Context) {
+func (c Config) ResolveDefaultLabels(parent context.Context, cwd string) {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 	var probes []func()
@@ -111,27 +111,30 @@ func (c Config) ResolveDefaultLabels(parent context.Context) {
 		}
 		cli := providerCLI(a.Provider, a.Env)
 		if cli == "" {
+			delete(a.ModelLabels, id)
 			continue
 		}
 		probes = append(probes, func() {
-			if model := a.defaultModelName(ctx, cli); model != "" {
+			if model := a.defaultModelName(ctx, cli, cwd); model != "" {
 				a.ModelLabels[id] = model
+			} else {
+				delete(a.ModelLabels, id)
 			}
 		})
 	}
 	runCatalogProbes(probes)
 }
 
-func (a Account) defaultModelName(ctx context.Context, cli string) string {
+func (a Account) defaultModelName(ctx context.Context, cli, cwd string) string {
 	switch a.Provider {
 	case "claude":
-		raw, err := a.claudeControl(ctx, cli, `{"subtype":"get_settings"}`)
+		raw, err := a.claudeControl(ctx, cli, cwd, `{"subtype":"get_settings"}`)
 		var settings struct{ Applied struct{ Model string } }
 		if err == nil && json.Unmarshal(raw, &settings) == nil {
 			return settings.Applied.Model
 		}
 	case "codex":
-		raw, err := a.codexRead(ctx, "config/read")
+		raw, err := a.codexRead(ctx, cwd, "config/read")
 		var settings struct{ Config struct{ Model string } }
 		if err != nil || json.Unmarshal(raw, &settings) != nil {
 			return ""
@@ -139,7 +142,7 @@ func (a Account) defaultModelName(ctx context.Context, cli string) string {
 		if settings.Config.Model != "" {
 			return settings.Config.Model
 		}
-		raw, err = a.codexRead(ctx, "model/list")
+		raw, err = a.codexRead(ctx, cwd, "model/list")
 		var models struct {
 			Data []struct {
 				ID        string

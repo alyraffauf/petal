@@ -12,15 +12,16 @@ import (
 // Claude owns profile authentication. Keep stdin open until its control
 // response arrives. Closing it after the request can end the CLI prematurely.
 func (a Account) claudeQuota(ctx context.Context, cli, model string) (float64, error) {
-	raw, err := a.claudeControl(ctx, cli, `{"subtype":"get_usage","skip_behaviors":true}`)
+	raw, err := a.claudeControl(ctx, cli, "", `{"subtype":"get_usage","skip_behaviors":true}`)
 	if err != nil {
 		return 0, err
 	}
 	return claudeRemaining(raw, model)
 }
 
-func (a Account) claudeControl(ctx context.Context, cli, request string) (json.RawMessage, error) {
+func (a Account) claudeControl(ctx context.Context, cli, cwd, request string) (json.RawMessage, error) {
 	cmd := a.Command(ctx, []string{cli, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence"})
+	cmd.Dir = cwd
 	in, out, cleanup, err := startQuotaProcess(ctx, cmd)
 	if err != nil {
 		return nil, err
