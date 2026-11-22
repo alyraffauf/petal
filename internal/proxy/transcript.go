@@ -112,6 +112,22 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 	}
 }
 
+// flush checkpoints the last observed updates during daemon shutdown,
+// including an ACP v2 turn that did not report idle before closing.
+func (r *transcriptRecorder) flush() {
+	r.active.Range(func(_, value any) bool {
+		session := value.(*recordedSession)
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		if !session.replay {
+			if err := session.save(false); err != nil {
+				slog.Error("save ACP transcript on close", "error", err)
+			}
+		}
+		return true
+	})
+}
+
 // Stage replay separately until the provider confirms the load. A partial
 // v2 replay has no durable cursor base and must not overwrite local history.
 func (p *proxy) beforeTranscript(method, name, native, id string, params Object) (func(error) error, error) {

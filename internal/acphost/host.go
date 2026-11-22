@@ -22,6 +22,7 @@ import (
 
 type Host struct {
 	root      *os.Root
+	realRoot  string
 	ctx       context.Context
 	cancel    context.CancelFunc
 	approve   func(context.Context, string) error
@@ -35,8 +36,9 @@ func Open(ctx context.Context, cwd string, approve func(context.Context, string)
 	if err != nil {
 		return nil, err
 	}
+	realRoot, _ := filepath.EvalSymlinks(cwd)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Host{root: root, ctx: ctx, cancel: cancel, approve: approve, terminals: map[string]*terminal{}}, nil
+	return &Host{root: root, realRoot: realRoot, ctx: ctx, cancel: cancel, approve: approve, terminals: map[string]*terminal{}}, nil
 }
 func (h *Host) Close() {
 	h.mu.Lock()
@@ -53,10 +55,17 @@ func (h *Host) path(path string) (string, error) {
 		return "", acp.NewInvalidParams("expected an absolute workspace path")
 	}
 	rel, err := filepath.Rel(h.root.Name(), path)
-	if err != nil || !filepath.IsLocal(rel) {
-		return "", acp.NewInvalidParams("path outside the workspace")
+	if err == nil && filepath.IsLocal(rel) {
+		return rel, nil
 	}
-	return rel, nil
+	// An adapter may report the physical path of a symlinked workspace.
+	if h.realRoot != "" && h.realRoot != h.root.Name() {
+		rel, err = filepath.Rel(h.realRoot, path)
+		if err == nil && filepath.IsLocal(rel) {
+			return rel, nil
+		}
+	}
+	return "", acp.NewInvalidParams("path outside the workspace")
 }
 
 func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (any, error) {
@@ -140,7 +149,7 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 		}
 		cmd := exec.CommandContext(h.ctx, p.Command, p.Args...)
 		cmd.Dir = dir
-		cmd.Env = os.Environ()
+		cmd.Env = append(os.Environ(), "PWD="+dir)
 		for _, e := range p.Env {
 			cmd.Env = append(cmd.Env, e.Name+"="+e.Value)
 		}
@@ -153,6 +162,9 @@ func (h *Host) Call(ctx context.Context, method string, raw json.RawMessage) (an
 		defer h.mu.Unlock()
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if len(h.terminals) >= 16 {
+			return nil, acp.NewInternalError("workspace terminal limit reached")
 		}
 		group, err := processgroup.Start(cmd)
 		if err != nil {

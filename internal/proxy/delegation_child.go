@@ -106,7 +106,7 @@ func (p *proxy) openDelegatedChild(ctx context.Context, model, parentID string, 
 	if err != nil {
 		return nil, err
 	}
-	host := &proxy{Config: config, lifetime: ctx, embedded: p.embedded}
+	host := &proxy{Config: config, lifetime: ctx, embedded: p.embedded, local: p.local}
 	var failures []error
 	for _, name := range names {
 		if err := ctx.Err(); err != nil {
