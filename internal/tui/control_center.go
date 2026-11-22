@@ -188,6 +188,30 @@ func (p *picker) buildNodes() []controlNode {
 			all = append(all, controlNode{id: "turn/" + strconv.Itoa(i), parent: group, title: petalLabel(ansi.Truncate(line, 120, "…")), kind: "Turn", index: i})
 		}
 	}
+	var project string
+	for i, thread := range p.otherProjects {
+		if p.cfg.PinnedAccount != "" && p.cfg.PinnedAccount != thread.Account {
+			continue
+		}
+		group := "project/" + thread.Project
+		if project != group {
+			title := thread.Directory
+			if title == "" {
+				title = "Earlier project " + thread.Project[:8]
+			}
+			all = append(all, controlNode{id: group, title: petalLabel(title), kind: "Project", index: i})
+			project = group
+		}
+		parent := group
+		if thread.Parent != "" {
+			parent = group + "/" + thread.Parent
+		}
+		title := thread.Title
+		if title == "" {
+			title = "untitled conversation"
+		}
+		all = append(all, controlNode{id: group + "/" + thread.ID, parent: parent, title: petalLabel(title), kind: "Project thread", state: "saved", route: petalLabel(thread.Directory + " " + thread.Model + " / " + thread.Account), index: i})
+	}
 	if len(p.models) > 0 && m != nil {
 		all = append(all, newSession)
 	}
@@ -353,6 +377,16 @@ func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		switch n.kind {
+		case "Project":
+			p.center.cache.rowsValid = false
+			p.center.folded[n.id] = !p.center.folded[n.id]
+		case "Project thread":
+			r := p.otherProjects[n.index]
+			if r.Directory == "" || !slices.Contains(p.models, r.Model) || (m != nil && (m.ask != nil || m.Busy || m.changingSetting || m.forking)) {
+				return nil
+			}
+			p.center.cwd, p.id, p.cfg.Model, p.resume, p.chosen = r.Directory, r.ID, r.Model, true, true
+			return tea.Quit
 		case "Model":
 			p.cfg.Model = strings.TrimPrefix(n.id, "model/")
 			p.id = ""
@@ -406,6 +440,20 @@ func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
 func (p *picker) centerDetails(n controlNode) []entry {
 	m := p.center.owner
 	switch n.kind {
+	case "Project", "Project thread":
+		r := p.otherProjects[n.index]
+		if r.Directory == "" {
+			return []entry{{"system", "Open Petal in this thread’s original directory to enable resume."}}
+		}
+		details := []entry{{"system", petalLabel(r.Directory)}}
+		if n.kind == "Project thread" {
+			if !slices.Contains(p.models, r.Model) {
+				details = append(details, entry{"system", "Model unavailable · " + petalLabel(r.Model)})
+			} else {
+				details = append(details, entry{"system", "Enter · Resume in this directory"})
+			}
+		}
+		return details
 	case "Model":
 		return []entry{{"system", "Enter · Start session"}}
 	case "New":

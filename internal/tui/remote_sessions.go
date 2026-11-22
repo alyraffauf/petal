@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -15,6 +16,7 @@ import (
 type remoteSessions struct {
 	picker  *picker
 	records []sessions.Record
+	other   []sessions.ProjectThread
 	err     error
 }
 
@@ -35,15 +37,16 @@ func (m *terminal) browseSessions() tea.Cmd {
 		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 		defer cancel()
 		var records []sessions.Record
+		var other []sessions.ProjectThread
 		cursors := map[string]bool{}
-		req := acp.ListSessionsRequest{Cwd: &cwd}
+		req := acp.ListSessionsRequest{}
 		for {
 			result, err := acp.SendRequest[acp.ListSessionsResponse](h.conn, ctx, "session/list", req)
 			if err != nil {
-				return remoteSessions{picker, records, err}
+				return remoteSessions{picker, records, other, err}
 			}
 			for _, r := range result.Sessions {
-				if r.Cwd != cwd {
+				if !filepath.IsAbs(r.Cwd) {
 					continue
 				}
 				route := proxy.DecodeSessionRoute(string(r.SessionId))
@@ -57,13 +60,17 @@ func (m *terminal) browseSessions() tea.Cmd {
 				if r.UpdatedAt != nil {
 					s.Opened, _ = time.Parse(time.RFC3339Nano, *r.UpdatedAt)
 				}
-				records = append(records, s)
+				if r.Cwd == cwd {
+					records = append(records, s)
+				} else {
+					other = append(other, sessions.ThreadInProject(r.Cwd, s))
+				}
 			}
 			if result.NextCursor == nil {
-				return remoteSessions{picker, records, nil}
+				return remoteSessions{picker, records, other, nil}
 			}
 			if cursors[*result.NextCursor] {
-				return remoteSessions{picker, records, fmt.Errorf("adapter repeated its session cursor")}
+				return remoteSessions{picker, records, other, fmt.Errorf("adapter repeated its session cursor")}
 			}
 			req.Cursor = result.NextCursor
 			cursors[*req.Cursor] = true

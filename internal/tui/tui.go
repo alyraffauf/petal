@@ -556,7 +556,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.launch.setting != nil {
 					return m, m.selectSetting(m.launch)
 				}
-				m.next = &sessionStart{cwd: m.Cwd, cfg: m.launch.cfg, resume: m.launch.resume, id: m.launch.id}
+				m.next = &sessionStart{cwd: m.launch.center.cwd, cfg: m.launch.cfg, resume: m.launch.resume, id: m.launch.id}
 				if m.connection == connectionFailed && m.launch.routeOnly && m.next.resume == m.resume && m.next.id == m.resumeID {
 					m.next.editor = m.editor
 				}

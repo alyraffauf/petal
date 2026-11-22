@@ -36,6 +36,7 @@ type picker struct {
 	center                                  controlCenter
 	background                              string
 	history, fromCenter                     bool
+	otherProjects                           []sessions.ProjectThread
 	saved                                   []sessions.Record
 	historyError                            string
 	id                                      string
@@ -91,6 +92,11 @@ func (m *picker) showHistory() {
 	m.saved = saved
 	if err != nil {
 		m.historyError = err.Error()
+	}
+	other, otherErr := sessions.OtherProjectThreads(cwd)
+	m.otherProjects = other
+	if otherErr != nil {
+		m.historyError = otherErr.Error()
 	}
 	// Delegated records can be saved before route metadata is available.
 	for i, record := range m.saved {
@@ -278,6 +284,24 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.center.cache = centerCache{}
+		type threadKey struct{ project, id string }
+		byProject := make(map[threadKey]int, len(m.otherProjects))
+		for i, r := range m.otherProjects {
+			byProject[threadKey{r.Project, r.ID}] = i
+		}
+		for _, r := range t.other {
+			key := threadKey{r.Project, r.ID}
+			if i, ok := byProject[key]; ok {
+				m.otherProjects[i].Directory = r.Directory
+				if m.otherProjects[i].Title == "" {
+					m.otherProjects[i].Title = r.Title
+				}
+			} else {
+				byProject[key] = len(m.otherProjects)
+				m.otherProjects = append(m.otherProjects, r)
+			}
+		}
+		slices.SortStableFunc(m.otherProjects, func(a, b sessions.ProjectThread) int { return strings.Compare(a.Project, b.Project) })
 		known := make(map[string]int, len(m.saved))
 		for index, r := range m.saved {
 			known[r.ID] = index
@@ -559,5 +583,5 @@ func pick(cwd string, c routing.Config, resume bool) (sessionStart, bool, error)
 	}
 	defer m.stopWatchingChildStatuses()
 	_, err := tea.NewProgram(&frame{Model: m, background: m.background}).Run()
-	return sessionStart{cwd: cwd, cfg: m.cfg, resume: m.resume, id: m.id}, m.chosen, err
+	return sessionStart{cwd: m.center.cwd, cfg: m.cfg, resume: m.resume, id: m.id}, m.chosen, err
 }

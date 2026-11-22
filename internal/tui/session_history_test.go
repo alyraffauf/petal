@@ -1,6 +1,7 @@
 package tui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"path/filepath"
 	"testing"
 	"time"
@@ -61,4 +62,28 @@ func TestNewThreadDirectoryRelativeToSession(t *testing.T) {
 	if m.next == nil || m.next.resume || m.next.cwd != filepath.Dir(cwd) {
 		t.Fatalf("new session in parent directory: %+v", m.next)
 	}
+}
+
+func TestControlCenterResumesInThreadDirectory(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	local, other := t.TempDir(), t.TempDir()
+	cfg := routing.Config{Accounts: map[string]routing.Account{"work": {Models: map[string][]string{"model": {"adapter"}}}}}
+	for _, cwd := range []string{local, other} {
+		if _, err := sessions.Create(cwd, sessions.Record{ID: "same", Model: "model", Account: "work", Title: cwd}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := newPicker(local, cfg)
+	p.showHistory()
+	for _, node := range p.nodes() {
+		if node.title == other && node.kind == "Project thread" {
+			p.selectNode(node)
+			p.centerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if p.chosen && p.resume && p.id == "same" && p.center.cwd == other {
+				return
+			}
+			t.Fatalf("selected wrong session: %q in %q", p.id, p.center.cwd)
+		}
+	}
+	t.Fatal("missing thread from other directory")
 }
