@@ -34,13 +34,14 @@ func SessionID(p Object) (string, error) {
 }
 
 type backend struct {
-	close  context.CancelFunc
-	exited <-chan struct{}
-	ready  atomic.Bool
-	raw    Object
-	conn   *acp.Connection
-	wire   *adapterWire
-	hello  acp.InitializeResponse
+	promptedSessions sync.Map // native session IDs that have received a prompt on this connection
+	close            context.CancelFunc
+	exited           <-chan struct{}
+	ready            atomic.Bool
+	raw              Object
+	conn             *acp.Connection
+	wire             *adapterWire
+	hello            acp.InitializeResponse
 }
 type proxy struct {
 	recorder       *transcriptRecorder
@@ -304,6 +305,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
+	b.trackSessionStartup(method, params)
 	doneTrace := traceAdapter(ctx, b.wire, method, params)
 	result, err := forward[json.RawMessage](b.conn, ctx, method, params)
 	doneTrace(result, err)
@@ -326,6 +328,7 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		}
 		return nil, err
 	}
+	b.forgetClosedSession(method, params)
 	p.finishDelegationClose(delegationParent, closingEndpoint)
 	if method != "session/new" && method != "session/load" && method != "session/resume" && method != "session/fork" {
 		return result, nil
@@ -488,10 +491,17 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 		if notification && native == "session/update" {
 			defer func() { <-wire.updates }()
 		}
-		if version == 2 {
-			if !b.ready.Load() {
-				return nil, acp.NewInvalidRequest("initialize first")
+		if version == 2 && !b.ready.Load() {
+			return nil, acp.NewInvalidRequest("initialize first")
+		}
+		callback, _ := untag(method)
+		if callback == "elicitation/create" && clientCaps.member("elicitation").member("url") != nil && b.startupURL(raw) {
+			if reader.traceUpdates != nil {
+				reader.traceUpdates.Info("startup_url_elicitation_cancelled", "account", name)
 			}
+			return map[string]string{"action": "cancel"}, nil
+		}
+		if version == 2 {
 			return p.relayV2ClientCall(ctx, name, method, raw, clientCaps, lifetime)
 		}
 		if notification {

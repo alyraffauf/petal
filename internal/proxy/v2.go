@@ -347,6 +347,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 	if err != nil {
 		return nil, err
 	}
+	b.trackSessionStartup(method, params)
 	doneTrace := traceAdapter(ctx, b.wire, method, params)
 	result, err := p.relayV2Backend(ctx, b, method, params, notification)
 	doneTrace(result, err)
@@ -375,6 +376,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 		}
 		return nil, err
 	}
+	b.forgetClosedSession(method, params)
 	p.finishDelegationClose(canonical, closingEndpoint)
 	if method == "session/fork" {
 		var fork Object
