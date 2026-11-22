@@ -122,15 +122,16 @@ Set the variable in Petal's environment to the complete header value, including 
 
 Petal reads the value each time it forwards the definition. Keep credentials out of Nix expressions.
 
-Before the first prompt in a new or resumed chat, Petal cancels session-scoped URL sign-in requests so optional MCP servers can’t hold up the conversation. A server that needs sign-in may be unavailable. To use it, authenticate with the adapter’s profile and reopen the chat.
+Before the first prompt in a new or resumed chat, Petal cancels session-scoped URL sign-in requests so optional MCP servers can’t hold up the conversation. A server that needs sign-in may be unavailable.
 
-The adapter handles OAuth and remembers the login for its profile. Claude Code can request sign-in when you reconnect the server through its MCP command. On first use, Codex can ask you to run `codex mcp login <name>`. Use the same Codex home and server URL as the Petal account.
-
-If the server exists only in Petal, supply its URL to the Codex CLI.
+For a configured HTTP server without headers, install the npm package `mcp-remote` on Petal's PATH and connect once from a terminal:
 
 ```sh
-codex -c 'mcp_servers.work-tools.url="https://tools.example.org/mcp"' mcp login work-tools
+npm install -g mcp-remote
+petal mcp login SERVER_NAME
 ```
+
+Replace `SERVER_NAME` with the configured server name and use the same `--config` as your Petal session. Use HTTPS for remote login, or HTTP on loopback. The command opens a browser if the endpoint requests OAuth. After the first successful connection, new and reopened sessions receive a stdio bridge for that server. Codex and Claude share the bridge's credentials under `$XDG_STATE_HOME/petal/mcp` (default `~/.local/state/petal/mcp`). Repeat login if authorization is revoked. Public HTTP servers without headers also require this one-time connection. Servers with configured headers use HTTP directly.
 
 ### Built-in Petal tools
 

@@ -132,7 +132,7 @@ func TestV2ClientNegotiatesAndReplaysThroughProxy(t *testing.T) {
 			if resume {
 				cfg.MCPServers = []routing.MCPServer{
 					{Name: "stdio", Command: exe},
-					{Name: "http", URL: "https://example.test/mcp"},
+					{Name: "http", URL: "https://example.test/mcp", Headers: []routing.MCPHeader{{Name: "X-Test", FromEnv: "PATH"}}},
 				}
 				if _, err := sessions.Create(cwd, sessions.Record{
 					ID: id, Account: "local", Model: "model", Opened: time.Now(),

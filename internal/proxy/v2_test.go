@@ -289,7 +289,7 @@ func TestNativeV2SessionAndCancellation(t *testing.T) {
 	wire := connectWireTest(t, routing.Config{
 		ACPv2: true, Model: "m",
 		Accounts:   map[string]routing.Account{"v2": nativeAccount(t, `{"session":{"mcp":{"stdio":{},"http":{}},"delete":{}}}`)},
-		MCPServers: []routing.MCPServer{{Name: "local", Command: "/bin/tool"}, {Name: "remote", URL: "https://example.invalid/mcp"}},
+		MCPServers: []routing.MCPServer{{Name: "local", Command: "/bin/tool"}, {Name: "remote", URL: "https://example.invalid/mcp", Headers: []routing.MCPHeader{{Name: "X-Test", FromEnv: "PATH"}}}},
 	})
 	wire.send(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":0}}`)
 	if failure := wire.read().member("error"); string(failure["code"]) != "-32022" || string(failure.member("data")["supported"]) != "[1,2]" {

@@ -68,7 +68,20 @@ func main() {
 			return agentmcp.Relay(cmd.Context(), args[0], os.Getenv(agentmcp.TokenEnv), os.Stdin, os.Stdout)
 		},
 	}
-	root.AddCommand(server, bridge)
+	mcp := &cobra.Command{Use: "mcp", Short: "Manage configured MCP servers"}
+	mcp.AddCommand(&cobra.Command{Use: "login NAME", Short: "Connect an HTTP MCP server and complete browser login if required", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		config, err := load("")
+		if err != nil {
+			return err
+		}
+		for _, server := range config.MCPServers {
+			if server.Name == args[0] {
+				return server.Login(cmd.Context())
+			}
+		}
+		return fmt.Errorf("unknown MCP server %q", args[0])
+	}})
+	root.AddCommand(server, bridge, mcp)
 
 	if err := root.Execute(); err != nil {
 		log.Fatal(err)

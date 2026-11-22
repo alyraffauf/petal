@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+npm install --prefix "$work" --no-audit --no-fund --save-exact mcp-remote@0.16.7
+go build -o "$work/petal" .
+export PETAL_OAUTH_CLI="$work/petal"
+export PETAL_OAUTH_HELPERS="$work/node_modules/.bin"
+go test ./internal/proxy -run '^TestMCPRemoteDiscovery$' -count=1 -v "$@"
