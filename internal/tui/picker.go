@@ -2,7 +2,7 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
+
 	"fmt"
 	"image"
 	"os"
@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/sahilm/fuzzy"
 
+	"petal/internal/proxy"
 	"petal/internal/routing"
 	"petal/internal/sessions"
 )
@@ -98,8 +99,7 @@ func (m *picker) showHistory() {
 		if record.DelegatedParent == "" || record.Account != "" {
 			continue
 		}
-		var route []string
-		if json.Unmarshal([]byte(record.ID), &route) == nil && len(route) == 3 && route[1] == record.Model {
+		if route := proxy.DecodeSessionRoute(record.ID); route != nil && route[1] == record.Model {
 			m.saved[i].Account = route[0]
 		}
 	}
