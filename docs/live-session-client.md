@@ -23,3 +23,5 @@ An observer can replay and read results. `Attach` with control or `Claim` takes 
 Retry the same open handle, operation number and payload, or question answer after a dropped reply. Compare `Client.Instance()` after reconnecting. Live events, operation receipts, and questions are scoped to one daemon instance. After a daemon restart, reopen using the durable session ID.
 
 The daemon retains at most 4,096 events and 8 MiB of event JSON per session. If a reader falls behind, `Gap` reports the oldest available cursor. Use the durable archive as the transcript baseline and resume from a fresh snapshot's head. Transient events lost to retention cannot be reconstructed. The archive checkpoints at ACP v1 prompt completion and ACP v2 idle, with a final checkpoint on orderly daemon shutdown. Older operation receipts can expire. Expired operation numbers cannot run again.
+
+For ACP v1 steering, a `call_finished` event carries the submitted ACP parameters when the adapter confirms injection. Render that input once when replaying the event. A steering reply that requires a follow-up prompt leaves the event parameters empty.

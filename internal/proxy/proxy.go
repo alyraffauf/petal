@@ -302,6 +302,9 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	doneTrace := traceAdapter(ctx, b.wire, method, params)
 	result, err := forward[json.RawMessage](b.conn, ctx, method, params)
 	doneTrace(result, err)
+	if p.version == 1 && method == "_session/steering" && err == nil && p.recorder != nil && SteeringInjected(result) {
+		p.recorder.recordSteering(p.publicID(name, native), params)
+	}
 	if promptEndpoint != nil && err == nil {
 		result = promptEndpoint.continueV1(wakeCtx, b, native, result)
 		t, _ := ctx.Value(traceKey{}).(*requestTrace)

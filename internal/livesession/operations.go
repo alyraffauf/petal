@@ -28,13 +28,11 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 		return 0, err
 	}
 	if call.Operation != 0 && call.Operation < s.nextOp {
-		for _, op := range s.receipts {
-			if op.number == call.Operation {
-				if op.fingerprint != hash {
-					return 0, failure(Conflict, "operation number is already bound to another call")
-				}
-				return op.number, nil
+		if op := s.findOperation(call.Operation); op != nil {
+			if op.fingerprint != hash {
+				return 0, failure(Conflict, "operation number is already bound to another call")
 			}
+			return op.number, nil
 		}
 		return 0, failure(Expired, "operation receipt is no longer retained")
 	}
@@ -76,8 +74,6 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 			s.running = true
 		}
 	}
-	s.receipts = append(s.receipts, op)
-	s.trimReceipts()
 	// ACP v1 adapters need not echo the user prompt. Preserve the accepted
 	// input so a newly attached TUI can show the in-flight user message.
 	started := Event{Kind: CallStarted, Method: call.Method, Operation: op.number}
@@ -145,11 +141,24 @@ func (s *session) result(number uint64) (Receipt, *Error) {
 	return s.receiptLocked(number)
 }
 
-func (s *session) receiptLocked(number uint64) (Receipt, *Error) {
+func (s *session) findOperation(number uint64) *operation {
+	if s.active != nil && s.active.number == number {
+		return s.active
+	}
+	if s.steering != nil && s.steering.number == number {
+		return s.steering
+	}
 	for _, op := range s.receipts {
 		if op.number == number {
-			return op.receipt, nil
+			return op
 		}
+	}
+	return nil
+}
+
+func (s *session) receiptLocked(number uint64) (Receipt, *Error) {
+	if op := s.findOperation(number); op != nil {
+		return op.receipt, nil
 	}
 	if number != 0 && number < s.nextOp {
 		return Receipt{}, failure(Expired, "operation receipt is no longer retained")
@@ -209,6 +218,7 @@ func (s *session) run(op *operation, params json.RawMessage) {
 	op.replay = nil
 	op.receipt = Receipt{Done: true, Outcome: outcome}
 	op.size = size
+	s.receipts = append(s.receipts, op)
 	s.receiptSize += size
 	s.trimReceipts()
 	if op == s.steering {
@@ -220,7 +230,11 @@ func (s *session) run(op *operation, params json.RawMessage) {
 		s.running = false
 	}
 	if !s.closed {
-		s.publish(Event{Kind: CallFinished, Method: op.method, Operation: op.number})
+		finished := Event{Kind: CallFinished, Method: op.method, Operation: op.number}
+		if op.method == "_session/steering" && proxy.SteeringInjected(outcome.Result) {
+			finished.Params = params
+		}
+		s.publish(finished)
 		if op.method == "session/delete" && outcome.Error == nil && outcome.ACPError == nil {
 			s.closed = true
 			s.publish(Event{Kind: SessionClosed})

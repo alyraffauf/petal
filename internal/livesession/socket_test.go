@@ -360,3 +360,46 @@ func openSession(t *testing.T, ctx context.Context, client *Client, opts OpenOpt
 	}
 	return snapshot
 }
+
+func TestSteeringAcrossReceiptEviction(t *testing.T) {
+	ctx, dial := startSocket(t, 1, false)
+	client := dial()
+	opts := OpenOptions{Handle: NewHandle(), Cwd: t.TempDir(), Model: "fixture"}
+	setup := openSession(t, ctx, client, opts, 1)
+	prompt := Call{Operation: 3, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"hold for steering"}]}`)}
+	submit(t, ctx, client, prompt)
+	cursor := setup.Head
+	advance(t, ctx, client, &cursor, func(e Event) bool { return strings.Contains(string(e.Params), "ready for steering") })
+	for i := range receiptCount + 2 {
+		text := "defer input"
+		if i == 0 {
+			text = "accepted input"
+		}
+		call := Call{Operation: uint64(4 + i), Method: "_session/steering", Params: bytesOf(map[string]any{"prompt": []map[string]string{{"type": "text", "text": text}}})}
+		submit(t, ctx, client, call)
+		if receipt, err := client.WaitResult(ctx, call.Operation); err != nil || receipt.Err() != nil {
+			t.Fatalf("steering: %+v, %v", receipt, err)
+		}
+	}
+	submit(t, ctx, client, prompt)
+	if err := client.Cancel(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	if receipt, err := client.WaitResult(ctx, 3); err != nil || receipt.Err() != nil {
+		t.Fatalf("prompt: %+v, %v", receipt, err)
+	}
+	count := 0
+	advance(t, ctx, client, &cursor, func(e Event) bool {
+		if e.Kind == CallFinished && e.Method == "_session/steering" && len(e.Params) > 0 {
+			if !strings.Contains(string(e.Params), "accepted input") {
+				t.Fatalf("unexpected replay: %s", e.Params)
+			}
+			count++
+		}
+		return e.Kind == CallFinished && e.Operation == 3
+	})
+	rows, err := sessions.Transcript(opts.Cwd, setup.SessionID)
+	if count != 1 || err != nil || len(rows) != 3 || rows[2].Role != "user" || rows[2].Body != "accepted input" {
+		t.Fatalf("replayed %d accepted inputs, archive %+v, error %v", count, rows, err)
+	}
+}

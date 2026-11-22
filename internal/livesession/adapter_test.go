@@ -160,6 +160,25 @@ func (a adapterFixture) prompt(frame adapterFrame) {
 	if text == "exit" {
 		os.Exit(0)
 	}
+	if text == "hold for steering" {
+		a.text("ready for steering")
+		for {
+			next := a.read()
+			if next.Method == "session/cancel" {
+				break
+			}
+			if next.Method != "_session/steering" {
+				a.t.Fatalf("unexpected call: %s", next.Method)
+			}
+			outcome := "injected"
+			if strings.Contains(string(next.Params["prompt"]), "defer input") {
+				outcome = "promptRequired"
+			}
+			a.reply(next.ID, map[string]string{"outcome": outcome})
+		}
+		a.reply(frame.ID, map[string]string{"stopReason": "cancelled"})
+		return
+	}
 	if text == "cancel" {
 		cancel := a.read()
 		if cancel.Method != "session/cancel" || field(cancel.Params, "sessionId") != a.id {
