@@ -67,6 +67,18 @@ func evaluateHistory(t *testing.T, cfg embeddings.Settings) {
 	if err := SaveTranscript(cwd, "other", []Message{{Role: "tool", Body: "car battery replacement"}}, true); err != nil {
 		t.Fatal(err)
 	}
+	cfg, err = cfg.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var digest string
+	index := func() {
+		t.Helper()
+		if _, err := indexHistoryBatch(t.Context(), cwd, "p", cfg, &digest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index()
 	for _, c := range []struct{ q, want string }{{"ERR_SOCKET_901", docs[0]}, {"KEY_ROTATE_712", docs[3]}, {"ERR_SOCKET_902", ""}, {"PR #123", ""}, {"port 5432", ""}, {"car battery replacement", docs[1]}, {"storing extra soup for another meal", docs[2]}, {"lunar volcanic geology", ""}, {"medieval tapestry weaving", ""}} {
 		f, err := SearchHistory(t.Context(), cwd, "p", c.q, 0)
 		if err != nil {
@@ -111,6 +123,7 @@ func evaluateHistory(t *testing.T, cfg embeddings.Settings) {
 		t.Fatal(err)
 	}
 	count(2)
+	index()
 	h, err := SearchHybridHistory(t.Context(), cwd, "p", "car battery replacement", cfg)
 	if err != nil || h.Retrieval != "hybrid" {
 		t.Fatal(h, err)
@@ -130,15 +143,12 @@ func evaluateHistory(t *testing.T, cfg embeddings.Settings) {
 		}
 	}
 	q := "storing extra soup for another meal"
+	index()
 	cold, err := SearchHybridHistory(t.Context(), cwd, "p", q, cfg)
 	if err != nil || cold.Coverage == nil || *cold.Coverage != (HistoryCoverage{Indexed: 8, Window: 11, Partial: true}) || cold.Next == "" {
 		t.Fatal(cold, err)
 	}
-	for _, hit := range cold.Hits {
-		if hit.Snippet == docs[2] {
-			t.Fatalf("unindexed answer returned: %v", hit)
-		}
-	}
+	index()
 	warm, err := SearchHybridHistory(t.Context(), cwd, "p", q, cfg)
 	if err != nil || warm.Coverage == nil || warm.Coverage.Partial || warm.Coverage.Indexed != 11 || len(warm.Hits) < 2 || warm.Hits[0].Source != "keyword" {
 		t.Fatal(warm, err)
@@ -153,6 +163,33 @@ func evaluateHistory(t *testing.T, cfg embeddings.Settings) {
 		t.Fatal(warm)
 	}
 	t.Logf("cold=%+v warm=%+v hits=%v", cold.Coverage, warm.Coverage, warm.Hits)
+	// A busy child must not evict an old parent decision from recall.
+	if _, err := db.Exec(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<300)
+	INSERT INTO messages(session_id,role,body) SELECT 'child','tool','Tide height sample ' || i FROM n`); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		more, err := indexHistoryBatch(t.Context(), cwd, "p", cfg, &digest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !more {
+			break
+		}
+	}
+	archived, err := SearchHybridHistory(t.Context(), cwd, "p", "storing extra soup for another meal", cfg)
+	if err != nil || archived.Coverage == nil || archived.Coverage.Indexed != 311 {
+		t.Fatal(archived, err)
+	}
+	found = false
+	for _, hit := range archived.Hits {
+		if hit.Snippet == docs[2] && hit.Source == "semantic" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("archived answer missing", archived)
+	}
 	old := embeddingClient
 	embeddingClient = &http.Client{Transport: unavailableProvider{}}
 	defer func() { embeddingClient = old }()
@@ -202,7 +239,11 @@ func TestHistoryEmbeddingBoundary(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(got, map[string]any{"model": "all-minilm:latest", "input": []any{"parent", prefix, "parent text"}}) {
+		want := []any{"parent"}
+		if calls == 2 {
+			want = []any{"parent text", prefix}
+		}
+		if !reflect.DeepEqual(got, map[string]any{"model": "all-minilm:latest", "input": want}) {
 			t.Fatal(got)
 		}
 		return &http.Response{StatusCode: 307, Header: http.Header{"Location": {redirect.URL}}, Body: io.NopCloser(strings.NewReader(""))}, nil
@@ -220,6 +261,12 @@ func TestHistoryEmbeddingBoundary(t *testing.T) {
 	if err != nil || calls != 1 || page.Retrieval != "fts" || len(page.Hits) != 1 {
 		t.Fatal(page, err, calls)
 	}
+	cfg, _ := (embeddings.Settings{}).Resolve()
+	var digest string
+	if _, err := indexHistoryBatch(t.Context(), cwd, "parent", cfg, &digest); err == nil || calls != 2 {
+		t.Fatal(err, calls)
+	}
+
 }
 
 func tagReply(digit string) *http.Response {
@@ -345,7 +392,7 @@ func TestHybridLifecycle(t *testing.T) {
 			}
 			switch scenario {
 			case "replace":
-				if page.Retrieval != "hybrid" || page.Coverage.Indexed != 3 || len(page.Hits) != 0 {
+				if page.Retrieval != "hybrid" || page.Coverage.Indexed != 0 || len(page.Hits) != 0 {
 					t.Fatal(page)
 				}
 			case "replace during embed":
@@ -357,7 +404,11 @@ func TestHybridLifecycle(t *testing.T) {
 				if err := db.QueryRow("SELECT count(*) FROM message_embeddings").Scan(&cached); err != nil || cached != 0 {
 					t.Fatal(cached, err)
 				}
-				if page.Retrieval != "fts" || len(page.Hits) != 3 {
+				want := "hybrid"
+				if scenario == "wrong model" {
+					want = "fts"
+				}
+				if page.Retrieval != want || len(page.Hits) != 3 {
 					t.Fatal(page)
 				}
 			default:

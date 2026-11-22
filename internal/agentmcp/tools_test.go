@@ -1,6 +1,7 @@
 package agentmcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"time"
 
 	"testing"
 
@@ -77,7 +79,17 @@ func TestConfiguredEmbeddingSearch(t *testing.T) {
 	if err != nil || len(value.(sessions.HistoryMatches).Hits) != 0 {
 		t.Fatalf("unexpected keyword result: %v, %v", value, err)
 	}
-	value, _, err = endpoint.invoke(t.Context(), tools, record, "recall", query)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); sessions.IndexHistory(ctx, cwd, "p", tools.Embeddings) }()
+	defer func() { cancel(); <-done }()
+	for deadline := time.Now().Add(3 * time.Second); ; {
+		value, _, err = endpoint.invoke(t.Context(), tools, record, "recall", query)
+		if err != nil || len(value.(sessions.HistoryMatches).Hits) > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
