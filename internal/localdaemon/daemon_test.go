@@ -22,6 +22,20 @@ import (
 
 func runtimeRoot(t *testing.T) string {
 	t.Helper()
+	// Nix can map only the build user into its Linux sandbox. In that
+	// namespace / and /tmp have an unmapped owner, so discovery must fail.
+	if runtime.GOOS == "linux" && os.Getenv("NIX_BUILD_TOP") != "" {
+		var rootStat unix.Stat_t
+		if err := unix.Stat("/", &rootStat); err != nil {
+			t.Fatal(err)
+		}
+		if rootStat.Uid != 0 && rootStat.Uid != uint32(os.Geteuid()) {
+			if _, err := Discover("/tmp"); err == nil {
+				t.Fatal("accepted a runtime path beneath an untrusted root")
+			}
+			t.Skip("daemon startup requires a trusted runtime path; CI also runs this suite outside the Nix sandbox")
+		}
+	}
 	root, err := os.MkdirTemp("/tmp", "petal-test-")
 	if err != nil {
 		t.Fatal(err)

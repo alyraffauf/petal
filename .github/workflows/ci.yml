@@ -17,7 +17,9 @@ jobs:
               with:
                   go-version-file: go.mod
             - name: Exercise terminal and Unix socket sessions
-              run: go test . ./internal/proxy -run 'TestTerminal|FuzzNativeProxyHistory'
+              run: |
+                  go test . ./internal/proxy -run 'TestTerminal|FuzzNativeProxyHistory'
+                  go test ./internal/localdaemon
     test:
         runs-on: ubuntu-latest
         steps:
