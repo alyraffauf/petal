@@ -119,6 +119,7 @@ func (p *proxy) bindDelegation(endpoint *delegationEndpoint, account, parent str
 	p.delegationCwds[parent] = endpoint.cwd
 
 	close(endpoint.ready)
+	go sessions.IndexHistory(endpoint.ctx, endpoint.cwd, parent, p.History.Embeddings)
 	return nil
 }
 

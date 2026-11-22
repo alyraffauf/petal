@@ -71,9 +71,9 @@ The identifier rule keeps `ERR_SOCKET_902` from matching `ERR_SOCKET_901` by vec
 
 ### What Petal sends to the provider
 
-A call to `recall` sends the query and up to eight message prefixes of 1,024 characters each. The prefixes come from the newest 256 messages in the session and its subagents. Petal ignores HTTP proxies and redirects for this request.
+While a history-enabled session is open, Petal sends its saved messages and those of its delegated descendants to the configured embeddings provider in background batches of up to eight. Each input contains the first 1,024 characters of a message. This includes older transcripts, even before anyone calls `recall`. Set the provider to `off` to disable indexing and recall.
 
-Repeated calls fill that window of 256 messages. The response reports `coverage.indexed` and `coverage.window`. When `coverage.partial` is true, call `recall` again. Older text remains searchable by keyword.
+A semantic query sends the query text and scores all indexed messages in scope. There is no message-age cutoff. The response reports the indexed count in `coverage.indexed` and the total scoped count in `coverage.window`. While `coverage.partial` is true, keyword search can still find messages awaiting indexing.
 
 ### Limits
 

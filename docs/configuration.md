@@ -143,7 +143,7 @@ Petal keeps every transcript on your machine. Agents search them by keyword with
 
 To offer keyword search only, set `provider = "off"` under `[history.embeddings]`. This setting replaces the `PETAL_HISTORY_EMBEDDINGS` environment variable. If an earlier installation left embeddings disabled, set `off` to keep keyword-only searches.
 
-To use an OpenAI-compatible embeddings API, add the following table to `config.toml`. Petal then sends search queries and scoped transcript excerpts to that API.
+To use an OpenAI-compatible embeddings API, add the following table to `config.toml`. Opening a session then starts sending transcript excerpts from that session and its delegated descendants to the API in background batches, including older messages. Recall sends the search query separately.
 
 ```toml
 [history.embeddings]
