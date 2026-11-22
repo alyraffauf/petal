@@ -126,11 +126,20 @@ type terminal struct {
 }
 
 type sessionStart struct {
-	cwd    string
-	id     string
-	cfg    routing.Config
-	resume bool
-	editor *composer
+	requestedModel string
+	cwd            string
+	id             string
+	cfg            routing.Config
+	resume         bool
+	editor         *composer
+}
+
+func (m *terminal) retrySession() *sessionStart {
+	start := &sessionStart{cwd: m.Cwd, cfg: m.cfg, resume: m.resume, id: m.resumeID, editor: m.editor}
+	if m.h != nil {
+		start.requestedModel = m.h.requestedModel
+	}
+	return start
 }
 
 func Run(parent context.Context, c routing.Config, resume bool) error {
@@ -159,6 +168,7 @@ func runSession(parent context.Context, start sessionStart, drafts sessionDrafts
 	cwd := start.cwd
 	m.screen = screen{transcriptRevision: 1, background: canvasBackground(c.TransparentBackground), Cwd: cwd, Model: c.Model, Account: c.PinnedAccount, connection: connecting}
 	m.h = startHarness(ctx, c)
+	m.h.requestedModel = start.requestedModel
 	m.h.id = start.id
 	defer m.h.close()
 	m.draftSessionID = start.id
@@ -383,7 +393,7 @@ func (m *terminal) submit() tea.Cmd {
 			return nil
 		}
 		m.editor.Reset()
-		m.next = &sessionStart{cwd: path, cfg: m.cfg}
+		m.next = &sessionStart{cwd: path, cfg: m.cfg, requestedModel: m.agentSettings.byCategory("model").current()}
 		return tea.Quit
 	}
 	input := text
@@ -685,7 +695,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if t.err == signedIn {
-			m.next = &sessionStart{cwd: m.Cwd, cfg: m.cfg, resume: m.resume, id: m.resumeID, editor: m.editor}
+			m.next = m.retrySession()
 			return m, tea.Quit
 		}
 		clear(m.tools)
