@@ -489,8 +489,8 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	}
 	root := h.id
 	h.activeID.Store(&root)
-	var parts []string
-	if json.Unmarshal([]byte(h.id), &parts) != nil || len(parts) != 3 {
+	parts := proxy.DecodeSessionRoute(h.id)
+	if parts == nil {
 		return "", fmt.Errorf("invalid route from proxy")
 	}
 	h.cwd = cwd

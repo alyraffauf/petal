@@ -227,8 +227,8 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		if err != nil {
 			return nil, err
 		}
-		var parts []string
-		if json.Unmarshal([]byte(id), &parts) != nil || len(parts) != 3 || parts[1] != p.Model || parts[2] == "" {
+		parts := DecodeSessionRoute(id)
+		if parts == nil || parts[1] != p.Model || parts[2] == "" {
 			if method == "session/delete" || method == "session/close" {
 				return Object{}, nil
 			}
@@ -389,6 +389,16 @@ func (p *proxy) choose(ctx context.Context) (string, error) {
 func (p *proxy) publicID(name, native string) string {
 	b, _ := json.Marshal([]string{name, p.Model, native})
 	return string(b)
+}
+
+// DecodeSessionRoute returns the account, model, and native session ID in wire order.
+// Legacy routes use encoding/json's string decoding, which accepts null as "".
+func DecodeSessionRoute(id string) []string {
+	var parts []string
+	if json.Unmarshal([]byte(id), &parts) != nil || len(parts) != 3 {
+		return nil
+	}
+	return parts
 }
 
 func (p *proxy) editorID(name, native string) string {

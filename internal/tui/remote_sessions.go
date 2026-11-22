@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	acp "github.com/coder/acp-go-sdk"
+	"petal/internal/proxy"
 	"petal/internal/sessions"
 )
 
@@ -42,8 +43,11 @@ func (m *terminal) browseSessions() tea.Cmd {
 				return remoteSessions{picker, records, err}
 			}
 			for _, r := range result.Sessions {
-				var route []string
-				if r.Cwd != cwd || json.Unmarshal([]byte(r.SessionId), &route) != nil || len(route) != 3 {
+				if r.Cwd != cwd {
+					continue
+				}
+				route := proxy.DecodeSessionRoute(string(r.SessionId))
+				if route == nil {
 					continue
 				}
 				s := sessions.Record{ID: string(r.SessionId), Model: route[1], Account: route[0]}
