@@ -116,12 +116,7 @@ func (b *agentBrowser) message(id acp.MessageId) *agentMailbox {
 	return m
 }
 func (m *agentMailbox) append(block acp.ContentBlock) {
-	if block.Text != nil {
-		m.body.WriteString(block.Text.Text)
-		return
-	}
-	raw, _ := json.Marshal(block)
-	m.body.WriteString(contentText(raw))
+	m.body.WriteString(contentBlockText(block))
 }
 func (b *agentBrowser) publish() {
 	for _, m := range b.mail {

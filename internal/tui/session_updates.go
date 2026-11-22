@@ -87,21 +87,21 @@ func (m *terminal) indexIdleCompaction(id string) {
 }
 
 func (c *compaction) append(block acp.ContentBlock) {
-	c.writeBlock(block)
+	c.summary.WriteString(contentBlockText(block))
 	if c.status != acp.CompactionStatusInProgress {
 		c.refresh()
 	}
 }
 
-func (c *compaction) writeBlock(block acp.ContentBlock) {
+func contentBlockText(block acp.ContentBlock) string {
 	if block.Text != nil {
-		c.summary.WriteString(block.Text.Text)
-		return
+		return block.Text.Text
 	}
 	raw, err := json.Marshal(block)
-	if err == nil {
-		c.summary.WriteString(contentText(raw))
+	if err != nil {
+		return ""
 	}
+	return contentText(raw)
 }
 
 func (c *compaction) update(u acp.SessionCompactionUpdate) {
@@ -116,7 +116,7 @@ func (c *compaction) update(u acp.SessionCompactionUpdate) {
 		c.summary.Reset()
 		blocks, _ := u.Summary.Value()
 		for _, block := range blocks {
-			c.writeBlock(block)
+			c.summary.WriteString(contentBlockText(block))
 		}
 	}
 	c.refresh()
