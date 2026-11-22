@@ -156,7 +156,7 @@ Petal appends `/embeddings` to the base URL. Set `model` to the embedding model 
 
 For native Ollama, set `provider = "ollama"`. The `model` defaults to `all-minilm:latest` and the `base_url` defaults to `http://127.0.0.1:11434`.
 
-Both providers support HTTPS and loopback HTTP. Petal follows no redirects. When Petal makes a request, it reads the bearer token from the named environment variable. If the token is missing, the search uses keywords. [Search scope, coverage, and limits](acp.md#local-semantic-history-search)
+Both providers support HTTP and HTTPS on any host. Petal follows no redirects. When Petal makes a request, it reads the bearer token from the named environment variable. If the token is missing, the search uses keywords. [Search scope, coverage, and limits](acp.md#local-semantic-history-search)
 
 ## Use your terminal's background
 

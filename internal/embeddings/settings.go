@@ -2,7 +2,6 @@ package embeddings
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"strings"
 )
@@ -49,9 +48,8 @@ func (e Settings) Resolve() (Settings, error) {
 	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
 		return e, fmt.Errorf("invalid history.embeddings.base_url")
 	}
-	loopback := u.Hostname() == "localhost" || net.ParseIP(u.Hostname()).IsLoopback()
-	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
-		return e, fmt.Errorf("history.embeddings.base_url requires HTTPS or loopback HTTP")
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return e, fmt.Errorf("history.embeddings.base_url requires HTTP or HTTPS")
 	}
 	return e, nil
 }
