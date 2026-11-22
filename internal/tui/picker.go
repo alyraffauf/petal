@@ -286,13 +286,19 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.center.cache = centerCache{}
 		type threadKey struct{ project, id string }
 		byProject := make(map[threadKey]int, len(m.otherProjects))
+		directories := make(map[string]string, len(t.other))
+		for _, r := range t.other {
+			directories[r.Project] = r.Directory
+		}
 		for i, r := range m.otherProjects {
+			if cwd := directories[r.Project]; cwd != "" {
+				m.otherProjects[i].Directory = cwd
+			}
 			byProject[threadKey{r.Project, r.ID}] = i
 		}
 		for _, r := range t.other {
 			key := threadKey{r.Project, r.ID}
 			if i, ok := byProject[key]; ok {
-				m.otherProjects[i].Directory = r.Directory
 				if m.otherProjects[i].Title == "" {
 					m.otherProjects[i].Title = r.Title
 				}

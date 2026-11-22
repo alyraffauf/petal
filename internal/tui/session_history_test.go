@@ -87,3 +87,20 @@ func TestControlCenterResumesInThreadDirectory(t *testing.T) {
 	}
 	t.Fatal("missing thread from other directory")
 }
+
+func TestAdapterDirectoryUnlocksSiblingArchiveThreads(t *testing.T) {
+	p := newPicker(t.TempDir(), routing.Config{})
+	p.history = true
+	found := sessions.ThreadInProject(t.TempDir(), sessions.Record{ID: "reported"})
+	p.otherProjects = []sessions.ProjectThread{{Project: found.Project, ID: "archived"}, {Project: "unrelated", ID: "archived"}}
+	p.Update(remoteSessions{picker: p, other: []sessions.ProjectThread{found}})
+	for _, r := range p.otherProjects {
+		want := ""
+		if r.Project == found.Project {
+			want = found.Directory
+		}
+		if r.Directory != want {
+			t.Fatalf("directory for %s/%s = %q, want %q", r.Project, r.ID, r.Directory, want)
+		}
+	}
+}
