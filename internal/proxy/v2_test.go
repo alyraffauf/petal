@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -210,6 +211,38 @@ type proxyWireTest struct {
 func connectWireTest(t *testing.T, config routing.Config) proxyWireTest {
 	t.Helper()
 	editor, proxy := net.Pipe()
+	return serveTestConnection(t, config, editor, proxy)
+}
+
+// The generated session histories use a filesystem socket, as separate Petal
+// processes will. Keep the path short enough for Darwin's sockaddr_un.
+func connectUnixWireTest(t *testing.T, config routing.Config) proxyWireTest {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "petal-wire-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "socket")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	editor, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := listener.Accept()
+	if err != nil {
+		editor.Close()
+		t.Fatal(err)
+	}
+	return serveTestConnection(t, config, editor, server)
+}
+
+func serveTestConnection(t *testing.T, config routing.Config, editor, proxy net.Conn) proxyWireTest {
+	t.Helper()
 	t.Cleanup(func() {
 		_ = editor.Close()
 		_ = proxy.Close()
