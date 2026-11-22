@@ -132,6 +132,7 @@ type sessionStart struct {
 }
 
 func Run(parent context.Context, c routing.Config, resume bool) error {
+	c.ResolveDefaultLabels(parent)
 	start, ok, err := pick(c, resume)
 	if err != nil || !ok {
 		return err

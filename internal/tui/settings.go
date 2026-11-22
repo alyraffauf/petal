@@ -181,6 +181,11 @@ func (m *terminal) openSettingValues(s setting) {
 	current := s.current()
 	for _, choice := range s.choices() {
 		label := choice.Name
+		if account, ok := m.cfg.Accounts[m.Account]; ok && s.Category == "model" && (choice.Value == "default" || choice.Value == account.Provider+"/default") {
+			if resolved := account.ModelLabels[account.Provider+"/default"]; resolved != "" {
+				label = resolved
+			}
+		}
 		if choice.Value == current {
 			label += " (current)"
 		}

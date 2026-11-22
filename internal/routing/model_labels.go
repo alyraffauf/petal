@@ -1,28 +1,38 @@
 package routing
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func (c Config) ModelLabel(id string) string {
 	var label string
+	resolved, missing := false, false
 	for name, a := range c.Accounts {
 		if c.PinnedAccount != "" && c.PinnedAccount != name || len(a.Models[id]) == 0 {
 			continue
 		}
-		if v := a.ModelLabels[id]; v != "" {
-			if label != "" && label != v {
-				return id
-			}
-			label = v
+		v := a.ModelLabels[id]
+		if v == "" {
+			missing = true
+			continue
 		}
+		if resolved && label != v {
+			return fallbackModelLabel(id)
+		}
+		label, resolved = v, true
 	}
-	if label != "" {
+	if resolved && !(missing && strings.HasSuffix(id, "/default")) {
 		return label
 	}
+	return fallbackModelLabel(id)
+}
+
+func fallbackModelLabel(id string) string {
 	switch id {
 	case "claude/default":
 		return "Claude default"
@@ -83,4 +93,66 @@ func claudeLabels(env map[string]string) map[string]string {
 		}
 	}
 	return labels
+}
+
+// ResolveDefaultLabels asks the installed CLIs which model a new session would
+// use. Keep the route ID so selecting a default still follows provider settings.
+func (c Config) ResolveDefaultLabels(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	var probes []func()
+	for name, a := range c.Accounts {
+		if c.PinnedAccount != "" && c.PinnedAccount != name {
+			continue
+		}
+		id := a.Provider + "/default"
+		if !a.discoveredDefault {
+			continue
+		}
+		cli := providerCLI(a.Provider, a.Env)
+		if cli == "" {
+			continue
+		}
+		probes = append(probes, func() {
+			if model := a.defaultModelName(ctx, cli); model != "" {
+				a.ModelLabels[id] = model
+			}
+		})
+	}
+	runCatalogProbes(probes)
+}
+
+func (a Account) defaultModelName(ctx context.Context, cli string) string {
+	switch a.Provider {
+	case "claude":
+		raw, err := a.claudeControl(ctx, cli, `{"subtype":"get_settings"}`)
+		var settings struct{ Applied struct{ Model string } }
+		if err == nil && json.Unmarshal(raw, &settings) == nil {
+			return settings.Applied.Model
+		}
+	case "codex":
+		raw, err := a.codexRead(ctx, "config/read")
+		var settings struct{ Config struct{ Model string } }
+		if err != nil || json.Unmarshal(raw, &settings) != nil {
+			return ""
+		}
+		if settings.Config.Model != "" {
+			return settings.Config.Model
+		}
+		raw, err = a.codexRead(ctx, "model/list")
+		var models struct {
+			Data []struct {
+				ID        string
+				IsDefault bool
+			}
+		}
+		if err == nil && json.Unmarshal(raw, &models) == nil {
+			for _, m := range models.Data {
+				if m.IsDefault {
+					return m.ID
+				}
+			}
+		}
+	}
+	return ""
 }

@@ -9,6 +9,10 @@ import (
 )
 
 func (a Account) codexQuota(ctx context.Context) (json.RawMessage, error) {
+	return a.codexRead(ctx, "account/rateLimits/read")
+}
+
+func (a Account) codexRead(ctx context.Context, method string) (json.RawMessage, error) {
 	cmd := a.Command(ctx, []string{providerCLI("codex", a.Env), "app-server", "--listen", "stdio://"})
 	in, out, cleanup, err := startQuotaProcess(ctx, cmd)
 	if err != nil {
@@ -26,7 +30,7 @@ func (a Account) codexQuota(ctx context.Context) (json.RawMessage, error) {
 			}
 			if json.Unmarshal(scan.Bytes(), &r) == nil && r.ID == id {
 				if len(r.Error) > 0 {
-					return nil, errors.New("Codex quota request rejected")
+					return nil, errors.New("Codex request rejected")
 				}
 				return r.Result, nil
 			}
@@ -43,7 +47,7 @@ func (a Account) codexQuota(ctx context.Context) (json.RawMessage, error) {
 		return nil, err
 	}
 	if _, err = io.WriteString(in, `{"method":"initialized"}
-{"id":2,"method":"account/rateLimits/read","params":{}}
+{"id":2,"method":"`+method+`","params":{}}
 `); err != nil {
 		return nil, err
 	}
