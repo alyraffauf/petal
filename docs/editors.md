@@ -8,13 +8,13 @@
 
 ```json
 {
-	"agent_servers": {
-		"Petal": {
-			"type": "custom",
-			"command": "petal",
-			"args": ["acp"]
-		}
-	}
+    "agent_servers": {
+        "Petal": {
+            "type": "custom",
+            "command": "petal",
+            "args": ["acp"]
+        }
+    }
 }
 ```
 

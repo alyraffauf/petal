@@ -41,10 +41,10 @@ Use Go with a C compiler for `go test -race ./...`. The v1 matrix and v2 profile
 
 ## Live comparisons
 
-| Compared on November 19, 2026 | Observed |
-| --- | --- |
-| Codex CLI 0.170.0 and the Petal TUI | Both completed the same GPT-6.2-Sol prompt. Petal resumed the thread and recalled its answer. Codex ACP reset an explicitly selected Read-only preset on load. Petal now asks before continuing with changed settings and can restore the saved choice. |
-| Zed 1.28.1 with Codex ACP 2.1.1 directly and through Petal | Both paths completed a file-read turn, replayed it after restarting Zed, and cancelled a live turn. All 48 session updates crossing the proxy matched after session ID translation. Reasoning reverted to Low on both paths. |
+| Compared on November 19, 2026                              | Observed                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex CLI 0.170.0 and the Petal TUI                        | Both completed the same GPT-6.2-Sol prompt. Petal resumed the thread and recalled its answer. Codex ACP reset an explicitly selected Read-only preset on load. Petal now asks before continuing with changed settings and can restore the saved choice. |
+| Zed 1.28.1 with Codex ACP 2.1.1 directly and through Petal | Both paths completed a file-read turn, replayed it after restarting Zed, and cancelled a live turn. All 48 session updates crossing the proxy matched after session ID translation. Reasoning reverted to Low on both paths.                            |
 
 The Zed comparison used one authenticated account. Fresh sign-in, destructive operations, and multimodal turns were outside that run. Petal's TUI exposes adapter commands and settings. Native Codex also offers speed tiers, presets, IDE selection, key remapping and an agent dashboard. Petal supports whole-conversation forks and a project control center with read-only subagent details. Cursor selection and prompt suggestions have no dedicated TUI controls.
 

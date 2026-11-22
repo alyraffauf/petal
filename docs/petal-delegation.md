@@ -14,15 +14,15 @@ Delegation is enabled by default. The parent adapter must support stdio MCP serv
 
 ## Tool calls
 
-| Tool | Arguments | Response |
-| --- | --- | --- |
-| `search` | `query`, optional `before` | Searches by keyword in the parent and its delegated descendants. Matches appear newest first. Pass `next_before` as `before` for older matches. Quote a phrase for adjacent words. Pass a hit’s `reference` to `open` for the original text. |
-| `recall` | `query` | Describe what you remember. Returns one page combining semantic and keyword hits. Available when the embeddings provider is enabled. |
-| `open` | Optional `reference`  , UTF-8 byte `offset`, and `context` (0–8 per side) | Opens the latest archived message by default. Pass a returned `previous` or `next` reference to browse. Pass `next_offset` with the same reference to continue long text. |
-| `models` | Optional `search` | Configured model IDs, labels and providers for the current account selection. The initial list shows up to 32 models. Search returns all matches. |
-| `delegate` | `model`, `task` | `childId` and `model` after Petal binds the child to the parent and schedules its prompt. |
-| `activity` | `child_id`, optional `after` | A page of journal entries after the cursor. |
-| `wait` | `child_id`, optional `after` and `timeout` | The same page as `activity`. Waits for new activity, a final result, or the timeout. The timeout is in seconds, defaults to 30, and ranges from 1 to 60. |
+| Tool       | Arguments                                                                | Response                                                                                                                                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `search`   | `query`, optional `before`                                               | Searches by keyword in the parent and its delegated descendants. Matches appear newest first. Pass `next_before` as `before` for older matches. Quote a phrase for adjacent words. Pass a hit’s `reference` to `open` for the original text. |
+| `recall`   | `query`                                                                  | Describe what you remember. Returns one page combining semantic and keyword hits. Available when the embeddings provider is enabled.                                                                                                         |
+| `open`     | Optional `reference` , UTF-8 byte `offset`, and `context` (0–8 per side) | Opens the latest archived message by default. Pass a returned `previous` or `next` reference to browse. Pass `next_offset` with the same reference to continue long text.                                                                    |
+| `models`   | Optional `search`                                                        | Configured model IDs, labels and providers for the current account selection. The initial list shows up to 32 models. Search returns all matches.                                                                                            |
+| `delegate` | `model`, `task`                                                          | `childId` and `model` after Petal binds the child to the parent and schedules its prompt.                                                                                                                                                    |
+| `activity` | `child_id`, optional `after`                                             | A page of journal entries after the cursor.                                                                                                                                                                                                  |
+| `wait`     | `child_id`, optional `after` and `timeout`                               | The same page as `activity`. Waits for new activity, a final result, or the timeout. The timeout is in seconds, defaults to 30, and ranges from 1 to 60.                                                                                     |
 
 For a question about earlier work that asks for an exact quote or a source, search the archive for an identifier or keyword from the original task. Open the matching tool or message reference to read the original text and cite that reference. Use the child activity journal to follow a run and retrieve its completion result.
 

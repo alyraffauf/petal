@@ -37,10 +37,10 @@ Set the account's `capacity` to its size relative to your other subscriptions. C
 
 For a new session, Petal checks each account that offers the model and uses the lowest remaining percentage among the applicable windows.
 
-| Provider | Windows Petal checks |
-| --- | --- |
+| Provider    | Windows Petal checks                                                                                                                                                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Claude Code | The `get_usage` response includes shared `five_hour` and `seven_day` windows when available. If the requested model name contains `fable`, `opus`, `sonnet`, or `haiku`, Petal also checks the matching weekly window, such as `seven_day_fable`. The `claude/default` route uses only the shared windows. |
-| Codex | Petal checks the primary and secondary windows from `account/rateLimits/read` in `codex app-server`. Other model-specific limits fall outside this calculation. If Codex disallows ordinary usage, Petal counts the account as exhausted. |
+| Codex       | Petal checks the primary and secondary windows from `account/rateLimits/read` in `codex app-server`. Other model-specific limits fall outside this calculation. If Codex disallows ordinary usage, Petal counts the account as exhausted.                                                                  |
 
 Suppose a Claude account has 80% left for five hours, 60% for the week, and 5% for Fable. Petal uses **5% for Fable** and **60% for Sonnet**, unless Sonnet has a tighter weekly limit of its own. Missing windows and reset times do not affect the score.
 
