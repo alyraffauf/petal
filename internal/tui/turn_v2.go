@@ -58,6 +58,7 @@ func (f *foregroundV2) waiting() bool {
 type conversationV2 struct {
 	foreground    foregroundV2
 	transcript    *acpv2.Transcript
+	archiveRows   int
 	shown         int
 	dirty         bool
 	changed       bool
@@ -177,10 +178,11 @@ func (m *terminal) publishV2Transcript(checkpoint bool) {
 	projected := conversation.transcript.Entries()
 	conversation.changed = false
 	messages := make([]entry, 0, len(projected)+len(m.Messages)-conversation.shown)
+	messages = append(messages, m.Messages[:conversation.archiveRows]...)
 	for _, row := range projected {
 		messages = append(messages, entry{row.Role, row.Text})
 	}
-	messages = append(messages, m.Messages[conversation.shown:]...)
+	messages = append(messages, m.Messages[conversation.archiveRows+conversation.shown:]...)
 	conversation.shown = len(projected)
 	m.Messages = messages
 	m.transcriptRevision++

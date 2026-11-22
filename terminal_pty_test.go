@@ -128,7 +128,8 @@ func runPTYAdapter(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var activePrompt int
+	var activePrompt, pendingSetup int
+	var approvedSetup bool
 	model := "baseline"
 	modelSettings := func() []any {
 		return []any{map[string]any{
@@ -143,6 +144,7 @@ func runPTYAdapter(t *testing.T) {
 		var request struct {
 			ID     int
 			Method string
+			Result struct{ Outcome struct{ OptionID string } }
 			Params struct {
 				Prompt []struct {
 					Type, Text string
@@ -156,6 +158,13 @@ func runPTYAdapter(t *testing.T) {
 		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
 			t.Fatal(err)
 		}
+		if request.Method == "" && request.ID == 991 && pendingSetup != 0 {
+			if request.Result.Outcome.OptionID != "allow" {
+				t.Fatal("setup permission was declined")
+			}
+			request.Method, request.ID = "session/new", pendingSetup
+			pendingSetup, approvedSetup = 0, true
+		}
 		result := map[string]any{}
 		switch request.Method {
 		case "initialize":
@@ -167,6 +176,15 @@ func runPTYAdapter(t *testing.T) {
 			}
 			result["_meta"] = map[string]any{"steering": map[string]bool{"supported": true}}
 		case "session/new":
+			if os.Getenv("PETAL_PTY_SETUP_PERMISSION") == "1" && !approvedSetup {
+				pendingSetup = request.ID
+				send(map[string]any{"id": 991, "method": "session/request_permission", "params": map[string]any{
+					"sessionId": "pty-thread",
+					"toolCall":  map[string]string{"toolCallId": "setup", "title": "Approve setup", "status": "pending"},
+					"options":   []map[string]string{{"optionId": "allow", "name": "Allow", "kind": "allow_once"}},
+				}})
+				continue
+			}
 			send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "pty-thread", "update": map[string]any{
 				"sessionUpdate": "available_commands_update", "availableCommands": []any{
 					map[string]any{"name": "status-report", "description": "Inspect status", "input": map[string]string{"hint": "subject"}},
@@ -353,7 +371,7 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "second"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	write("/new second\r")
+	write("/new " + dir + "/second/../second\r")
 	await("ready")
 	write("/config\r")
 	await("Model · Alternate")

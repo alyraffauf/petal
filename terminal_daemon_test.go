@@ -259,6 +259,9 @@ value="adapter"
 [[accounts.env]]
 name="PETAL_PTY_RESUME_WITHOUT_REPLAY"
 value="1"
+[[accounts.env]]
+name="PETAL_PTY_SETUP_PERMISSION"
+value="1"
 [[accounts.models]]
 id="fixture"
 command=[%q, "-test.run=^TestPTYChild$"]
@@ -274,6 +277,8 @@ command=[%q, "-test.run=^TestPTYChild$"]
 	first.write(t, "\r")
 	first.await(t, ctx, "choose a model")
 	first.write(t, "\r")
+	first.await(t, ctx, "Approve setup")
+	first.write(t, "1\r")
 	first.await(t, ctx, "ready")
 	first.write(t, "/status-report build\r")
 	first.await(t, ctx, "status-command-confirmed")

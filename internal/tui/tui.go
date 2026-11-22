@@ -342,7 +342,7 @@ func (m *terminal) View() tea.View {
 		return m.urlView()
 	}
 	v := m.screen
-	if m.connection == connecting && m.h != nil && m.h.daemon != nil {
+	if m.connection == connecting && m.ask == nil && m.h != nil && m.h.daemon != nil {
 		v.Messages = nil
 		v.planRows = nil
 	}
@@ -429,6 +429,7 @@ func (m *terminal) submit() tea.Cmd {
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(m.Cwd, path)
 		}
+		path = filepath.Clean(path)
 		info, err := os.Stat(path)
 		if err != nil {
 			m.recordNote(terminalError(err))
@@ -770,7 +771,9 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agents.publish()
 		m.cancelling = t.snapshot.Canceling
 		if m.h.v2.Load() {
-			foreground := &m.conversationV2().foreground
+			conversation := m.conversationV2()
+			conversation.archiveRows = len(t.history)
+			foreground := &conversation.foreground
 			if t.snapshot.Foreground != "" {
 				foreground.report(t.snapshot.Foreground)
 			}
