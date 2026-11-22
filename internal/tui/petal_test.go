@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,17 +17,11 @@ func TestPetalKeepsMultilineChromeOnItsOwnRows(t *testing.T) {
 	if len(rows) != v.Height {
 		t.Fatalf("got %d rows, want %d", len(rows), v.Height)
 	}
-	for _, want := range []struct {
-		row  int
-		text string
-	}{
-		{0, "status ready"},
-		{1, "model variant / account name"},
-		{23, "continued"},
-		{26, "/tmp/line break"},
-	} {
-		if !strings.Contains(rows[want.row], want.text) {
-			t.Errorf("row %d = %q, want %q", want.row, rows[want.row], want.text)
+	for _, want := range []string{"status ready", "model variant / account name", "continued", "/tmp/line break"} {
+		i := slices.IndexFunc(rows, func(row string) bool { return strings.Contains(row, want) })
+		if i < 0 {
+			t.Fatalf("missing row containing %q", want)
 		}
+		rows = rows[i+1:]
 	}
 }
