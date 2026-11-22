@@ -1,0 +1,8 @@
+# The website image needs only the site and the Markdown it renders.
+*
+!README.md
+!docs
+!website
+website/node_modules
+website/dist
+website/.astro
