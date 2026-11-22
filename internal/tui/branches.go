@@ -26,13 +26,16 @@ func (m *terminal) fork() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 		defer cancel()
-		r, err := acp.SendRequest[proxy.Object](h.conn, ctx, "session/fork", map[string]any{"sessionId": record.ID, "cwd": cwd, "mcpServers": []any{}})
+		r, err := sendRequest[proxy.Object](h, ctx, "session/fork", map[string]any{"sessionId": record.ID, "cwd": cwd, "mcpServers": []any{}})
 		if err != nil {
 			return forkResult{err: err}
 		}
 		id, err := proxy.SessionID(r)
 		if err != nil {
 			return forkResult{err: err}
+		}
+		if h.daemon != nil {
+			return forkResult{id: id}
 		}
 		child := sessions.Record{ID: id, Parent: record.ID, Title: "Fork of " + record.Title, Model: record.Model, Account: record.Account, Opened: time.Now()}
 		if record.Title == "" {

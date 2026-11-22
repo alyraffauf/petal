@@ -32,7 +32,7 @@ func (m *terminal) deliver() tea.Cmd {
 		m.steering = true
 		params["_meta"] = map[string]any{"steering": map[string]string{"idleBehavior": "promptRequired"}}
 		return func() tea.Msg {
-			result, err := acp.SendRequest[struct{ Outcome string }](m.h.conn, m.ctx, "_session/steering", params)
+			result, err := sendRequest[struct{ Outcome string }](m.h, m.ctx, "_session/steering", params)
 			return steerResult{result.Outcome, err}
 		}
 	}
@@ -43,8 +43,22 @@ func (m *terminal) deliver() tea.Cmd {
 	m.chatBacklog.browsing = false
 	m.Busy = true
 	m.Status = "working"
+	var written *promptWriteV2
+	if m.h.daemon != nil {
+		written = &promptWriteV2{ready: make(chan struct{})}
+		m.h.promptWrite.Store(written)
+	}
 	return func() tea.Msg {
-		result, err := acp.SendRequest[acp.PromptResponse](m.h.conn, m.ctx, "session/prompt", params)
+		if written != nil {
+			number, err := m.h.daemon.submit(m.ctx, "session/prompt", params)
+			written.operation = number
+			m.h.completePromptWrite(written)
+			if err != nil {
+				m.h.emitV2(m.ctx, finished{err: err})
+			}
+			return nil
+		}
+		result, err := sendRequest[acp.PromptResponse](m.h, m.ctx, "session/prompt", params)
 		select {
 		case m.h.events <- finished{err, string(result.StopReason)}:
 		case <-m.ctx.Done():

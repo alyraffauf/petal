@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"slices"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	acp "github.com/coder/acp-go-sdk"
@@ -78,6 +80,9 @@ func (m *terminal) commandMatches() []chatCommand {
 	}
 	add("/search", "Search project transcripts")
 	add("/history", "Read the conversation")
+	if m.h != nil && m.h.daemon != nil && m.connection == connected && m.ask == nil {
+		add("/close", "End the live session and exit")
+	}
 	add("/quit", "Exit Petal")
 	for _, c := range m.agentCommands {
 		name := "/" + c.Name
@@ -170,6 +175,13 @@ func (m *terminal) runCommand(command chatCommand) tea.Cmd {
 		m.readerBacklog.browsing = false
 		m.reading = true
 		return nil
+	case "/close":
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+			defer cancel()
+			err := m.h.daemon.client.CloseSession(ctx)
+			return endedSession{err: err, ended: err == nil}
+		}
 	case "/quit":
 		return tea.Quit
 	}

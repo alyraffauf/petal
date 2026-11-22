@@ -226,3 +226,16 @@ func RecentTranscript(ctx context.Context, cwd, id string, limit int64) ([]sessi
 	defer db.Close()
 	return sessiondb.New(db).TranscriptTail(ctx, sessiondb.TranscriptTailParams{SessionID: id, Limit: limit})
 }
+
+// TranscriptHead identifies the last archived message at the start of a live
+// session. A resume without adapter replay can use that prefix with its journal.
+func TranscriptHead(ctx context.Context, cwd, id string) (int64, error) {
+	db, err := openStoreContext(ctx, cwd)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var head int64
+	err = db.QueryRowContext(ctx, "SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE session_id = ?", id).Scan(&head)
+	return head, err
+}

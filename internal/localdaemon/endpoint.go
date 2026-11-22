@@ -9,6 +9,7 @@
 package localdaemon
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -31,21 +32,34 @@ type Endpoint struct {
 // XDG_RUNTIME_DIR if set and falls back to /tmp if it is unset or its socket
 // path would exceed the platform limit.
 func Discover(runtimeRoot string) (Endpoint, error) {
+	return discover(runtimeRoot, "")
+}
+
+// DiscoverProfile isolates an explicit configuration from the default daemon.
+func DiscoverProfile(runtimeRoot, configPath string) (Endpoint, error) {
+	if configPath == "" {
+		return Discover(runtimeRoot)
+	}
+	hash := sha256.Sum256([]byte(configPath))
+	return discover(runtimeRoot, fmt.Sprintf("-%x", hash[:8]))
+}
+
+func discover(runtimeRoot, suffix string) (Endpoint, error) {
 	if runtimeRoot != "" {
-		return openRoot(runtimeRoot)
+		return openRoot(runtimeRoot, suffix)
 	}
 	if root := os.Getenv("XDG_RUNTIME_DIR"); root != "" {
-		endpoint, err := openRoot(root)
+		endpoint, err := openRoot(root, suffix)
 		if !errors.Is(err, errSocketPathTooLong) {
 			return endpoint, err
 		}
 	}
-	return openRoot("/tmp")
+	return openRoot("/tmp", suffix)
 }
 
 var errSocketPathTooLong = errors.New("Unix socket path too long")
 
-func openRoot(root string) (Endpoint, error) {
+func openRoot(root, suffix string) (Endpoint, error) {
 	if !filepath.IsAbs(root) {
 		return Endpoint{}, fmt.Errorf("runtime root must be absolute: %q", root)
 	}
@@ -53,7 +67,7 @@ func openRoot(root string) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	endpoint := Endpoint{dir: filepath.Join(root, fmt.Sprintf("petal-%d", os.Geteuid()))}
+	endpoint := Endpoint{dir: filepath.Join(root, fmt.Sprintf("petal-%d", os.Geteuid())+suffix)}
 	limit := len(unix.RawSockaddrUnix{}.Path) - 1
 	if runtime.GOOS == "darwin" {
 		// Darwin's bind implementation also counts the sockaddr header.
@@ -107,10 +121,19 @@ func checkAncestor(path string) error {
 	return nil
 }
 
+func validDirectoryName(name string) bool {
+	base := fmt.Sprintf("petal-%d", os.Geteuid())
+	if name == base {
+		return true
+	}
+	suffix, ok := strings.CutPrefix(name, base+"-")
+	return ok && len(suffix) == 16 && strings.Trim(suffix, "0123456789abcdef") == ""
+}
+
 func (endpoint Endpoint) checkDirectory() error {
 	if !filepath.IsAbs(endpoint.dir) || filepath.Clean(endpoint.dir) != endpoint.dir ||
 		strings.IndexByte(endpoint.dir, 0) >= 0 ||
-		filepath.Base(endpoint.dir) != fmt.Sprintf("petal-%d", os.Geteuid()) {
+		!validDirectoryName(filepath.Base(endpoint.dir)) {
 		return fmt.Errorf("invalid daemon directory: %q", endpoint.dir)
 	}
 	var stat unix.Stat_t

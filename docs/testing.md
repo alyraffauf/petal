@@ -9,7 +9,7 @@ ACP_TCK_DIR=/path/to/acp-tck scripts/check-acp /tmp/petal-acp.json matrix
 ACP_TCK_DIR=/path/to/acp-tck scripts/check-acp /tmp/petal-v2.json v2-full
 ```
 
-The regular Go suite runs the fuzz seeds and the deterministic transcript histories. For `go test -race ./...`, use Go with a C compiler. The v1 matrix and the v2 profiles also need `uv` and a checkout of the pinned kit. [Pinned ACP test kit](https://github.com/agentclientprotocol/acp-tck/tree/7c71c4d1af0994e73bdc100c9f7f6b98f2319cda)
+The regular Go suite runs the fuzz seeds and the deterministic transcript histories. The offline terminal tests use separate PTYs and a private Unix socket. They exercise ACP v1 and v2 reattachment, pending permissions, child completion while detached, and reopening a saved transcript. CI runs them on Linux and macOS. For `go test -race ./...`, use Go with a C compiler. The v1 matrix and the v2 profiles also need `uv` and a checkout of the pinned kit. [Pinned ACP test kit](https://github.com/agentclientprotocol/acp-tck/tree/7c71c4d1af0994e73bdc100c9f7f6b98f2319cda)
 
 ## Format the code
 

@@ -86,7 +86,16 @@ func (m *terminal) deliverV2(params map[string]any) tea.Cmd {
 	h.promptWrite.Store(prompt)
 	conversation.promptWritten = prompt.ready
 	return func() tea.Msg {
-		result, err := acp.SendRequest[struct{ MessageID *string }](h.conn, ctx, "session/prompt", params)
+		if h.daemon != nil {
+			number, err := h.daemon.submit(ctx, "session/prompt", params)
+			prompt.operation = number
+			h.completePromptWrite(prompt)
+			if err != nil {
+				h.emitV2(ctx, promptV2Result{err})
+			}
+			return nil
+		}
+		result, err := sendRequest[struct{ MessageID *string }](h, ctx, "session/prompt", params)
 		h.completePromptWrite(prompt)
 		if err == nil && result.MessageID == nil {
 			err = fmt.Errorf("ACP v2 prompt response requires a messageId")
@@ -104,7 +113,8 @@ func (m *terminal) cancelForegroundV2() tea.Cmd {
 	conversation.cancelSending = true
 	m.cancelling = true
 	m.refreshForegroundV2()
-	written, h, ctx := conversation.promptWritten, m.h, m.ctx
+	written, ctx := conversation.promptWritten, m.ctx
+	cancel := m.h.cancelAction()
 	return func() tea.Msg {
 		if written != nil {
 			select {
@@ -113,7 +123,7 @@ func (m *terminal) cancelForegroundV2() tea.Cmd {
 				return nil
 			}
 		}
-		return cancelV2Result{h.conn.SendNotification(ctx, "session/cancel", map[string]string{"sessionId": h.id})}
+		return cancelV2Result{cancel(ctx)}
 	}
 }
 
@@ -176,7 +186,7 @@ func (m *terminal) publishV2Transcript(checkpoint bool) {
 	m.transcriptRevision++
 	if !busy || checkpoint {
 		conversation.dirty = false
-		if m.h != nil && m.h.record.ID != "" && m.Cwd != "" {
+		if m.h != nil && m.h.daemon == nil && m.h.record.ID != "" && m.Cwd != "" {
 			if err := sessions.SaveTranscript(m.Cwd, m.h.record.ID, sessions.ProjectTranscript(conversation.transcript, true), true); err != nil {
 				m.recordNote("Could not index transcript · " + err.Error())
 			}

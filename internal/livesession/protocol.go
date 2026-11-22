@@ -21,7 +21,8 @@ import (
 
 const (
 	ProtocolVersion = 1
-	maxFrame        = 8 << 20
+	maxFrame        = 12 << 20
+	maxPromptBody   = 10 << 20
 	maxBody         = 4 << 20
 	attachTimeout   = 5 * time.Second
 )
@@ -90,14 +91,16 @@ func handleExpiry(handle string) (time.Time, bool) {
 
 // Info identifies a live daemon session. SessionID is set after setup succeeds.
 type Info struct {
-	Handle        string `json:"handle"`
-	SessionID     string `json:"sessionID,omitempty"`
-	ResumeID      string `json:"resumeID,omitempty"`
-	Cwd           string `json:"cwd"`
-	Model         string `json:"model,omitempty"`
-	Account       string `json:"account,omitempty"`
-	ACPVersion    uint16 `json:"acpVersion,omitempty"`
-	AdapterExited bool   `json:"adapterExited,omitempty"`
+	Handle        string    `json:"handle"`
+	SessionID     string    `json:"sessionID,omitempty"`
+	ResumeID      string    `json:"resumeID,omitempty"`
+	Cwd           string    `json:"cwd"`
+	Model         string    `json:"model,omitempty"`
+	PinnedAccount string    `json:"pinnedAccount,omitempty"`
+	Account       string    `json:"account,omitempty"`
+	ACPVersion    uint16    `json:"acpVersion,omitempty"`
+	LastAttached  time.Time `json:"lastAttached"`
+	AdapterExited bool      `json:"adapterExited,omitempty"`
 }
 
 // AttachOptions selects a live session by handle or durable ID. After is the
@@ -106,6 +109,7 @@ type Info struct {
 type AttachOptions struct {
 	Handle    string  `json:"handle"`
 	SessionID string  `json:"sessionID,omitempty"`
+	Cwd       string  `json:"cwd,omitempty"`
 	After     *uint64 `json:"after"`
 	Control   bool    `json:"control"`
 }
@@ -121,14 +125,18 @@ type Snapshot struct {
 	Head              uint64          `json:"head"`
 	Control           bool            `json:"control"`
 	NextOperation     uint64          `json:"nextOperation"`
+	ActiveMethod      string          `json:"activeMethod,omitempty"`
 	ActiveOperation   uint64          `json:"activeOperation,omitempty"`
 	SteeringOperation uint64          `json:"steeringOperation,omitempty"`
+	TurnStarted       bool            `json:"turnStarted,omitempty"`
 	Turn              uint64          `json:"turn,omitempty"`
+	Foreground        string          `json:"foreground,omitempty"`
 	Running           bool            `json:"running,omitempty"`
 	Canceling         bool            `json:"canceling,omitempty"`
 	Closed            bool            `json:"closed,omitempty"`
 	Hello             json.RawMessage `json:"hello,omitempty"`
 	Setup             json.RawMessage `json:"setup,omitempty"`
+	ArchiveHead       int64           `json:"archiveHead,omitempty"`
 	SetupMethod       string          `json:"setupMethod,omitempty"`
 	Pending           []Question      `json:"pending,omitempty"`
 }

@@ -159,7 +159,11 @@ func rpc[T any](ctx context.Context, c *Client, method string, params any) (T, e
 	if err != nil {
 		return result, err
 	}
-	if len(raw) > maxBody+4096 {
+	limit := maxBody
+	if method == "call" {
+		limit = maxPromptBody
+	}
+	if len(raw) > limit+4096 {
 		return result, failure(Limit, "request exceeds daemon limit")
 	}
 	err = c.call(ctx, request{Method: method, Params: raw}, &result)

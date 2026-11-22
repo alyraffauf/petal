@@ -97,6 +97,14 @@ func (s *session) setupAdapter(ctx context.Context, op *operation, raw json.RawM
 			}
 		}
 	}
+	var archiveHead int64
+	if method == "session/resume" && s.info.ACPVersion == 1 {
+		var err error
+		archiveHead, err = sessions.TranscriptHead(ctx, s.options.Cwd, id)
+		if err != nil {
+			return nil, fmt.Errorf("read archived transcript: %w", err)
+		}
+	}
 	result, err := s.backend.Call(ctx, method, bytesOf(params), nil)
 	if err != nil {
 		return nil, err
@@ -134,6 +142,7 @@ func (s *session) setupAdapter(ctx context.Context, op *operation, raw json.RawM
 		s.info.Account = s.config.PinnedAccount
 	}
 	s.resumeMethod = method
+	s.archiveHead = archiveHead
 	if !s.closed {
 		s.commitSetup(op.replay)
 	}

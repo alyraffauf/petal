@@ -95,8 +95,9 @@ func (m *terminal) handleKey(t tea.KeyPressMsg) tea.Cmd {
 		} else if m.Busy {
 			m.cancelling = true
 			m.Status = "cancelling"
+			cancel := m.h.cancelAction()
 			cmd = func() tea.Msg {
-				err := m.h.conn.SendNotification(m.ctx, "session/cancel", map[string]string{"sessionId": m.h.id})
+				err := cancel(m.ctx)
 				if err != nil {
 					return cancelFailed{err}
 				}

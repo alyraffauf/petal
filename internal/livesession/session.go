@@ -33,6 +33,7 @@ type operation struct {
 	replay         *journal
 	replayComplete bool
 	resumeState    bool
+	started        bool
 }
 
 type session struct {
@@ -59,12 +60,14 @@ type session struct {
 	closingDone  chan struct{}
 	hello        json.RawMessage
 	resumeMethod string
+	archiveHead  int64
 	setup        json.RawMessage
 	nextOp       uint64
 	active       *operation
 	steering     *operation
 	turn         *operation
 	running      bool
+	foreground   string
 	canceling    bool
 	cancelled    uint64
 	receipts     []*operation
@@ -79,7 +82,7 @@ func newSession(server *Server, options OpenOptions) *session {
 	ctx, stop := context.WithCancel(server.ctx)
 	return &session{
 		server: server, options: options, ctx: ctx, stop: stop, ready: make(chan struct{}), callbacks: make(chan struct{}, 32),
-		info:    Info{Handle: options.Handle, Cwd: options.Cwd, Model: options.Model, Account: options.Account, ResumeID: options.ResumeID},
+		info:    Info{Handle: options.Handle, Cwd: options.Cwd, Model: options.Model, Account: options.Account, PinnedAccount: options.Account, ResumeID: options.ResumeID},
 		changed: make(chan struct{}), nextOp: 1, pending: make(map[uint64]*pendingQuestion), answered: make(map[uint64][32]byte),
 	}
 }
@@ -151,6 +154,7 @@ func (s *session) attach(p *peer, opts AttachOptions) (Snapshot, *Error) {
 			return Snapshot{}, failure(Conflict, "another connection controls the session")
 		}
 		s.controller = p
+		s.info.LastAttached = time.Now()
 	}
 	snapshot := s.state(p)
 	snapshot.After = after
@@ -160,17 +164,19 @@ func (s *session) attach(p *peer, opts AttachOptions) (Snapshot, *Error) {
 func (s *session) state(p *peer) Snapshot {
 	snapshot := Snapshot{
 		Info: s.info, Floor: s.events.floor(), Head: s.events.head, After: s.events.head,
-		Control: s.controller == p, NextOperation: s.nextOp, Running: s.running, Canceling: s.canceling,
-		Closed: s.closed, Hello: s.hello, Setup: s.setup, SetupMethod: s.resumeMethod,
+		Control: s.controller == p, NextOperation: s.nextOp, Foreground: s.foreground, Running: s.running, Canceling: s.canceling,
+		Closed: s.closed, Hello: s.hello, Setup: s.setup, SetupMethod: s.resumeMethod, ArchiveHead: s.archiveHead,
 	}
 	if s.active != nil {
 		snapshot.ActiveOperation = s.active.number
+		snapshot.ActiveMethod = s.active.method
 	}
 	if s.steering != nil {
 		snapshot.SteeringOperation = s.steering.number
 	}
 	if s.turn != nil {
 		snapshot.Turn = s.turn.number
+		snapshot.TurnStarted = s.turn.started
 	}
 	// Question IDs are monotonic, but a long-running question can survive
 	// arbitrarily many other questions. Sort only the pending entries.
@@ -197,6 +203,7 @@ func (s *session) claim(p *peer) (Snapshot, *Error) {
 		return Snapshot{}, failure(Conflict, "another connection controls the session")
 	}
 	s.controller = p
+	s.info.LastAttached = time.Now()
 	return s.state(p), nil
 }
 

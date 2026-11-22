@@ -18,8 +18,8 @@ jobs:
                   go-version-file: go.mod
             - name: Exercise terminal and Unix socket sessions
               run: |
-                  go test . ./internal/proxy -run 'TestTerminal|FuzzNativeProxyHistory'
-                  go test ./internal/localdaemon ./internal/livesession
+                  go test -count=1 . ./internal/proxy -run 'TestTerminal|FuzzNativeProxyHistory'
+                  go test -count=1 ./internal/localdaemon ./internal/livesession
     test:
         runs-on: ubuntu-latest
         steps:
@@ -29,7 +29,7 @@ jobs:
             - name: Build Petal and run Go tests
               run: nix build --print-build-logs --no-link .#petal
             - name: Exercise daemon and live sessions outside the Nix sandbox
-              run: nix shell --inputs-from . nixpkgs#go -c go test -count=1 ./internal/localdaemon ./internal/livesession
+              run: nix shell --inputs-from . nixpkgs#go -c go test -count=1 . ./internal/localdaemon ./internal/livesession
               env:
                   CGO_ENABLED: 0
             - name: Test receipt grading and process cleanup

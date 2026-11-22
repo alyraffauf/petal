@@ -38,7 +38,7 @@ type Server struct {
 	clients  chan struct{}
 	mu       sync.Mutex
 	live     map[string]*session
-	byID     map[string]*session
+	byID     map[workspaceRoute]*session
 	closed   map[string]time.Time
 }
 
@@ -46,7 +46,7 @@ func NewServer(ctx context.Context, resolve Resolver) *Server {
 	ctx, stop := context.WithCancel(ctx)
 	return &Server{
 		instance: rand.Text(), ctx: ctx, stop: stop, resolve: resolve, clients: make(chan struct{}, maxConnections),
-		live: make(map[string]*session), byID: make(map[string]*session),
+		live: make(map[string]*session), byID: make(map[workspaceRoute]*session),
 		closed: make(map[string]time.Time),
 	}
 }
@@ -61,6 +61,8 @@ func (s *Server) Close() {
 }
 
 func (s *Server) Handler() localdaemon.Handler { return s.serve }
+
+type workspaceRoute struct{ cwd, route string }
 
 func routeKey(id string) string {
 	parts := proxy.DecodeSessionRoute(id)
@@ -117,7 +119,7 @@ func (s *Server) open(opts OpenOptions) (Info, *Error) {
 		s.mu.Unlock()
 		return Info{}, failure(Limit, "daemon live-session or open-key limit reached")
 	}
-	resumeKey := routeKey(opts.ResumeID)
+	resumeKey := workspaceRoute{opts.Cwd, routeKey(opts.ResumeID)}
 	if opts.ResumeID != "" && s.byID[resumeKey] != nil {
 		s.mu.Unlock()
 		return Info{}, failure(Conflict, "durable session already has a live owner")
@@ -136,7 +138,7 @@ func (s *Server) open(opts OpenOptions) (Info, *Error) {
 }
 
 func (s *Server) register(live *session, id string) *Error {
-	key := routeKey(id)
+	key := workspaceRoute{live.options.Cwd, routeKey(id)}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if owner := s.byID[key]; owner != nil && owner != live {
@@ -173,7 +175,20 @@ func (s *Server) lookup(opts AttachOptions) (*session, *Error) {
 			return nil, failure(Closed, "session is closed")
 		}
 	} else {
-		live = s.byID[routeKey(opts.SessionID)]
+		route := routeKey(opts.SessionID)
+		if opts.Cwd != "" {
+			live = s.byID[workspaceRoute{filepath.Clean(opts.Cwd), route}]
+		} else {
+			for key, candidate := range s.byID {
+				if key.route != route {
+					continue
+				}
+				if live != nil && live != candidate {
+					return nil, failure(Conflict, "session ID exists in multiple workspaces")
+				}
+				live = candidate
+			}
+		}
 	}
 	if live == nil {
 		return nil, failure(NotFound, "session is not live")

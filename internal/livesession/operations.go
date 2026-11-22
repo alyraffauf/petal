@@ -78,7 +78,7 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 	// input so a newly attached TUI can show the in-flight user message.
 	started := Event{Kind: CallStarted, Method: call.Method, Operation: op.number}
 	if call.Method == "session/prompt" && s.info.ACPVersion == 1 {
-		started.Params = params
+		started.Params = promptEventParams(params)
 	}
 	s.publish(started)
 	go s.run(op, params)
@@ -87,7 +87,11 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 
 func (s *session) callParams(call Call) (json.RawMessage, *Error) {
 	params := make(proxy.Object)
-	if len(call.Params) > maxBody || (len(call.Params) != 0 &&
+	limit := maxBody
+	if call.Method == "session/prompt" || call.Method == "_session/steering" {
+		limit = maxPromptBody
+	}
+	if len(call.Params) > limit || (len(call.Params) != 0 &&
 		(json.Unmarshal(call.Params, &params) != nil || params == nil)) {
 		return nil, failure(Invalid, "expected bounded ACP parameters as an object")
 	}
@@ -221,6 +225,9 @@ func (s *session) run(op *operation, params json.RawMessage) {
 	s.receipts = append(s.receipts, op)
 	s.receiptSize += size
 	s.trimReceipts()
+	if err == nil && outcome.Err() == nil {
+		s.updateSetupSettings(op.method, params, outcome.Result)
+	}
 	if op == s.steering {
 		s.steering = nil
 	} else {
@@ -230,9 +237,9 @@ func (s *session) run(op *operation, params json.RawMessage) {
 		s.running = false
 	}
 	if !s.closed {
-		finished := Event{Kind: CallFinished, Method: op.method, Operation: op.number}
+		finished := Event{Kind: CallFinished, Method: op.method, Operation: op.number, Outcome: eventOutcome(op.method, outcome)}
 		if op.method == "_session/steering" && proxy.SteeringInjected(outcome.Result) {
-			finished.Params = params
+			finished.Params = promptEventParams(params)
 		}
 		s.publish(finished)
 		if op.method == "session/delete" && outcome.Error == nil && outcome.ACPError == nil {
@@ -293,6 +300,9 @@ func (s *session) update(method string, raw json.RawMessage) {
 			op.replay.append(event)
 			return
 		}
+		if routeKey(params.SessionID) == routeKey(s.info.SessionID) {
+			s.updateSetupFromNotification(raw)
+		}
 		if !s.info.AdapterExited && params.Update.SessionUpdate == "state_update" &&
 			routeKey(params.SessionID) == routeKey(s.info.SessionID) {
 			s.setRunning(params.Update.State)
@@ -302,9 +312,13 @@ func (s *session) update(method string, raw json.RawMessage) {
 }
 
 func (s *session) setRunning(state string) {
+	s.foreground = state
 	switch state {
-	case "running":
+	case "running", "requires_action":
 		s.running = true
+		if s.turn != nil {
+			s.turn.started = true
+		}
 	case "idle":
 		s.running = false
 	}
@@ -382,5 +396,95 @@ func (s *session) cancelPrompt(op *operation, id string) {
 			outcome.Error = failure(Internal, err.Error())
 		}
 		s.publish(Event{Kind: CancelFinished, Operation: op.number, Outcome: &outcome})
+	}
+}
+
+// Keep the small lifecycle receipts with the event that they complete. The
+// separately bounded RPC receipt cache may expire before a terminal attaches.
+func eventOutcome(method string, outcome Outcome) *Outcome {
+	if method != "session/prompt" {
+		return nil
+	}
+	if len(bytesOf(outcome)) > 16<<10 {
+		return nil
+	}
+	return &outcome
+}
+
+func (s *session) updateSetupSettings(method string, params, result json.RawMessage) {
+	if method != "session/set_mode" && method != "session/set_config_option" {
+		return
+	}
+	var setup, changes proxy.Object
+	if json.Unmarshal(s.setup, &setup) != nil || setup == nil {
+		return
+	}
+	if method == "session/set_mode" {
+		var input struct{ ModeID string }
+		_ = json.Unmarshal(params, &input)
+		var modes proxy.Object
+		_ = json.Unmarshal(setup["modes"], &modes)
+		if modes == nil {
+			modes = make(proxy.Object)
+		}
+		modes["currentModeId"] = bytesOf(input.ModeID)
+		setup["modes"] = bytesOf(modes)
+	} else if json.Unmarshal(result, &changes) == nil && changes["configOptions"] != nil {
+		setup["configOptions"] = changes["configOptions"]
+	}
+	if raw := bytesOf(setup); len(raw) <= maxMetadata {
+		s.setup = raw
+	}
+}
+
+func promptEventParams(params json.RawMessage) json.RawMessage {
+	if len(params) <= maxBody/2 {
+		return params
+	}
+	var fields proxy.Object
+	var prompt []proxy.Object
+	_ = json.Unmarshal(params, &fields)
+	if json.Unmarshal(fields["prompt"], &prompt) != nil {
+		return nil
+	}
+	for _, block := range prompt {
+		kind := string(block["type"])
+		switch kind {
+		case `"image"`, `"audio"`:
+			block["data"] = bytesOf("")
+		case `"resource"`:
+			var resource proxy.Object
+			if json.Unmarshal(block["resource"], &resource) == nil && resource != nil {
+				if resource["blob"] != nil {
+					resource["blob"] = bytesOf("")
+				}
+				if len(resource["text"]) > maxBody/4 {
+					resource["text"] = bytesOf("[Embedded text omitted from live replay]")
+				}
+				block["resource"] = bytesOf(resource)
+			}
+		case `"text"`:
+			if len(block["text"]) > maxBody/4 {
+				block["text"] = bytesOf("[Long prompt omitted from live replay]")
+			}
+		}
+	}
+	if replay := bytesOf(map[string]any{"prompt": prompt}); len(replay) <= maxBody/2 {
+		return replay
+	}
+	return json.RawMessage(`{"prompt":[{"type":"text","text":"[Large prompt omitted from live replay]"}]}`)
+}
+
+func (s *session) updateSetupFromNotification(raw json.RawMessage) {
+	var envelope struct{ Update proxy.Object }
+	if len(s.setup) == 0 || json.Unmarshal(raw, &envelope) != nil {
+		return
+	}
+	update := envelope.Update
+	switch string(update["sessionUpdate"]) {
+	case `"config_option_update"`:
+		s.updateSetupSettings("session/set_config_option", nil, bytesOf(update))
+	case `"current_mode_update"`:
+		s.updateSetupSettings("session/set_mode", bytesOf(proxy.Object{"modeId": update["currentModeId"]}), nil)
 	}
 }

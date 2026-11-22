@@ -134,7 +134,10 @@ func decodeInitializeV2(raw proxy.Object) (acp.InitializeResponse, error) {
 // The SDK exposes prompt responses but no notification that an outbound
 // request was written. Signal the write so Escape cannot overtake a prompt
 // whose Bubble Tea command has yet to start.
-type promptWriteV2 struct{ ready chan struct{} }
+type promptWriteV2 struct {
+	ready     chan struct{}
+	operation uint64 // Written before ready closes.
+}
 
 type promptWriterV2 struct {
 	io.Writer
