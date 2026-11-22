@@ -105,8 +105,7 @@ func main() {
 		service := livesession.NewServer(ctx, func(options livesession.OpenOptions) (routing.Config, error) {
 			return routing.Load(settings.GetString("config"), options.Model, options.Account)
 		})
-		defer service.Close()
-		return localdaemon.ServeStarted(ctx, service.Handler())
+		return localdaemon.ServeStarted(ctx, service.Handler(), service.Close)
 	}}
 	root.AddCommand(server, bridge, mcp, daemon)
 

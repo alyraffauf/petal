@@ -345,9 +345,14 @@ func (h *harness) readSetupQuestions(ctx context.Context, snapshot livesession.S
 	for {
 		e, err := h.daemon.client.Next(ctx, cursor)
 		if err != nil {
-			var gap *livesession.Error
-			if errors.As(err, &gap) && gap.Code == livesession.Gap {
-				cursor = gap.Floor
+			if daemonError(err, livesession.Gap) {
+				current, err := h.daemon.client.Snapshot(ctx)
+				if err != nil {
+					return
+				}
+				h.v2.Store(current.ACPVersion == 2)
+				questions.reconcile(ctx, current.Pending)
+				cursor = current.Head
 				continue
 			}
 			return
@@ -366,6 +371,24 @@ type daemonQuestions struct {
 	h      *harness
 	active map[uint64]context.CancelFunc
 	tail   <-chan struct{}
+}
+
+func (q *daemonQuestions) reconcile(ctx context.Context, pending []livesession.Question) {
+	open := make(map[uint64]bool, len(pending))
+	for _, question := range pending {
+		open[question.ID] = true
+	}
+	for id, stop := range q.active {
+		if !open[id] {
+			stop()
+			delete(q.active, id)
+		}
+	}
+	for _, question := range pending {
+		if q.active[question.ID] == nil {
+			q.open(ctx, question)
+		}
+	}
 }
 
 func (q *daemonQuestions) open(parent context.Context, question livesession.Question) {
