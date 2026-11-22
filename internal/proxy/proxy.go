@@ -209,18 +209,10 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	}
 	var name, native, public, delegationParent string
 	if method == "session/new" {
-		if len(p.accounts) == 0 {
-			return nil, fmt.Errorf("no subscription offers %q", p.Model)
-		}
-		// Opening a thread consumes no model quota. Prefer the best measured
-		// account, but let the provider enforce its limit when the user sends.
-		name = p.accounts[0]
-		if len(p.accounts) > 1 {
-			if chosen, err := p.choose(ctx); err == nil {
-				name = chosen
-			} else if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
+		var err error
+		name, err = p.newSessionAccount(ctx)
+		if err != nil {
+			return nil, err
 		}
 	} else if _, exists := params["sessionId"]; exists {
 		id, err := SessionID(params)
@@ -375,6 +367,21 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		p.recorder.open(id, id, stringField(params, "cwd"), name, p.Model)
 	}
 	return session, nil
+}
+
+func (p *proxy) newSessionAccount(ctx context.Context) (string, error) {
+	if len(p.accounts) == 0 {
+		return "", fmt.Errorf("no subscription offers %q", p.Model)
+	}
+	if len(p.accounts) > 1 {
+		if chosen, err := p.choose(ctx); err == nil {
+			return chosen, nil
+		} else if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+	}
+	// Opening a session consumes no model quota. The provider enforces its limit on prompt.
+	return p.accounts[0], nil
 }
 
 func (p *proxy) choose(ctx context.Context) (string, error) {

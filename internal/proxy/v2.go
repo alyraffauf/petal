@@ -288,13 +288,10 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 
 	var name, public, canonical string
 	if method == "session/new" {
-		name = p.accounts[0]
-		if len(p.accounts) > 1 {
-			if chosen, err := p.choose(ctx); err == nil {
-				name = chosen
-			} else if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
+		var err error
+		name, err = p.newSessionAccount(ctx)
+		if err != nil {
+			return nil, err
 		}
 	} else {
 		if !hasString(params, "sessionId") {
