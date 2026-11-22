@@ -76,6 +76,10 @@ type session struct {
 	pending      map[uint64]*pendingQuestion
 	answered     map[uint64][32]byte
 	answerOrder  []uint64
+
+	listing *operation
+	// The prompt reply can precede the first active foreground update.
+	awaitingStart *operation
 }
 
 func newSession(server *Server, options OpenOptions) *session {
@@ -166,6 +170,7 @@ func (s *session) state(p *peer) Snapshot {
 		Info: s.info, Floor: s.events.floor(), Head: s.events.head, After: s.events.head,
 		Control: s.controller == p, NextOperation: s.nextOp, Foreground: s.foreground, Running: s.running, Canceling: s.canceling,
 		Closed: s.closed, Hello: s.hello, Setup: s.setup, SetupMethod: s.resumeMethod, ArchiveHead: s.archiveHead,
+		AwaitingStart: s.awaitingStart != nil,
 	}
 	if s.active != nil {
 		snapshot.ActiveOperation = s.active.number
@@ -270,7 +275,7 @@ func (s *session) closeBy(p *peer) *Error {
 	}
 	s.closed = true
 	s.publish(Event{Kind: SessionClosed})
-	if s.info.SessionID != "" && !s.info.AdapterExited && s.active == nil && s.steering == nil && !s.running && !s.canceling {
+	if s.info.SessionID != "" && !s.info.AdapterExited && s.active == nil && s.listing == nil && s.steering == nil && s.awaitingStart == nil && !s.running && !s.canceling {
 		done := make(chan struct{})
 		s.closingDone = done
 		go s.closeAdapter(s.info.SessionID, done)
@@ -288,7 +293,7 @@ func (s *session) retire() {
 		s.closed = true
 		s.publish(Event{Kind: SessionClosed})
 	}
-	active, steering, closing := s.active, s.steering, s.closingDone
+	active, steering, listing, closing := s.active, s.steering, s.listing, s.closingDone
 	s.mu.Unlock()
 	<-s.ready
 	if closing != nil {
@@ -304,6 +309,9 @@ func (s *session) retire() {
 	}
 	if steering != nil {
 		<-steering.done
+	}
+	if listing != nil {
+		<-listing.done
 	}
 	if s.backend != nil {
 		s.backend.Wait()

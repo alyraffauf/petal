@@ -21,6 +21,7 @@ type DaemonDialer func(context.Context) (*livesession.Client, error)
 
 type daemonSession struct {
 	client *livesession.Client
+	dial   DaemonDialer
 	handle string
 
 	// Serialize operation allocation with submission. Cancellation targets a
@@ -292,11 +293,24 @@ func daemonHello(version uint16, raw json.RawMessage) (acp.InitializeResponse, e
 
 func (h *harness) setupDaemon(ctx context.Context, c routing.Config, snapshot livesession.Snapshot) error {
 	d := h.daemon
+	// A canceled Next may still be polling on the server. Keep its slot
+	// on an observer connection and leave the controller free for live reads.
+	observer, err := d.dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer observer.Close()
+	if observer.Instance() != d.client.Instance() {
+		return errors.New("live session daemon restarted during setup")
+	}
+	if _, err := observer.Attach(ctx, livesession.AttachOptions{Handle: d.handle}); err != nil {
+		return err
+	}
 	setupCtx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.readSetupQuestions(setupCtx, snapshot)
+		h.readSetupQuestions(setupCtx, observer, snapshot)
 	}()
 	defer func() { stop(); <-done }()
 
@@ -335,7 +349,7 @@ func (h *harness) setupDaemon(ctx context.Context, c routing.Config, snapshot li
 	return err
 }
 
-func (h *harness) readSetupQuestions(ctx context.Context, snapshot livesession.Snapshot) {
+func (h *harness) readSetupQuestions(ctx context.Context, observer *livesession.Client, snapshot livesession.Snapshot) {
 	h.v2.Store(snapshot.ACPVersion == 2)
 	questions := daemonQuestions{h: h, active: make(map[uint64]context.CancelFunc)}
 	for _, question := range snapshot.Pending {
@@ -343,10 +357,10 @@ func (h *harness) readSetupQuestions(ctx context.Context, snapshot livesession.S
 	}
 	cursor := snapshot.Head
 	for {
-		e, err := h.daemon.client.Next(ctx, cursor)
+		e, err := observer.Next(ctx, cursor)
 		if err != nil {
 			if daemonError(err, livesession.Gap) {
-				current, err := h.daemon.client.Snapshot(ctx)
+				current, err := observer.Snapshot(ctx)
 				if err != nil {
 					return
 				}
@@ -359,7 +373,7 @@ func (h *harness) readSetupQuestions(ctx context.Context, snapshot livesession.S
 		}
 		cursor = e.Sequence
 		if e.Kind == livesession.QuestionOpened {
-			if current, err := h.daemon.client.Snapshot(ctx); err == nil {
+			if current, err := observer.Snapshot(ctx); err == nil {
 				h.v2.Store(current.ACPVersion == 2)
 			}
 		}

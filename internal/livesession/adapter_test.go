@@ -42,14 +42,15 @@ func TestLiveAdapterFixture(t *testing.T) {
 	if os.Getenv("PETAL_LIVE_MODEL") == "child" {
 		adapter.id = "child"
 	}
+	awaitingStart := false
 	for adapter.in.Scan() {
 		frame := adapter.frame()
 		switch frame.Method {
 		case "initialize":
 			if adapter.v2 {
-				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"mcp":{"stdio":{}}}}}`))
+				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"list":{},"mcp":{"stdio":{}}}}}`))
 			} else {
-				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"close":{}}}}`))
+				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"close":{},"list":{}}}}`))
 			}
 		case "session/new", "session/load", "session/resume":
 			supplied, err := filepath.EvalSymlinks(field(frame.Params, "cwd"))
@@ -63,7 +64,27 @@ func TestLiveAdapterFixture(t *testing.T) {
 			}
 			adapter.reply(frame.ID, map[string]any{"sessionId": adapter.id, "fixtureMCP": frame.Params["mcpServers"]})
 		case "session/prompt":
-			adapter.prompt(frame)
+			if adapter.v2 && strings.Contains(string(frame.Params["prompt"]), "reply-before-running") {
+				adapter.reply(frame.ID, map[string]string{"messageId": "acknowledged"})
+				adapter.state("idle", "")
+				awaitingStart = true
+			} else {
+				adapter.prompt(frame)
+			}
+		case "session/list":
+			if awaitingStart {
+				awaitingStart = false
+				adapter.state("running", "")
+				adapter.state("idle", "end_turn")
+			} else {
+				adapter.update(map[string]string{"sessionUpdate": "notice", "message": "list waiting for prompt"})
+				prompt := adapter.read()
+				if prompt.Method != "session/prompt" {
+					t.Fatalf("expected prompt while listing, got %s", prompt.Method)
+				}
+				adapter.prompt(prompt)
+			}
+			adapter.reply(frame.ID, json.RawMessage(`{"sessions":[]}`))
 		case "session/close":
 			adapter.reply(frame.ID, map[string]string{})
 		default:
@@ -193,6 +214,8 @@ func (a adapterFixture) prompt(frame adapterFrame) {
 		return
 	}
 	switch {
+	case text == "list overlap":
+		a.text("prompt during list")
 	case a.id == "child":
 		a.text("child-work")
 	case strings.Contains(text, "child-work") || strings.Contains(text, "activity"):

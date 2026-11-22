@@ -207,7 +207,7 @@ func runSession(parent context.Context, start sessionStart, drafts sessionDrafts
 	}
 	defer client.Close()
 	m.h = &harness{
-		daemon:   &daemonSession{client: client, handle: start.handle},
+		daemon:   &daemonSession{client: client, dial: dial, handle: start.handle},
 		graphics: directGraphicsTerminal(), lifetime: ctx, events: make(chan tea.Msg, 128), permissions: make(chan struct{}, 1),
 	}
 	m.h.requestedModel = start.requestedModel
@@ -778,7 +778,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				foreground.report(t.snapshot.Foreground)
 			}
 			foreground.submitting = t.snapshot.ActiveMethod == "session/prompt"
-			foreground.awaitingStart = foreground.submitting && !t.snapshot.TurnStarted
+			foreground.awaitingStart = t.snapshot.AwaitingStart || (foreground.submitting && !t.snapshot.TurnStarted)
 			m.refreshForegroundV2()
 			m.publishV2Transcript(true)
 		} else {

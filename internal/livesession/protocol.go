@@ -139,6 +139,9 @@ type Snapshot struct {
 	ArchiveHead       int64           `json:"archiveHead,omitempty"`
 	SetupMethod       string          `json:"setupMethod,omitempty"`
 	Pending           []Question      `json:"pending,omitempty"`
+
+	// AwaitingStart marks an ACP v2 prompt that has yet to enter active foreground.
+	AwaitingStart bool `json:"awaitingStart,omitempty"`
 }
 
 type EventKind string

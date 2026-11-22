@@ -403,3 +403,80 @@ func TestSteeringAcrossReceiptEviction(t *testing.T) {
 		t.Fatalf("replayed %d accepted inputs, archive %+v, error %v", count, rows, err)
 	}
 }
+
+func TestLiveV2ReattachesAfterPromptReplyBeforeRunning(t *testing.T) {
+	ctx, dial := startSocket(t, 2, false)
+	client := dial()
+	setup := openSession(t, ctx, client, OpenOptions{Handle: NewHandle(), Cwd: t.TempDir(), Model: "fixture"}, 2)
+	prompt := Call{Operation: setup.NextOperation, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"reply-before-running"}]}`)}
+	submit(t, ctx, client, prompt)
+	waitForResult(t, ctx, client, prompt.Operation)
+	cursor := setup.Head
+	idle := func(event Event) bool {
+		return event.Kind == Update && strings.Contains(string(event.Params), `"state":"idle"`)
+	}
+	advance(t, ctx, client, &cursor, idle)
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reconnected := dial()
+	snapshot := takeControl(t, ctx, reconnected, AttachOptions{Handle: setup.Handle, Control: true})
+	if !snapshot.AwaitingStart || snapshot.Running || snapshot.Turn != prompt.Operation || snapshot.ActiveOperation != 0 {
+		t.Fatalf("acknowledged prompt state = %+v", snapshot)
+	}
+	followUp := Call{Operation: snapshot.NextOperation, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"list overlap"}]}`)}
+	if _, err := reconnected.Submit(ctx, followUp); !hasCode(err, Busy) {
+		t.Fatalf("follow-up while awaiting start: %v", err)
+	}
+	// Release the adapter after observing the reattached state and checking
+	// admission. The adapter emits running and idle before the list response.
+	submit(t, ctx, reconnected, Call{Operation: followUp.Operation, Method: "session/list"})
+	waitForResult(t, ctx, reconnected, followUp.Operation)
+	advance(t, ctx, reconnected, &cursor, idle)
+	followUp.Operation++
+	submit(t, ctx, reconnected, followUp)
+	waitForResult(t, ctx, reconnected, followUp.Operation)
+}
+
+func TestLivePromptWhileSessionListIsPending(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
+			ctx, dial := startSocket(t, version, false)
+			client := dial()
+			cwd := t.TempDir()
+			setup := openSession(t, ctx, client, OpenOptions{Handle: NewHandle(), Cwd: cwd, Model: "fixture"}, version)
+			list := setup.NextOperation
+			submit(t, ctx, client, Call{Operation: list, Method: "session/list"})
+			cursor := setup.Head
+			advance(t, ctx, client, &cursor, func(event Event) bool {
+				return event.Kind == Update && strings.Contains(string(event.Params), "list waiting for prompt")
+			})
+			receipt, err := client.Result(ctx, list)
+			if err != nil || receipt.Done {
+				t.Fatalf("list must still be pending: %+v, %v", receipt, err)
+			}
+			prompt := Call{Operation: list + 1, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"list overlap"}]}`)}
+			submit(t, ctx, client, prompt)
+			waitForResult(t, ctx, client, prompt.Operation)
+			waitForResult(t, ctx, client, list)
+			if version == 2 {
+				advance(t, ctx, client, &cursor, func(event Event) bool {
+					return event.Kind == Update && strings.Contains(string(event.Params), `"state":"idle"`)
+				})
+			}
+			rows, err := sessions.Transcript(cwd, setup.SessionID)
+			if err != nil || len(rows) != 2 || rows[0].Role != "user" || rows[0].Body != "list overlap" || rows[1].Body != "prompt during list" {
+				t.Fatalf("transcript after overlap = %+v, %v", rows, err)
+			}
+		})
+	}
+}
+
+func waitForResult(t *testing.T, ctx context.Context, client *Client, operation uint64) {
+	t.Helper()
+	receipt, err := client.WaitResult(ctx, operation)
+	if err != nil || !receipt.Done || receipt.Err() != nil {
+		t.Fatalf("call %d receipt = %+v, %v", operation, receipt, err)
+	}
+}

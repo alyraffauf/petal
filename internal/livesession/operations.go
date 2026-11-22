@@ -42,14 +42,20 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 	if s.info.AdapterExited {
 		return 0, failure(Closed, "session adapter disconnected")
 	}
-	if s.canceling || s.steering != nil || s.active != nil && call.Method != "_session/steering" {
+	// After setup, listing can overlap a prompt without taking its operation slot.
+	backgroundList := call.Method == "session/list" && len(s.setup) != 0
+	if backgroundList {
+		if s.listing != nil {
+			return 0, failure(Busy, "another session list is active")
+		}
+	} else if s.canceling || s.steering != nil || s.active != nil && call.Method != "_session/steering" {
 		return 0, failure(Busy, "another request is active")
 	}
 	if call.Method == "_session/steering" && (s.info.ACPVersion != 1 || s.active == nil || s.active != s.turn) {
 		return 0, failure(Conflict, "steering requires an active ACP v1 prompt")
 	}
-	if call.Method == "session/prompt" && s.running {
-		return 0, failure(Busy, "a turn is running")
+	if call.Method == "session/prompt" && (s.running || s.awaitingStart != nil) {
+		return 0, failure(Busy, "a turn is running or awaiting start")
 	}
 	params, err := s.callParams(call)
 	if err != nil {
@@ -63,15 +69,20 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 		op.replay = &journal{}
 	}
 	s.nextOp++
-	if call.Method == "_session/steering" {
+	switch {
+	case call.Method == "_session/steering":
 		s.steering = op
-	} else {
+	case backgroundList:
+		s.listing = op
+	default:
 		s.active = op
 	}
 	if call.Method == "session/prompt" {
 		s.turn = op
 		if s.info.ACPVersion == 1 {
 			s.running = true
+		} else {
+			s.awaitingStart = op
 		}
 	}
 	// ACP v1 adapters need not echo the user prompt. Preserve the accepted
@@ -122,7 +133,7 @@ func (s *session) callParams(call Call) (json.RawMessage, *Error) {
 		if call.Method == "session/fork" {
 			params["cwd"] = bytesOf(s.info.Cwd)
 		}
-		if s.running && (call.Method == "session/delete" || call.Method == "session/fork") {
+		if (s.running || s.awaitingStart != nil) && (call.Method == "session/delete" || call.Method == "session/fork") {
 			return nil, failure(Busy, "wait for the current turn to finish")
 		}
 	default:
@@ -151,6 +162,9 @@ func (s *session) findOperation(number uint64) *operation {
 	}
 	if s.steering != nil && s.steering.number == number {
 		return s.steering
+	}
+	if s.listing != nil && s.listing.number == number {
+		return s.listing
 	}
 	for _, op := range s.receipts {
 		if op.number == number {
@@ -220,6 +234,16 @@ func (s *session) run(op *operation, params json.RawMessage) {
 	}
 	s.mu.Lock()
 	op.replay = nil
+	if op.method == "session/prompt" && s.info.ACPVersion == 2 {
+		var reply struct{ MessageID *string }
+		if outcome.Err() == nil && (json.Unmarshal(outcome.Result, &reply) != nil || reply.MessageID == nil) {
+			outcome = Outcome{Error: failure(Internal, "ACP v2 prompt response requires a messageId")}
+			size = len(bytesOf(outcome))
+		}
+		if s.awaitingStart == op && outcome.Err() != nil {
+			s.awaitingStart = nil
+		}
+	}
 	op.receipt = Receipt{Done: true, Outcome: outcome}
 	op.size = size
 	s.receipts = append(s.receipts, op)
@@ -228,9 +252,12 @@ func (s *session) run(op *operation, params json.RawMessage) {
 	if err == nil && outcome.Err() == nil {
 		s.updateSetupSettings(op.method, params, outcome.Result)
 	}
-	if op == s.steering {
+	switch op {
+	case s.steering:
 		s.steering = nil
-	} else {
+	case s.listing:
+		s.listing = nil
+	default:
 		s.active = nil
 	}
 	if op.method == "session/prompt" && s.info.ACPVersion == 1 {
@@ -316,6 +343,7 @@ func (s *session) setRunning(state string) {
 	switch state {
 	case "running", "requires_action":
 		s.running = true
+		s.awaitingStart = nil
 		if s.turn != nil {
 			s.turn.started = true
 		}
@@ -358,7 +386,7 @@ func (s *session) cancelTurn(p *peer, number uint64) *Error {
 	if s.turn == nil || s.turn.number != number {
 		return failure(NotFound, "turn does not match the current prompt")
 	}
-	if s.active != s.turn && !s.running {
+	if s.active != s.turn && s.awaitingStart != s.turn && !s.running {
 		return nil
 	}
 	op, id := s.turn, s.info.SessionID

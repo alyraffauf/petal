@@ -172,6 +172,7 @@ func (s *session) watchAdapter(done <-chan struct{}) {
 	if !s.closed {
 		s.info.AdapterExited = true
 		s.running = false
+		s.awaitingStart = nil
 		s.cancelQuestions()
 		s.publish(Event{Kind: AdapterExited})
 	}
