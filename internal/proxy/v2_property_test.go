@@ -58,7 +58,7 @@ func FuzzNativeProxyHistory(f *testing.F) {
 			}
 			accounts[name] = nativeAccount(t, hello)
 		}
-		wire := connectWireTest(t, routing.Config{ACPv2: true, Model: "m", Accounts: accounts})
+		wire := connectUnixWireTest(t, routing.Config{ACPv2: true, Model: "m", Accounts: accounts})
 		wire.send(v2Initialize)
 		init := wire.read().member("result")
 		version := string(init["protocolVersion"])
