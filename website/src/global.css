@@ -1,0 +1,68 @@
+@import "tailwindcss";
+@import "@fontsource/dm-sans/400.css";
+@import "@fontsource/dm-sans/700.css";
+@import "@fontsource/cascadia-mono/400.css";
+
+@theme {
+    --font-sans: "DM Sans", sans-serif;
+    --font-mono: "Cascadia Mono", monospace;
+    --color-ink: #17141a;
+    --color-panel: #1f1a22;
+    --color-line: #3a2f38;
+    --color-text: #f4eef4;
+    --color-soft: #d9cdd6;
+    --color-dim: #b9abb6;
+    --color-rose: #ffaed3;
+}
+
+@layer base {
+    a:focus-visible {
+        outline: 2px solid var(--color-rose);
+        outline-offset: 4px;
+    }
+    :not(pre) > :is(code, kbd) {
+        @apply rounded border border-line bg-panel px-1.5 py-0.5 font-mono text-[.85em];
+    }
+    pre {
+        @apply overflow-x-auto rounded-lg border border-line bg-panel px-4 py-3 font-mono text-sm leading-7;
+    }
+}
+
+/* Rendered Markdown guides. */
+.prose {
+    @apply space-y-5 text-base text-soft;
+    h1 {
+        @apply font-mono text-4xl tracking-tighter text-text;
+    }
+    h2 {
+        @apply pt-6 font-mono text-xl text-text;
+    }
+    h3 {
+        @apply pt-2 font-mono text-base text-text;
+    }
+    a {
+        @apply text-rose underline underline-offset-4;
+    }
+    strong {
+        @apply text-text;
+    }
+    ul {
+        @apply list-disc space-y-2 pl-6;
+    }
+    ol {
+        @apply list-decimal space-y-2 pl-6;
+    }
+    img {
+        @apply rounded-lg border border-line;
+    }
+    table {
+        @apply block overflow-x-auto text-sm;
+    }
+    th,
+    td {
+        @apply border-b border-line py-2 pr-6 text-left align-top;
+    }
+    th {
+        @apply font-mono font-normal text-dim;
+    }
+}

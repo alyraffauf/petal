@@ -1,0 +1,112 @@
+---
+import "../global.css";
+import icon from "../../../docs/petal.svg";
+
+// `crumb` names the current page under Petal, such as a guide.
+const { title, description, crumb } = Astro.props;
+const url = new URL(Astro.url.pathname, Astro.site);
+const image = new URL("/og.png", Astro.site);
+// Search engines read this to list Petal as software. Only the homepage carries it.
+const software = !crumb && {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: "Petal",
+    description,
+    url: Astro.site,
+    applicationCategory: "DeveloperApplication",
+    operatingSystem: "Linux, macOS",
+    license: "https://opensource.org/license/mit",
+    codeRepository: "https://github.com/alyraffauf/petal",
+    offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    author: { "@type": "Person", name: "Aly Raffauf", url: "https://aly.codes" },
+};
+const base = import.meta.env.BASE_URL;
+const nav = [
+    ["Docs", base + "docs/start/"],
+    ["GitHub", "https://github.com/alyraffauf/petal"],
+];
+---
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content={description} />
+        <title>{title}</title>
+        <link rel="canonical" href={url} />
+        <meta name="theme-color" content="#17141a" />
+        <meta property="og:type" content={crumb ? "article" : "website"} />
+        <meta property="og:site_name" content="Petal" />
+        <meta property="og:url" content={url} />
+        <meta property="og:title" content={title} />
+        <meta property="og:description" content={description} />
+        <meta property="og:image" content={image} />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta property="og:image:alt" content="Petal, a unified workbench for agents" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={title} />
+        <meta name="twitter:description" content={description} />
+        <meta name="twitter:image" content={image} />
+        {software && <script type="application/ld+json" set:html={JSON.stringify(software)} />}
+        <link rel="icon" href={icon.src} />
+    </head>
+    <body class="mx-auto max-w-[880px] bg-ink px-6 font-sans text-lg leading-relaxed text-text">
+        <a class="absolute -top-20 bg-ink focus:top-1" href="#main">
+            Skip to content
+        </a>
+        <header class="flex h-18 items-center justify-between font-mono text-sm">
+            <nav class="flex flex-wrap items-center gap-x-2 text-dim" aria-label="Breadcrumb">
+                <a class="flex items-center gap-1.5 hover:text-text" href="https://aly.codes">
+                    <svg
+                        class="size-4 text-rose"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                    >
+                        <path d="M17 10h-1a4 4 0 1 1 4-4v.534" />
+                        <path d="M17 6h1a4 4 0 0 1 1.42 7.74l-2.29.87a6 6 0 0 1-5.339-10.68l2.069-1.31M4.5 17c2.8-.5 4.4 0 5.5.8s1.8 2.2 2.3 3.7c-2 .4-3.5.4-4.8-.3c-1.2-.6-2.3-1.9-3-4.2" />
+                        <path d="M9.77 12C4 15 2 22 2 22" />
+                        <circle cx="17" cy="8" r="2" />
+                    </svg>
+                    Aly Raffauf
+                </a>
+                <span class="text-dim/60">›</span>
+                <a
+                    class={
+                        "flex items-center gap-1.5 hover:text-text " + (crumb ? "" : "text-text")
+                    }
+                    href={base}
+                    aria-current={crumb ? undefined : "page"}
+                >
+                    <img class="size-4" src={icon.src} alt="" />
+                    Petal
+                </a>
+                {crumb && <span class="text-dim/60">›</span>}
+                {crumb && (
+                    <span class="text-text" aria-current="page">
+                        {crumb}
+                    </span>
+                )}
+            </nav>
+            <nav class="ml-auto flex gap-7" aria-label="Site">
+                {nav.map(([label, href]) => (
+                    <a class="hover:underline" href={href}>
+                        {label}
+                    </a>
+                ))}
+            </nav>
+        </header>
+        <main id="main">
+            <slot />
+        </main>
+        <footer class="mt-16 border-t border-line py-7 font-mono text-sm text-dim">
+            MIT license
+        </footer>
+    </body>
+</html>

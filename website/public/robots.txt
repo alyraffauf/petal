@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://petal.aly.town/sitemap-index.xml

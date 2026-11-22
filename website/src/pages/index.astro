@@ -1,0 +1,74 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Feature from "../components/Feature.astro";
+import orchid from "../assets/orchid-dots.svg";
+import demo from "../../../docs/screenshots/workbench.gif";
+import still from "../../../docs/screenshots/workbench.png";
+
+const docs = import.meta.env.BASE_URL + "docs/";
+---
+
+<Layout
+    title="Petal · A unified workbench for agents"
+    description="Petal is a workbench for coding agents. Run Claude Code and Codex together, with cross-vendor subagents, semantic search, and load balancing across your subscriptions."
+>
+    <section class="space-y-5 py-12 text-center text-soft sm:py-16">
+        <div class="space-y-3">
+            <img class="mx-auto" src={orchid.src} width="112" height="112" alt="" />
+            <h1 class="font-mono text-6xl leading-none tracking-tighter text-text sm:text-7xl">
+                Petal
+            </h1>
+        </div>
+        <p class="text-balance font-mono text-2xl tracking-tight text-text sm:text-3xl">
+            A unified workbench for agents<span class="text-rose">.</span>
+        </p>
+        <div class="mx-auto max-w-[52ch] space-y-5">
+            <p class="text-xl">
+                Multi-agent orchestration, semantic search, and load balancing across the
+                subscriptions you already pay for.
+            </p>
+            <pre class="mx-auto w-fit max-w-full text-left"><span class="select-none text-rose">$ </span>nix profile add github:alyraffauf/petal
+<span class="select-none text-rose">$ </span>petal</pre>
+            <p class="text-base text-dim">
+                Petal runs the <code>claude</code> and <code>codex</code> CLIs you already have.
+            </p>
+        </div>
+    </section>
+
+    <picture>
+        <source media="(prefers-reduced-motion: reduce)" srcset={still.src} />
+        <img
+            class="w-full rounded-lg border border-line"
+            src={demo.src}
+            width="1992"
+            height="1206"
+            alt="A Petal session. Petal picks the work account for Claude. Claude delegates a test run to Codex, which appears as a running child in the control center and then completes. Claude reports the bug, then searches the saved transcript and quotes the original failing test output."
+        />
+    </picture>
+
+    <div class="grid gap-x-14 gap-y-12 pt-16 sm:grid-cols-2">
+        <Feature title="Orchestrate" href={docs + "petal-delegation/"}>
+            Claude can delegate a task to Codex, and Codex to Claude. Petal runs each cross-vendor
+            subagent in the same directory and returns its result to the parent.
+        </Feature>
+        <Feature title="Remember" href={docs + "configuration/#enable-semantic-history-search"}>
+            Agents get semantic search over every transcript. Petal keeps them on your machine, so
+            compaction never erases the original.
+        </Feature>
+        <Feature title="Route" href={docs + "configuration/#route-across-subscriptions"}>
+            Petal load balances across your work and personal subscriptions. Each new session starts
+            on the account with the most quota left.
+        </Feature>
+        <Feature title="Integrate" href={docs + "editors/"}>
+            Add Petal's orchestration, memory, and routing to any editor or agent development
+            environment via the{" "}
+            <a
+                class="underline underline-offset-4 hover:text-text"
+                href="https://agentclientprotocol.com/"
+            >
+                Agent Client Protocol
+            </a>
+            .
+        </Feature>
+    </div>
+</Layout>
