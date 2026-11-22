@@ -18,7 +18,7 @@ import (
 
 func TestControlCenterFollowsAgentLinksAndJumpsToATurn(t *testing.T) {
 	cfg := routing.Config{Model: "test", Accounts: map[string]routing.Account{"local": {Models: map[string][]string{"test": {"adapter"}}}}}
-	p := newPicker(cfg)
+	p := newPicker(".", cfg)
 	parent := sessions.Record{ID: "root", Parent: "previous", Title: "Routing", Model: "test", Account: "local"}
 	m := &terminal{h: &harness{record: parent}, launch: p, screen: screen{connection: connected, Width: 90, Height: 20, Messages: []entry{{"user", "First question"}, {"assistant", "Answer"}, {"user", "Second question"}}}}
 	m.agents.children = []agentDetail{
@@ -82,7 +82,7 @@ func TestControlCenterFollowsAgentLinksAndJumpsToATurn(t *testing.T) {
 }
 
 func TestControlCenterKeepsRunningThreadAndDraft(t *testing.T) {
-	p := newPicker(routing.Config{})
+	p := newPicker(".", routing.Config{})
 	h := &harness{record: sessions.Record{ID: "current", Title: "Current"}}
 	m := &terminal{h: h, launch: p, screen: screen{Busy: true, connection: connected, editor: testComposer("Draft", 5)}}
 	p.saved = []sessions.Record{h.record, {ID: "other", Title: "Other"}}
@@ -106,7 +106,7 @@ func TestWheelOverThreadDetailsScrollsOnlyThatPane(t *testing.T) {
 		paragraphs = append(paragraphs, fmt.Sprintf("Detail %02d", i))
 	}
 	m.agents.children = []agentDetail{{id: "child", parent: "root", title: "Child", description: strings.Join(paragraphs, "\n\n")}}
-	p := newPicker(routing.Config{})
+	p := newPicker(".", routing.Config{})
 	p.saved = []sessions.Record{parent}
 	p.width, p.height, p.history = 92, 23, true
 	p.center = controlCenter{owner: m, selected: "child", detailScroll: backlogViewport{browsing: true}}
@@ -119,7 +119,7 @@ func TestWheelOverThreadDetailsScrollsOnlyThatPane(t *testing.T) {
 }
 
 func TestControlCenterFollowsSavedDelegationWithoutLiveSession(t *testing.T) {
-	p := newPicker(routing.Config{})
+	p := newPicker(".", routing.Config{})
 	p.saved = []sessions.Record{
 		{ID: "child", Title: "Check ordering", DelegatedParent: "parent", DelegationStatus: "completed", UnreadChildResult: true},
 		{ID: "parent", Title: "Review changes"},
@@ -270,7 +270,7 @@ func runningChildrenPicker(t *testing.T) *picker {
 		}
 		t.Cleanup(release)
 	}
-	p := newPicker(routing.Config{})
+	p := newPicker(".", routing.Config{})
 	p.history, p.width, p.height = true, 92, 23
 	p.center.cwd, p.center.selected = cwd, "child"
 	records, err := sessions.List(cwd, []string{"test"})
@@ -283,7 +283,7 @@ func runningChildrenPicker(t *testing.T) *picker {
 }
 
 func TestControlCenterUpdatesAfterChildPermissionDismissal(t *testing.T) {
-	p := newPicker(routing.Config{})
+	p := newPicker(".", routing.Config{})
 	p.history = true
 	p.saved = []sessions.Record{{ID: "root"}}
 	q := &permission{sessionID: "child"}

@@ -198,7 +198,7 @@ func (m *terminal) openSettingPicker(menu settingMenu, current string) {
 	if len(menu.options) == 0 {
 		return
 	}
-	picker := newPicker(m.cfg)
+	picker := newPicker(m.Cwd, m.cfg)
 	picker.setting = &menu
 	picker.embedded = true
 	picker.models = nil

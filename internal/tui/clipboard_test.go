@@ -79,7 +79,7 @@ func TestClipboardRejectsDamagedPNG(t *testing.T) {
 }
 
 func TestClipboardTextReachesPickerBeforeItCloses(t *testing.T) {
-	picker := newPicker(routing.Config{})
+	picker := newPicker(".", routing.Config{})
 	m := terminal{root: bloom.New(), launch: picker, screen: screen{
 		connection: connected, editor: testComposer("draft", 5),
 	}}
