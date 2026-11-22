@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"os"
 	"strings"
 	"time"
 
@@ -80,7 +79,7 @@ type transcriptResults struct {
 }
 
 func (p *picker) openTranscriptSearch() {
-	cwd, err := os.Getwd()
+	cwd := p.center.cwd
 	s := &transcriptSearch{cwd: cwd, account: p.cfg.PinnedAccount, input: p.search}
 	if p.center.owner != nil {
 		s.cwd = p.center.owner.Cwd
@@ -88,9 +87,6 @@ func (p *picker) openTranscriptSearch() {
 	}
 	s.input.Reset()
 	s.input.Placeholder = "Words or a quoted phrase"
-	if err != nil && s.cwd == "" {
-		s.status = err.Error()
-	}
 	p.transcripts = s
 }
 func (s *transcriptSearch) request(offset int) tea.Cmd {

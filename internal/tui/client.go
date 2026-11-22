@@ -36,6 +36,7 @@ type event struct {
 	chunk          bool
 }
 type harness struct {
+	requestedModel       string
 	updateSlots          chan struct{}
 	resumedHistory       []entry
 	graphics             bool
@@ -497,6 +498,25 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	initialRecord := sessions.Record{ID: h.id, Model: c.Model, Account: parts[0], Opened: time.Now()}
 	if err := h.prepareSessionRecord(ctx, initialRecord, resume); err != nil {
 		return "", err
+	}
+	if model := h.requestedModel; !resume && model != "" {
+		target := h.initialSettings.byCategory("model")
+		if target.current() != model {
+			if target.ID == "" {
+				return "", fmt.Errorf("adapter does not offer the requested model %q", model)
+			}
+			result := h.changeSetting(ctx, target, model)
+			if result.err != nil {
+				return "", result.err
+			}
+			h.initialSettings.Config = result.options.Config
+			if h.initialSettings.byCategory("model").current() != model {
+				return "", fmt.Errorf("adapter did not confirm model %q", model)
+			}
+		}
+		if err := h.rememberSetting(sessions.Selection{ID: target.ID, Value: model}); err != nil {
+			return "", err
+		}
 	}
 	if c.PinnedAccount != "" {
 		return c.PinnedAccount, nil

@@ -22,7 +22,7 @@ func testComposer(text string, column int) *composer {
 }
 
 func TestPickerPasteStaysOutOfDraft(t *testing.T) {
-	m := &terminal{launch: newPicker(routing.Config{}), screen: screen{editor: testComposer("draft", 5)}}
+	m := &terminal{launch: newPicker(".", routing.Config{}), screen: screen{editor: testComposer("draft", 5)}}
 	m.Update(tea.PasteMsg{Content: "b"})
 	if m.launch.search.Value() != "b" || m.editor.Value() != "draft" {
 		t.Fatalf("query %q, draft %q", m.launch.search.Value(), m.editor.Value())

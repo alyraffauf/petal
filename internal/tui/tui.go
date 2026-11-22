@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -125,14 +126,28 @@ type terminal struct {
 }
 
 type sessionStart struct {
-	id     string
-	cfg    routing.Config
-	resume bool
-	editor *composer
+	requestedModel string
+	cwd            string
+	id             string
+	cfg            routing.Config
+	resume         bool
+	editor         *composer
+}
+
+func (m *terminal) retrySession() *sessionStart {
+	start := &sessionStart{cwd: m.Cwd, cfg: m.cfg, resume: m.resume, id: m.resumeID, editor: m.editor}
+	if m.h != nil {
+		start.requestedModel = m.h.requestedModel
+	}
+	return start
 }
 
 func Run(parent context.Context, c routing.Config, resume bool) error {
-	start, ok, err := pick(c, resume)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	start, ok, err := pick(cwd, c, resume)
 	if err != nil || !ok {
 		return err
 	}
@@ -150,12 +165,10 @@ func runSession(parent context.Context, start sessionStart, drafts sessionDrafts
 	ctx, stop := context.WithCancel(parent)
 	defer stop()
 	m := &terminal{root: bloom.New(), ctx: ctx, cfg: c, resume: start.resume, resumeID: start.id}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
+	cwd := start.cwd
 	m.screen = screen{transcriptRevision: 1, background: canvasBackground(c.TransparentBackground), Cwd: cwd, Model: c.Model, Account: c.PinnedAccount, connection: connecting}
 	m.h = startHarness(ctx, c)
+	m.h.requestedModel = start.requestedModel
 	m.h.id = start.id
 	defer m.h.close()
 	m.draftSessionID = start.id
@@ -164,7 +177,7 @@ func runSession(parent context.Context, start sessionStart, drafts sessionDrafts
 	if directGraphicsTerminal() {
 		defer os.Stdout.WriteString("\x1b[?5522l")
 	}
-	err = runChat(m)
+	err := runChat(m)
 	if m.v2 != nil && m.connection == connected {
 		m.publishV2Transcript(true)
 	}
@@ -361,6 +374,28 @@ func (m *terminal) submit() tea.Cmd {
 		m.recordNote("Waiting for clipboard data. Press Enter again after the paste finishes.")
 		return nil
 	}
+	if path, ok := strings.CutPrefix(text, "/new "); ok {
+		if m.Busy || m.changingSetting {
+			m.recordNote("Wait for the current operation before starting a new thread.")
+			return nil
+		}
+		path = strings.TrimSpace(path)
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(m.Cwd, path)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			m.recordNote(terminalError(err))
+			return nil
+		}
+		if !info.IsDir() {
+			m.recordNote("Expected a directory: " + clean(path))
+			return nil
+		}
+		m.editor.Reset()
+		m.next = &sessionStart{cwd: path, cfg: m.cfg, requestedModel: m.agentSettings.byCategory("model").current()}
+		return tea.Quit
+	}
 	input := text
 	if escaped, ok := strings.CutPrefix(text, "/agent:"); ok {
 		name, _, _ := strings.Cut(escaped, " ")
@@ -483,7 +518,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c := m.cfg
 			c.Model = c.DefaultModel()
 			if c.Model != "" {
-				m.next = &sessionStart{cfg: c}
+				m.next = &sessionStart{cwd: m.Cwd, cfg: c}
 				return m, tea.Quit
 			}
 		}
@@ -513,7 +548,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.launch.setting != nil {
 					return m, m.selectSetting(m.launch)
 				}
-				m.next = &sessionStart{cfg: m.launch.cfg, resume: m.launch.resume, id: m.launch.id}
+				m.next = &sessionStart{cwd: m.Cwd, cfg: m.launch.cfg, resume: m.launch.resume, id: m.launch.id}
 				if m.connection == connectionFailed && m.launch.routeOnly && m.next.resume == m.resume && m.next.id == m.resumeID {
 					m.next.editor = m.editor
 				}
@@ -593,7 +628,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recordNote(terminalError(t.err))
 			break
 		}
-		m.next = &sessionStart{cfg: m.cfg, id: t.id, resume: true}
+		m.next = &sessionStart{cwd: m.Cwd, cfg: m.cfg, id: t.id, resume: true}
 		return m, tea.Quit
 	case childOutput:
 		for i := range m.agents.children {
@@ -660,7 +695,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if t.err == signedIn {
-			m.next = &sessionStart{cfg: m.cfg, resume: m.resume, id: m.resumeID, editor: m.editor}
+			m.next = m.retrySession()
 			return m, tea.Quit
 		}
 		clear(m.tools)

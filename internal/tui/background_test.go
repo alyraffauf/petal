@@ -27,7 +27,7 @@ func TestConfiguredCanvasBackground(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			m := newPicker(c)
+			m := newPicker(".", c)
 			m.width, m.height = 80, 20
 			chat := petal(screen{Width: 80, Height: 20, background: canvasBackground(c.TransparentBackground)})
 			for name, frame := range map[string]string{"chat": chat, "picker": m.View().Content} {
