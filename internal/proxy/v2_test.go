@@ -53,6 +53,14 @@ func TestNativeV2Adapter(t *testing.T) {
 		}
 		return frame
 	}
+	askURL := func(want string) {
+		t.Helper()
+		send("elicitation/create", encoded("login"), Object{"sessionId": encoded("thread"), "mode": encoded("url"), "elicitationId": encoded("oauth"), "url": encoded("https://example.invalid/login"), "message": encoded("Sign in")})
+		response := read()
+		if stringField(response.member("result"), "action") != want {
+			t.Fatalf("wanted URL response %s, got %s", want, jsonValue(response))
+		}
+	}
 	active := false
 	for scan.Scan() {
 		var frame Object
@@ -90,6 +98,11 @@ func TestNativeV2Adapter(t *testing.T) {
 				t.Fatal("invalid version", params)
 			}
 		case "session/new":
+			if os.Getenv("PETAL_URL_FIXTURE") != "" {
+				askURL("cancel")
+				reply(id, Object{"sessionId": encoded("thread")})
+				continue
+			}
 			active = true
 			reply(id, Object{"sessionId": encoded(""), "_meta": jsonValue(Object{"receivedMCP": params["mcpServers"]})})
 		case "session/list":
@@ -119,6 +132,11 @@ func TestNativeV2Adapter(t *testing.T) {
 			active = false
 			reply(id, Object{})
 		case "session/prompt":
+			if os.Getenv("PETAL_URL_FIXTURE") != "" {
+				askURL("accept")
+				reply(id, Object{"messageId": encoded("message"), "stopReason": encoded("end_turn")})
+				continue
+			}
 			if !hasString(params, "sessionId") || stringField(params, "sessionId") != "" {
 				t.Fatal("native session ID changed", params)
 			}
@@ -364,5 +382,40 @@ func TestNativeV2ReinitializeReplacesCapabilities(t *testing.T) {
 	wire.send(`{"jsonrpc":"2.0","id":4,"method":"session/list"}`)
 	if failure := wire.read().member("error"); string(failure["code"]) != "-32601" {
 		t.Fatalf("session/list should be unavailable: %s", jsonValue(failure))
+	}
+}
+
+func TestSessionURLSignInStartsWithFirstPrompt(t *testing.T) {
+	for _, version := range []string{"1", "2"} {
+		t.Run(version, func(t *testing.T) {
+			profile := "v1"
+			init := `{"protocolVersion":1,"clientCapabilities":{"elicitation":{"url":{}}}}`
+			if version == "2" {
+				profile = `{"session":{"prompt":{}}}`
+				init = `{"protocolVersion":2,"info":{"name":"editor","version":"1"},"capabilities":{"elicitation":{"url":{}}}}`
+			}
+			account := nativeAccount(t, profile)
+			account.Env["PETAL_URL_FIXTURE"] = "1"
+			wire := connectWireTest(t, routing.Config{ACPv2: version == "2", Model: "m", Accounts: map[string]routing.Account{"a": account}})
+			wire.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":` + init + `}`)
+			if reply := wire.read(); string(reply.member("result")["protocolVersion"]) != version {
+				t.Fatalf("initialize: %s", jsonValue(reply))
+			}
+			wire.send(`{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/work","mcpServers":[]}}`)
+			reply := wire.read()
+			session := reply.member("result")["sessionId"]
+			if session == nil {
+				t.Fatalf("startup: %s", jsonValue(reply))
+			}
+			wire.send(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":` + string(session) + `,"prompt":[{"type":"text","text":"connect"}]}}`)
+			callback := wire.read()
+			if stringField(callback, "method") != "elicitation/create" {
+				t.Fatalf("prompt: %s", jsonValue(callback))
+			}
+			wire.send(`{"jsonrpc":"2.0","id":` + string(callback["id"]) + `,"result":{"action":"accept"}}`)
+			if reply := wire.read(); reply["result"] == nil {
+				t.Fatalf("completion: %s", jsonValue(reply))
+			}
+		})
 	}
 }

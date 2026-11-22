@@ -122,6 +122,8 @@ Set the variable in Petal's environment to the complete header value, including 
 
 Petal reads the value each time it forwards the definition. Keep credentials out of Nix expressions.
 
+Before the first prompt in a new or resumed chat, Petal cancels session-scoped URL sign-in requests so optional MCP servers can’t hold up the conversation. A server that needs sign-in may be unavailable. To use it, authenticate with the adapter’s profile and reopen the chat.
+
 The adapter handles OAuth and remembers the login for its profile. Claude Code can request sign-in when you reconnect the server through its MCP command. On first use, Codex can ask you to run `codex mcp login <name>`. Use the same Codex home and server URL as the Petal account.
 
 If the server exists only in Petal, supply its URL to the Codex CLI.
