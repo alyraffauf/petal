@@ -26,7 +26,7 @@
           ../../internal/sessions/migrations
           (pkgs.lib.fileset.fileFilter (
               file:
-                file.hasExt "go" || builtins.elem file.name ["go.mod" "go.sum" "LICENSE"]
+                file.hasExt "go" || builtins.elem file.name ["go.mod" "go.sum" "LICENSE.md"]
             )
             ../..)
         ];
@@ -39,7 +39,7 @@
       ];
       env.CGO_ENABLED = "0";
       postInstall = ''
-        install -Dm444 LICENSE "$out/share/licenses/petal/LICENSE"
+        install -Dm444 LICENSE.md "$out/share/licenses/petal/LICENSE.md"
       '';
       meta.license = pkgs.lib.licenses.mit;
       meta.mainProgram = "petal";

@@ -33,4 +33,4 @@ To build without Nix, run `go build -o petal .` with Go 1.27.3 or later. Install
 - [Configure Petal with Home Manager](docs/configuration.md#install-with-home-manager)
 - [Check ACP capabilities and test coverage](docs/acp.md)
 
-[MIT license](LICENSE)
+[MIT license](LICENSE.md)
