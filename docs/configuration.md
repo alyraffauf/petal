@@ -1,6 +1,8 @@
 # Configure Petal
 
-Petal looks for Claude Code and Codex on your path. To add accounts, create `~/.config/petal/config.toml`. If you set `XDG_CONFIG_HOME`, use `$XDG_CONFIG_HOME/petal/config.toml`. Pass `--config PATH` to use another file.
+Petal looks for Claude Code and Codex on your path. To add accounts or change settings, create `~/.config/petal/config.toml`. If you set `XDG_CONFIG_HOME`, use `$XDG_CONFIG_HOME/petal/config.toml`. Pass `--config PATH` to use another file.
+
+Top-level options such as `acp_v2` and `delegation` go before the first table in the file. Petal rejects a config that contains a key it does not know.
 
 ## Route across subscriptions
 
@@ -29,13 +31,15 @@ CODEX_HOME="$HOME/.codex-work" codex login
 CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude
 ```
 
-Once you name a provider's profiles, list every account you want Petal to use for that provider. Relative home paths resolve against the config file.
+Once you name one profile for a provider, list every account that you want Petal to use for that provider. Relative home paths resolve against the config file.
 
-Set the account's `capacity` to its size relative to your other subscriptions. Capacity defaults to 1. Petal recognizes Claude Max 5× and 20× automatically. To give all detected Codex Pro profiles a weight of 4, add a `[[tiers]]` entry with `provider = "codex"`, `name = "pro"`, and `capacity = 4`. An account's explicit `capacity` takes precedence.
+Set the `capacity` of an account to its size relative to your other subscriptions. The default is 1. Petal recognizes Claude Max 5× and 20× automatically.
+
+To give all detected Codex Pro profiles a weight of 4, add a `[[tiers]]` entry with `provider = "codex"`, `name = "pro"`, and `capacity = 4`. An explicit `capacity` on an account takes precedence.
 
 ### How quota windows affect routing
 
-For a new session, Petal checks each account that offers the model and uses the lowest remaining percentage among the applicable windows.
+For a new session, Petal checks each account that offers the model. For each account, Petal uses the lowest remaining percentage among the applicable windows.
 
 | Provider    | Windows Petal checks                                                                                                                                                                                                                                                                                       |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -44,15 +48,17 @@ For a new session, Petal checks each account that offers the model and uses the 
 
 Suppose a Claude account has 80% left for five hours, 60% for the week, and 5% for Fable. Petal uses **5% for Fable** and **60% for Sonnet**, unless Sonnet has a tighter weekly limit of its own. Missing windows and reset times do not affect the score.
 
-Petal ranks accounts by **capacity × remaining fraction**. A 5× subscription at 30% scores 1.5 and beats a 1× subscription at 90%, which scores 0.9. Petal breaks ties randomly. Resuming a conversation keeps its original account.
+Petal ranks accounts by **capacity × remaining fraction**. A 5× subscription at 30% scores 1.5 and beats a 1× subscription at 90%, which scores 0.9. Petal breaks ties randomly. A resumed conversation keeps its original account.
 
-Both probes run in the account's environment. To supply your own percentage, set `usage` to a command array that prints one number from 0 to 100. Auto prefers an account with measured quota over one with unknown quota. If every matching account is exhausted, on cooldown, or has a failed probe, Petal still opens the thread on the first matching account alphabetically. The provider enforces quota when you send a prompt.
+Both probes run in the environment of the account. To supply your own percentage, set `usage` to a command array that prints one number from 0 to 100.
 
-A prompt rate-limit error puts the whole account on a five-minute cooldown for automatic selection. A Fable limit can therefore affect where new Sonnet sessions start. Use `petal --account work` to pin an account and bypass probing.
+Automatic selection prefers an account with measured quota over an account with unknown quota. If every matching account is exhausted, on cooldown, or has a failed probe, Petal still opens the thread on the first matching account alphabetically. The provider enforces quota when you send a prompt.
+
+A rate-limit error on a prompt puts the whole account on a five-minute cooldown for automatic selection. A Fable limit can therefore affect where new Sonnet sessions start. To pin an account and bypass the probes, run `petal --account work`.
 
 ## Run a custom ACP server
 
-Petal has built-in discovery and quota checks for Claude Code and Codex. To use another ACP v1 server, configure the command that starts it over stdio. Omit `provider` and `home`. Use the server's own sign-in and configuration.
+Petal has built-in discovery and quota checks for Claude Code and Codex. To use another ACP v1 server, configure the command that starts the server over stdio. Omit `provider` and `home`. Use the server's own sign-in and configuration.
 
 For example, install OpenCode, run `opencode auth login`, and add this table to your Petal config. [OpenCode ACP setup](https://opencode.ai/docs/cli/acp/)
 
@@ -65,13 +71,15 @@ id = "opencode/default"
 command = ["opencode", "acp"]
 ```
 
-Open **new session** in Petal and choose `opencode/default`, or start `petal acp opencode/default` from your editor. The ID names the route in Petal. OpenCode picks its model from its own settings. For another server, replace the ID and command array with your route name, executable, and arguments.
+Open **new session** in Petal and choose `opencode/default`, or start `petal acp opencode/default` from your editor. The ID names the route in Petal. OpenCode picks its model from its own settings. For another server, replace the ID and the command array with your route name, executable, and arguments.
 
-To route between two custom accounts, give both the same route name. Add a `[[accounts.env]]` entry with `name` and `value` for each profile variable. To compare quota, set each account's `usage` to a command array. Petal runs it with that account's environment and expects one number from 0 to 100 on stdout. Without a probe, Petal treats the account as unmetered.
+To route between two custom accounts, give both accounts the same route name. Add a `[[accounts.env]]` entry with `name` and `value` for each profile variable.
+
+To compare quota, set the `usage` of each account to a command array. Petal runs the command with the environment of that account and expects one number from 0 to 100 on stdout. Without a probe, the quota of the account is unknown, so automatic selection prefers any measured account that has quota left.
 
 ## Give agents access to MCP tools
 
-Add a top-level `[[mcp_servers]]` entry for each stdio Model Context Protocol (MCP) server. The adapter starts the command. Use an absolute executable path if your editor has a different `PATH` from your shell.
+Add a top-level `[[mcp_servers]]` entry for each stdio Model Context Protocol (MCP) server. The adapter starts the command. If your editor has a different `PATH` from your shell, use an absolute executable path.
 
 ```toml
 [[mcp_servers]]
@@ -84,7 +92,11 @@ name = "PROJECT_TOOLS_MODE"
 value = "read-only"
 ```
 
-Use the command, arguments, and environment variables that your server supports. You can omit `args` and `env`. Petal passes these definitions when you start, load, resume, or fork a session in the TUI or an editor. If an editor supplies a server with the same case-sensitive name, its definition wins. Reopen the client connection after editing the config.
+Use the command, arguments, and environment variables that your server supports. You can omit `args` and `env`.
+
+Petal passes these definitions when you start, load, resume, or fork a session in the TUI or in an editor. If an editor supplies a server with the same case-sensitive name, the editor's definition wins. Reopen the client connection after you edit the config.
+
+On ACP v2, `command` must be an absolute path.
 
 ### Remote MCP servers
 
@@ -100,17 +112,53 @@ name = "Authorization"
 from_env = "WORK_TOOLS_AUTHORIZATION"
 ```
 
-Set the variable in Petal’s environment to the complete header value, including `Bearer ` if required. Use `from_file = "/run/secrets/work-tools-header"` for a file containing that value, or `value` for a literal. Petal reads the value each time it forwards the definition. Keep credentials out of Nix expressions.
+Set the variable in Petal's environment to the complete header value, including `Bearer ` if the server requires it. A header takes its value from one of three keys.
 
-The adapter handles OAuth and remembers the login for its profile. Claude Code can request sign-in when you reconnect the server through its MCP command. On first use Codex can ask you to run `codex mcp login <name>`. Use the same Codex home and server URL as the Petal account. If the server exists only in Petal, supply its URL to the CLI with `codex -c 'mcp_servers.work-tools.url="https://tools.example.org/mcp"' mcp login work-tools`.
+| Key         | Source of the header value                                                |
+| ----------- | ------------------------------------------------------------------------- |
+| `from_env`  | The named environment variable.                                           |
+| `from_file` | A file that contains the value, such as `/run/secrets/work-tools-header`. |
+| `value`     | A literal in the config.                                                  |
+
+Petal reads the value each time it forwards the definition. Keep credentials out of Nix expressions.
+
+The adapter handles OAuth and remembers the login for its profile. Claude Code can request sign-in when you reconnect the server through its MCP command. On first use, Codex can ask you to run `codex mcp login <name>`. Use the same Codex home and server URL as the Petal account.
+
+If the server exists only in Petal, supply its URL to the Codex CLI.
+
+```sh
+codex -c 'mcp_servers.work-tools.url="https://tools.example.org/mcp"' mcp login work-tools
+```
 
 ### Built-in Petal tools
 
-Petal exposes transcript search, source reads, and child-agent tools through the `petal` MCP server by default. The existing `delegation = false` setting disables the whole server. [Petal MCP tools](petal-delegation.md)
+Petal gives agents its search and delegation tools through an MCP server named `petal`. To disable the server, set `delegation = false`. [Orchestrate subagents](petal-delegation.md)
 
-## Terminal background
+## Enable semantic history search
 
-Petal uses a solid dark background by default. To use your terminal’s background, put this before the account tables in `config.toml` and restart Petal.
+Petal keeps every transcript on your machine. Agents search them by keyword with the `search` tool and by meaning with the `recall` tool. With no settings, `recall` uses the local Ollama model `all-minilm:latest`. To install the model, run `ollama pull all-minilm`. If the model or the service is unavailable, `recall` returns keyword matches.
+
+To offer keyword search only, set `provider = "off"` under `[history.embeddings]`. This setting replaces the `PETAL_HISTORY_EMBEDDINGS` environment variable. If an earlier installation left embeddings disabled, set `off` to keep keyword-only searches.
+
+To use an OpenAI-compatible embeddings API, add the following table to `config.toml`. Petal then sends search queries and scoped transcript excerpts to that API.
+
+```toml
+[history.embeddings]
+provider = "openai-compatible"
+base_url = "https://inference.example.org/v1"
+model = "my-embedding-model"
+api_key_env = "INFERENCE_TOKEN"
+```
+
+Petal appends `/embeddings` to the base URL. Set `model` to the embedding model that the endpoint serves. If the endpoint accepts anonymous requests, omit `api_key_env`.
+
+For native Ollama, set `provider = "ollama"`. The `model` defaults to `all-minilm:latest` and the `base_url` defaults to `http://127.0.0.1:11434`.
+
+Both providers support HTTPS and loopback HTTP. Petal follows no redirects. When Petal makes a request, it reads the bearer token from the named environment variable. If the token is missing, the search uses keywords. [Search scope, coverage, and limits](acp.md#local-semantic-history-search)
+
+## Use your terminal's background
+
+Petal uses a solid dark background by default. To use the background of your terminal, add this option and restart Petal.
 
 ```toml
 transparent_background = true
@@ -120,21 +168,27 @@ With Home Manager, set `programs.petal.settings.transparent_background = true;`.
 
 ## Stream replies in the terminal
 
-Petal shows completed replies by default. To preview the current reply as it arrives, put this before the account tables and restart Petal.
+Petal shows completed replies by default. To preview the current reply as it arrives, add this option and restart Petal.
 
 ```toml
 stream_responses = true
 ```
 
-The preview refreshes up to ten times per second and shows the latest 4 KiB of the current reply. The completed turn replaces the preview in the transcript. This setting applies to the TUI. Editors connected through `petal acp` already receive chunks as they arrive.
+On ACP v1, the preview refreshes up to ten times per second and shows the latest 4 KiB of the current reply. The completed turn replaces the preview in the transcript. This setting applies to the TUI. Editors connected through `petal acp` already receive chunks as they arrive.
 
 ## Queue follow-ups
 
-Put `busy_input = "follow_up"` before the account tables to queue messages until the running turn ends. The default is `"steer"`.
+By default, a message that you send during a running turn steers that turn. To queue messages until the turn ends, add this option.
+
+```toml
+busy_input = "follow_up"
+```
+
+The default value is `"steer"`.
 
 ## Install with Home Manager
 
-With the Petal flake in `inputs.petal`, add this module:
+With the Petal flake in `inputs.petal`, add this module.
 
 ```nix
 {
@@ -150,11 +204,11 @@ With the Petal flake in `inputs.petal`, add this module:
 }
 ```
 
-Home Manager merges declared settings into the writable TOML file on activation. A declared accounts or tiers list replaces that entire list in the file. Set `programs.petal.mutableSettings = false` for a store-backed file. Keep credentials in the provider's profile.
+On activation, Home Manager merges the declared settings into the writable TOML file. A declared accounts list or tiers list replaces that entire list in the file. For a store-backed file, set `programs.petal.mutableSettings = false`. Keep credentials in the provider's profile.
 
 ### Use shared Home Manager MCP servers
 
-Enable the integration to use the same stdio and HTTP servers in Petal and other Home Manager programs.
+Enable the integration to use the same stdio and HTTP servers in Petal and in other Home Manager programs.
 
 ```nix
 {
@@ -169,39 +223,17 @@ Enable the integration to use the same stdio and HTTP servers in Petal and other
 }
 ```
 
-Petal imports enabled stdio and HTTP servers. For an HTTP header, `"{env:VARIABLE}"` reads the entire value from Petal’s environment. An entry in `programs.petal.settings.mcp_servers` overrides a shared server with the same name. Home Manager reads file-backed environment variables when the adapter starts the server. With mutable settings, activation replaces the MCP server list with the declared entries while the integration is enabled.
+Petal imports the enabled stdio and HTTP servers. For an HTTP header, `"{env:VARIABLE}"` reads the entire value from Petal's environment. An entry in `programs.petal.settings.mcp_servers` overrides a shared server with the same name.
 
-### Diagnose slow ACP requests
+Home Manager reads file-backed environment variables when the adapter starts the server. With mutable settings, activation replaces the MCP server list with the declared entries while the integration is enabled.
 
-Set `PETAL_ACP_TRACE` to an absolute file path in the ACP server's environment and restart the connection. Petal appends JSON lines to the file. Its parent directory must exist. Unset the variable and restart to stop tracing.
+## Diagnose slow ACP requests
 
-Filter by `request` to follow a prompt or configuration change. Each record includes a timestamp and elapsed microseconds. Compare `adapter_response_received` with `editor_response_write` to see how long Petal held a reply. A successful write means the editor transport accepted the bytes. On ACP v2 the prompt reply acknowledges insertion. Match `adapter_session` with a later `adapter_idle` event to see when the adapter reported idle.
+Set `PETAL_ACP_TRACE` to a file path in the environment of the ACP server, then restart the connection. Use an absolute path, because an editor can start the server in any directory. Petal appends JSON lines to the file. The parent directory of the file must exist. To stop tracing, unset the variable and restart. The file grows until you disable tracing.
 
-The trace records model and effort selections, including the adapter's acknowledged value when supplied. It omits message bodies, tool arguments, and raw session IDs. The file grows until tracing is disabled.
+Each record has a timestamp. Records for a request also have the elapsed microseconds. Filter by `request` to follow a prompt or a configuration change.
 
-## History embeddings
+- Compare `adapter_response_received` with `editor_response_write` to see how long Petal held a reply. A successful write means that the editor transport accepted the bytes.
+- On ACP v2, the prompt reply acknowledges insertion. Match `adapter_session` with a later `adapter_idle` event to see when the adapter reported idle.
 
-With no settings, Petal tries the local Ollama model `all-minilm:latest` on
-calls to `recall`. To expose only keyword search, set `provider = "off"`
-under `[history.embeddings]`. This setting replaces `PETAL_HISTORY_EMBEDDINGS`.
-An installation that previously left embeddings disabled should set `off`
-to keep keyword-only searches.
-
-To send search queries and scoped transcript excerpts to a configured
-OpenAI-compatible embeddings API, add the following table to `config.toml`.
-Petal appends `/embeddings` to the base URL. Set `model` to the embedding
-model served there. Omit `api_key_env` if the endpoint accepts anonymous requests.
-
-```toml
-[history.embeddings]
-provider = "openai-compatible"
-base_url = "https://inference.example.org/v1"
-model = "my-embedding-model"
-api_key_env = "INFERENCE_TOKEN"
-```
-
-For native Ollama, set `provider = "ollama"` and supply its model name and
-server root URL. Both providers support HTTPS and loopback HTTP. Petal reads
-the bearer token from the named environment variable when making a request.
-If the token is missing, the search falls back to keywords. Petal follows
-no redirects. [Search scope, coverage and limits](acp.md#local-semantic-history-search)
+The trace records model and effort selections, including the value that the adapter acknowledged when the adapter supplies one. The trace omits message bodies, tool arguments, and raw session IDs.

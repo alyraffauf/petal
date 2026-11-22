@@ -1,68 +1,86 @@
-# Petal MCP tools
+# Orchestrate subagents
 
-Petal can expose tools to a parent agent through a Petal-managed stdio MCP server. The parent can search its conversation archive and read original messages after compaction. It can also choose a configured model, start a child in the same project directory, and read the child's activity and final result. Petal routes the model through its configured accounts, including any account pin.
+An agent can delegate a task to a subagent on another configured model. Claude can delegate to Codex, and Codex to Claude. Petal runs the subagent in the same project directory, routes it through your accounts, and returns its result to the parent.
 
-## Disable the built-in tools
+Delegation goes one level deep. A subagent cannot delegate further.
 
-To disable the tools, set the top-level option in the Petal configuration used by the ACP proxy.
+## Watch and cancel subagents
+
+Open the control center with **F2**. A delegated subagent appears under its parent as **Delegated**, with its status.
+
+- **Enter** opens the subagent as a session.
+- **Ctrl+X** cancels a running subagent. The parent keeps running.
+- **Ctrl+G** opens the agent graph.
+- A subagent with a result that its parent has not read is marked unread.
+
+Petal does not title a delegated subagent, so it shows as "untitled conversation" until you open it and send a prompt.
+
+## Disable delegation
+
+Delegation is enabled by default. To disable it, set the top-level option in your config. The option also removes the search tools, because one MCP server provides them all.
 
 ```toml
 delegation = false
 ```
 
-Delegation is enabled by default. The parent adapter must support stdio MCP servers. Petal reserves the server name `petal` while delegation is enabled. Petal sets the parent session and working directory when it binds the MCP server. The relay authenticates to a private socket with a per-session credential. Treat adapters running under your OS account as trusted processes. The tools accept neither a parent session ID nor a working directory.
+The parent adapter must support stdio MCP servers. While delegation is enabled, Petal reserves the MCP server name `petal`.
 
-## Tool calls
+## Tools
 
-| Tool       | Arguments                                                                | Response                                                                                                                                                                                                                                     |
-| ---------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search`   | `query`, optional `before`                                               | Searches by keyword in the parent and its delegated descendants. Matches appear newest first. Pass `next_before` as `before` for older matches. Quote a phrase for adjacent words. Pass a hit’s `reference` to `open` for the original text. |
-| `recall`   | `query`                                                                  | Describe what you remember. Returns one page combining semantic and keyword hits. Available when the embeddings provider is enabled.                                                                                                         |
-| `open`     | Optional `reference` , UTF-8 byte `offset`, and `context` (0–8 per side) | Opens the latest archived message by default. Pass a returned `previous` or `next` reference to browse. Pass `next_offset` with the same reference to continue long text.                                                                    |
-| `models`   | Optional `search`                                                        | Configured model IDs, labels and providers for the current account selection. The initial list shows up to 32 models. Search returns all matches.                                                                                            |
-| `delegate` | `model`, `task`                                                          | `childId` and `model` after Petal binds the child to the parent and schedules its prompt.                                                                                                                                                    |
-| `activity` | `child_id`, optional `after`                                             | A page of journal entries after the cursor.                                                                                                                                                                                                  |
-| `wait`     | `child_id`, optional `after` and `timeout`                               | The same page as `activity`. Waits for new activity, a final result, or the timeout. The timeout is in seconds, defaults to 30, and ranges from 1 to 60.                                                                                     |
+Petal gives each parent agent these tools through an MCP server that Petal manages.
 
-For a question about earlier work that asks for an exact quote or a source, search the archive for an identifier or keyword from the original task. Open the matching tool or message reference to read the original text and cite that reference. Use the child activity journal to follow a run and retrieve its completion result.
+| Tool       | Arguments                                              | Response                                                                                            |
+| ---------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `models`   | Optional `search`                                      | The configured model IDs, labels, and providers. The initial list shows up to 32 models.            |
+| `delegate` | `model`, `task`                                        | The `childId` of a new subagent. The subagent receives only `task` as its prompt.                   |
+| `activity` | `child_id`, optional `after`                           | Up to 100 entries from the activity journal of the subagent, and its final result.                  |
+| `wait`     | `child_id`, optional `after` and `timeout`             | The same page as `activity`, after new activity or a timeout of 1 to 60 seconds. The default is 30. |
+| `search`   | `query`, optional `before`                             | Keyword matches from the saved messages of the parent and its subagents, newest first.              |
+| `recall`   | `query`                                                | One page of semantic and keyword matches. Available when an embeddings provider is enabled.         |
+| `open`     | Optional `reference`, `offset`, and `context` (0 to 8) | An archived message and up to 8 neighbors on each side, within 4096 bytes.                          |
 
-With positive `context`, the reader returns available neighbors from the anchor’s thread in chronological `before` and `after` arrays. Empty arrays are omitted. The anchor and neighbors share 4096 UTF-8 bytes of message text. A page with `next_offset` contains only anchor text. On the final page, preceding neighbors use the remaining budget first, nearest first, followed by subsequent neighbors. A neighbor marked `truncated` contains the prefix that fit. Open its `reference` to read it in full. The anchor’s navigation references work with any context size.
+`delegate` starts a new subagent on each successful call. If the response is lost, a retry can start a second subagent.
 
-Look up a model before delegating. Send its exact ID and a self-contained brief. The child shares the project directory and receives only the task as its prompt. Keep the returned `childId` and follow the `next` instruction in delegate, read and wait responses.
+A subagent has a `status` of `running` or `needs_input` while it works. Its final result has a `status` of `completed`, `cancelled`, or `failed`. The final assistant text is in `result.data.answer`.
 
-When the parent finishes its turn, Petal sends a follow-up prompt as soon as a child result is ready. The prompt identifies the child and asks the parent to read its result. If a read or wait already returned the final result, Petal skips the wake-up. This runs on the live parent connection. After disconnecting, the control center marks unread results on the corresponding child threads. Reopen the parent and use `activity` or `wait` to retrieve a result. Petal clears the unread marker after the MCP relay delivers the terminal reply to the owning parent. Cancelling the parent clears pending wake-ups. Stored results remain available on retry.
+## How a result reaches the parent
 
-In ACP v1, Petal keeps the editor's original prompt open while tracked child results are pending. Petal sends continuation prompts as results become ready and streams their output within the original editor turn. This happens only after an adapter reply with stop reason `end_turn`. Petal returns other stop reasons immediately. In ACP v2, the editor receives a prompt insertion acknowledgment and Petal schedules the follow-up after the adapter reports idle.
+When the parent ends its turn and a subagent result is ready, Petal sends the parent a follow-up prompt. The prompt names the subagent and tells the parent to continue its task. If a read or a wait already returned the final result, Petal skips the follow-up prompt.
 
-Start with `after: 0`. Read responses contain up to 100 entries in ascending `sequence` order. Each entry has a `kind` and may include JSON `data`. Pass `nextAfter` as the next cursor. When `hasMore` is true, call `activity` to drain the remaining entries, even if the response already contains a final result. An empty page keeps the cursor unchanged.
+The follow-up prompt needs the live parent connection. If the parent has disconnected, reopen it and call `activity` to retrieve the result. Cancelling the parent clears the pending follow-up prompts. Stored results remain available.
 
-While the child runs, `status` is `running` or `needs_input`. A permission request wakes a waiting parent. Petal collects assistant text before publishing it to the journal.
+Petal sends a follow-up prompt only after a turn that ends with the stop reason `end_turn`.
 
-The `result` field is null until the runtime records a final result. A final result has a `status` of `completed`, `cancelled`, or `failed` and may have JSON `data` with the stop reason and final assistant text in `result.data.answer`, or with failure details. A wait timeout returns an empty page with a null result while the child is still running. Calling `wait` again with the same cursor continues waiting.
+- **ACP v1.** Petal keeps the editor's original prompt open and streams the follow-up output within the original turn.
+- **ACP v2.** Petal schedules the follow-up prompt after the adapter reports idle.
 
-`delegate` starts a new run on each successful call. If the response is lost, retrying the call may start another child. Repeating a read or wait with the same cursor can return previously seen activity. Use the sequence within each child to deduplicate entries.
+## Find earlier work
 
-## Ownership and recovery
+The archive holds the original text of every message and tool result, including those of subagents. An agent uses it to answer a question that needs an exact quote or a source.
 
-Petal checks the direct parent-child binding for every journal read. A different parent receives the same error as it would for an unknown child. The parent can access only its own direct children in the project.
+1. Call `search` with an identifier or a keyword from the original task. Call `recall` when you remember the idea but not the wording.
+2. Pass the `reference` of a hit to `open` to read the original text.
+3. Cite that reference.
 
-A child starts with an empty session MCP server list, including when Petal or the editor configured servers for the parent. Tools configured directly in the child adapter can still be available. Petal accepts the child's session updates for its journal and forwards supported permission requests through the parent session. Child filesystem and terminal callbacks to the editor are unsupported. A resumed child does not receive the built-in Petal MCP server. Cancelling the parent cancels its running children. Cancelling an individual wait stops the wait.
+`recall` needs an embeddings provider. [Enable semantic history search](configuration.md#enable-semantic-history-search)
 
-Petal stores bindings, ordered activity, and final results in the project's local session database. A parent can read committed activity and results after reconnecting to the same stored session. Child execution depends on the live runtime. After an abrupt process exit, the next journal read detects the released process lock and records a failed result.
+## What a subagent can do
 
-Control Center shows saved delegation links in the thread tree and agent graph. Forgetting either endpoint removes its binding and journal from the local database.
+- A subagent starts with no session MCP servers, even when the parent has some. Tools configured directly in its adapter can still be available.
+- Petal forwards supported permission requests from the subagent through the parent session.
+- Petal does not support filesystem and terminal callbacks from the subagent to the editor.
+- Cancelling the parent cancels its running subagents.
 
-## Live cross-family receipt check
+## Ownership and security
 
-Run one direction at a time from a checkout on Linux. The argument selects the parent. Each run uses both local subscriptions and can consume quota.
+Petal sets the parent session and the working directory when it binds the MCP server. The tools accept neither a session ID nor a working directory. The relay authenticates to a private socket with a per-session credential. Treat adapters that run under your OS account as trusted processes.
 
-```sh
-scripts/check-receipt claude
-scripts/check-receipt codex
-```
+A parent can read only its own direct subagents in the project. A different parent receives the same error as it would for an unknown subagent.
 
-Install Go, Python 3.11 or later, and the stock Claude and Codex ACP adapters. If the adapter executables are outside PATH, set `CLAUDE_ACP` and `CODEX_ACP` to their absolute paths. The runner copies `~/.claude/.credentials.json` and `~/.codex/auth.json` into disposable account homes. It builds the current checkout, limits the live phase to four minutes and removes the temporary directory on exit.
+## Storage and recovery
 
-Only the child receives the authenticated receipt tool. Its final answer should acknowledge completion without quoting the receipt. The journal may persist the receipt. The check fails if the terminal result exposes it or the parent receives it before archive retrieval. The runner asks the parent to delegate, compacts the parent, restarts Petal, then asks for the child's original receipt and archive reference. It checks the answer against the fixture and correlates archived child text with actual search and read responses. A separate prompt probes a known reference in an unrelated session seeded in the same project database.
+Petal stores the parent-child links, the ordered activity, and the final results in the project's local session database. A parent can read them after it reconnects to the same stored session.
 
-The final JSON reports individual observations. A missing completed compaction, receipt visible in the captured parent context or replay, missing retrieval evidence, or inconclusive decoy denial fails the check. Codex ACP v1 uses the parent account's native compacted record as evidence. The check can observe local adapter records and protocol traffic. It cannot inspect provider-side model state.
+A subagent runs only while its Petal process lives. After an abrupt process exit, the next journal read records a failed result. Forgetting either the parent or the subagent removes the link and the journal.
+
+To check delegation against live accounts, see [Test and verify Petal](testing.md#check-delegation-against-live-accounts).
