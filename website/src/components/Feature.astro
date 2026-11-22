@@ -1,0 +1,15 @@
+---
+// The title links to the guide for that feature. The body can hold its own links.
+const { title, href } = Astro.props;
+---
+
+<section class="space-y-3">
+    <h2 class="font-mono text-xl">
+        <a class="text-text hover:text-rose" href={href}>
+            {title} <span class="text-rose">→</span>
+        </a>
+    </h2>
+    <p class="text-base text-soft">
+        <slot />
+    </p>
+</section>

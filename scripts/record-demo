@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Record the README and website demo from a scripted Petal session.
+# Writes workbench.gif, workbench.png, control-center.png, and commands.png
+# to docs/screenshots. Uses no provider accounts or quota.
+set -eu
+cd "$(dirname "$0")/.."
+for tool in go tmux uv nix; do
+  command -v "$tool" >/dev/null || { echo "record-demo needs $tool on PATH." >&2; exit 2; }
+done
+DEMO_ROOT=$(mktemp -d)
+trap 'rm -rf -- "$DEMO_ROOT"' EXIT
+CGO_ENABLED=0 go build -o "$DEMO_ROOT/petal" .
+python3 -B scripts/demo/record.py "$DEMO_ROOT/petal" "$DEMO_ROOT/frames.json"
+DEMO_FONTS=$(nix build --no-link --print-out-paths --inputs-from . \
+  nixpkgs#nerd-fonts.caskaydia-cove nixpkgs#adwaita-fonts | paste -sd:)
+export DEMO_FONTS
+uv run --quiet --with pyte --with pillow --with fonttools \
+  python3 -B scripts/demo/render.py "$DEMO_ROOT/frames.json" docs/screenshots

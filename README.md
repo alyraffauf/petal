@@ -1,22 +1,23 @@
 <div align="center">
-	<img src="docs/petal.svg" width="128" height="128" alt="Petal's pixel orchid">
-	<h1>Petal</h1>
+    <img src="docs/petal.svg" width="128" height="128" alt="Petal's pixel orchid">
+    <h1>Petal</h1>
 </div>
 
-Petal is a meta-harness that implements both the client and server sides of the Agent Client Protocol. Petal provides a beautiful TUI client, a proxied agent server accessible from your editor or other Agent Development Environment, and a load balancer which maximizes usage across multiple Claude or Codex subscriptions.
+Petal is a unified workbench for agents. It runs Claude Code and Codex in one terminal, with multi-agent orchestration, semantic search, and load balancing across the subscriptions you already pay for.
 
-Pick a model and Petal [chooses an account](docs/configuration.md#how-quota-windows-affect-routing) based on remaining quota and subscription size. You can also pick the account yourself. Resuming a conversation keeps it on the same account.
+- **Orchestrate.** Claude can delegate a task to Codex, and Codex to Claude. Petal runs each [cross-vendor subagent](docs/petal-delegation.md) in the same directory and returns its result to the parent.
+- **Remember.** Agents get [semantic search](docs/configuration.md#enable-semantic-history-search) over every transcript. Petal keeps them on your machine, so compaction never erases the original.
+- **Route.** Petal [load balances](docs/configuration.md#route-across-subscriptions) across your work and personal subscriptions. Each new session starts on the account with the most quota left.
+- **Integrate.** Run `petal acp` to add the same orchestration, memory, and routing to [any editor](docs/editors.md) that speaks the [Agent Client Protocol](https://agentclientprotocol.com/).
 
-![A delegated thread finishes in the control center. Its row lights up and shows an unread result while its sibling keeps running.](docs/screenshots/result-arrival.gif)
+![A Petal session. Petal picks the work account for Claude. Claude delegates a test run to Codex, which runs as a child in the control center and then completes. Claude reports the bug, then searches the saved transcript and quotes the original failing test output.](docs/screenshots/workbench.gif)
 
-Petal is not a harness. Models run in their native, first-party harnesses and are controlled via standard, supported APIs, so there's no ToS violation for using it.
-
-Run `petal` for the terminal UI or `petal acp` to use the same load balancer from Zed or any other Agent Client Protocol (ACP) client.
+Petal does not replace the Claude Code or Codex CLI. Each model runs in its vendor's CLI, and Petal controls that CLI through standard, supported APIs. Using Petal does not violate the vendor's terms of service.
 
 ## Start a session
 
 1. Install the Claude Code or Codex CLI. Sign in with `claude` or `codex login`.
-2. From the Petal checkout, run `nix profile install .#petal`. The package includes both ACP adapters.
+2. Run `nix profile add github:alyraffauf/petal`. From a checkout, run `nix profile add .` instead. The package includes both ACP adapters.
 3. Run `petal` in your project directory. Select **new session**, choose a model, and send a prompt.
 
 Petal discovers the default profiles. If you have separate work and personal logins, [configure your subscriptions](docs/configuration.md#route-across-subscriptions).
@@ -25,12 +26,13 @@ To build without Nix, run `go build -o petal .` with Go 1.27.3 or later. Install
 
 ## Use Petal
 
-![An agent replies with a syntax-highlighted Go function in the Petal chat transcript.](docs/screenshots/go-syntax-chat.gif)
+- [Use the terminal UI](docs/terminal.md)
+- [Connect an editor](docs/editors.md)
+- [Orchestrate subagents](docs/petal-delegation.md)
+- [Configure accounts, MCP servers, and semantic search](docs/configuration.md)
+- [ACP support](docs/acp.md)
+- [Test and verify Petal](docs/testing.md)
 
-- [Navigate conversations, search transcripts, and send images](docs/terminal.md)
-- [Connect Zed or another ACP client](docs/editors.md)
-- [Run a custom ACP server, including OpenCode](docs/configuration.md#run-a-custom-acp-server)
-- [Configure Petal with Home Manager](docs/configuration.md#install-with-home-manager)
-- [Check ACP capabilities and test coverage](docs/acp.md)
+## License
 
-[MIT license](LICENSE)
+Petal is released under the [MIT license](LICENSE.md).

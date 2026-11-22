@@ -1,0 +1,88 @@
+---
+import Layout from "../../layouts/Layout.astro";
+
+const files = import.meta.glob(["../../../../README.md", "../../../../docs/*.md"]);
+
+// Each guide is a Markdown file in the repository. The start page is the
+// README's setup section, so the steps are written once.
+export function getStaticPaths() {
+    const guides = [
+        {
+            slug: "start",
+            label: "Start",
+            file: "README.md",
+            description: "Install Petal and start your first Claude Code or Codex session.",
+        },
+        {
+            slug: "terminal",
+            label: "Terminal",
+            file: "docs/terminal.md",
+            description:
+                "Start conversations, search transcripts, send images, and follow subagents in the Petal terminal UI.",
+        },
+        {
+            slug: "editors",
+            label: "Editors",
+            file: "docs/editors.md",
+            description: "Connect Zed or any Agent Client Protocol client to Petal with petal acp.",
+        },
+        {
+            slug: "configuration",
+            label: "Configuration",
+            file: "docs/configuration.md",
+            description:
+                "Configure accounts, load balancing, MCP servers, semantic search, and Home Manager for Petal.",
+        },
+        {
+            slug: "petal-delegation",
+            label: "Orchestration",
+            file: "docs/petal-delegation.md",
+            description:
+                "How Petal orchestrates subagents across Claude Code and Codex, and the tools agents use to delegate.",
+        },
+        {
+            slug: "acp",
+            label: "ACP",
+            file: "docs/acp.md",
+            description:
+                "Petal's Agent Client Protocol support, session storage, and semantic history search.",
+        },
+        {
+            slug: "testing",
+            label: "Testing",
+            file: "docs/testing.md",
+            description: "Run Petal's tests, conformance checks, benchmarks, and formatter.",
+        },
+    ];
+
+    return guides.map((guide) => ({ params: { slug: guide.slug }, props: { guide, guides } }));
+}
+
+const { guide, guides } = Astro.props;
+let html = await (await files["../../../../" + guide.file]()).compiledContent();
+if (guide.slug === "start") {
+    html =
+        "<h1>Start a session</h1>" +
+        html.split(/<h2 id="start-a-session">.*?<\/h2>/)[1].split("<h2")[0];
+}
+// Links between Markdown files become links between pages.
+html = html.replace(/href="(?:docs\/)?([\w-]+)\.md/g, 'href="../$1/');
+---
+
+<Layout title={guide.label + " · Petal"} description={guide.description} crumb={guide.label}>
+    <nav
+        class="flex flex-wrap gap-x-6 gap-y-1 border-y border-line py-3 font-mono text-sm text-dim"
+        aria-label="Documentation"
+    >
+        {guides.map(({ slug, label }) => (
+            <a
+                class="hover:underline aria-[current]:text-rose"
+                href={"../" + slug + "/"}
+                aria-current={slug === guide.slug ? "page" : undefined}
+            >
+                {label}
+            </a>
+        ))}
+    </nav>
+    <article class="prose pt-10" set:html={html} />
+</Layout>

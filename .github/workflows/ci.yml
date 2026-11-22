@@ -1,33 +1,33 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+    push:
+        branches: [main]
+    pull_request:
 
 permissions:
-  contents: read
+    contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      # buildGoModule runs the Go test suite during checkPhase.
-      - name: Build Petal and run Go tests
-        run: nix build --print-build-logs --no-link .#petal
-      - name: Test receipt grading and process cleanup
-        run: python3 -B -m unittest discover -s scripts/receipt
-      - name: Exercise property tests
-        id: properties
-        run: nix shell --inputs-from . nixpkgs#go -c scripts/check-properties
-        env:
-          FUZZ_TIME: 3s
-      - name: Save inputs for local replay
-        if: failure() && steps.properties.outcome == 'failure'
-        uses: actions/upload-artifact@v7
-        with:
-          name: fuzz-inputs
-          path: '**/testdata/fuzz/**'
-          if-no-files-found: ignore
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v7
+            - uses: DeterminateSystems/determinate-nix-action@v3
+            # buildGoModule runs the Go test suite during checkPhase.
+            - name: Build Petal and run Go tests
+              run: nix build --print-build-logs --no-link .#petal
+            - name: Test receipt grading and process cleanup
+              run: python3 -B -m unittest discover -s scripts/receipt
+            - name: Exercise property tests
+              id: properties
+              run: nix shell --inputs-from . nixpkgs#go -c scripts/check-properties
+              env:
+                  FUZZ_TIME: 3s
+            - name: Save inputs for local replay
+              if: failure() && steps.properties.outcome == 'failure'
+              uses: actions/upload-artifact@v7
+              with:
+                  name: fuzz-inputs
+                  path: "**/testdata/fuzz/**"
+                  if-no-files-found: ignore

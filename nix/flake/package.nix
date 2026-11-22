@@ -1,6 +1,9 @@
 {
-  perSystem = { pkgs, config, ... }:
-  let
+  perSystem = {
+    pkgs,
+    config,
+    ...
+  }: let
     claudeAdapter = pkgs.claude-agent-acp.overrideAttrs (old: {
       # Use the CLI discovered at runtime. Version 0.100.0 predates the
       # replay_complete boundary in the ACP v2 draft.
@@ -21,9 +24,11 @@
           ../../internal/tui/testdata
           ../../internal/tui/orchid.png
           ../../internal/sessions/migrations
-          (pkgs.lib.fileset.fileFilter (file:
-            file.hasExt "go" || builtins.elem file.name [ "go.mod" "go.sum" "LICENSE" ]
-          ) ../..)
+          (pkgs.lib.fileset.fileFilter (
+              file:
+                file.hasExt "go" || builtins.elem file.name ["go.mod" "go.sum" "LICENSE.md"]
+            )
+            ../..)
         ];
       };
       vendorHash = "sha256-lJ8+MVvmAgh8iuOA5LnXPXytCXbWJl1xvNVpFxWoTYM=";
@@ -34,7 +39,7 @@
       ];
       env.CGO_ENABLED = "0";
       postInstall = ''
-        install -Dm444 LICENSE "$out/share/licenses/petal/LICENSE"
+        install -Dm444 LICENSE.md "$out/share/licenses/petal/LICENSE.md"
       '';
       meta.license = pkgs.lib.licenses.mit;
       meta.mainProgram = "petal";
