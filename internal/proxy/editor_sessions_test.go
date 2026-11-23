@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,7 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(moved) })
 	cwd = moved
 	reopen := launch()
+	other := map[string]string{"claude/default": "codex/default", "codex/default": "claude/default"}
 	for model, account := range map[string]string{"claude/default": "a", "codex/default": "b"} {
 		result := reopen("session/resume", Object{"cwd": encoded(cwd), "sessionId": ids[model], "mcpServers": json.RawMessage("[]")})
 		if stringField(result, "account") != account {
@@ -102,15 +104,32 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 		if err := json.Unmarshal(result["configOptions"], &opts); err != nil || len(opts) != 1 || opts[0].ID != "model" || opts[0].CurrentValue != model || len(opts[0].Options) != 3 {
 			t.Fatalf("resumed %s offered %s, want Petal's routes", model, result["configOptions"])
 		}
-		other := map[string]string{"claude/default": "codex/default", "codex/default": "claude/default"}[model]
 		// Petal has saved nothing of this conversation, so a switch would lose it.
-		if _, err := acp.SendRequest[Object](client, ctx, "session/set_config_option", Object{"sessionId": ids[model], "configId": encoded("model"), "value": encoded(other)}); err == nil {
+		if _, err := acp.SendRequest[Object](client, ctx, "session/set_config_option", Object{"sessionId": ids[model], "configId": encoded("model"), "value": encoded(other[model])}); err == nil {
 			t.Fatalf("switched %s with no saved history", model)
 		}
+	}
+	// The fixture gives every session the same native ID, so prompts start only
+	// after each conversation has been checked without history.
+	for _, model := range []string{"claude/default", "codex/default"} {
+		var opts []struct{ CurrentValue string }
 		reopen("session/prompt", Object{"sessionId": ids[model], "prompt": json.RawMessage(`[{"type":"text","text":"hello"}]`)})
-		switched := reopen("session/set_config_option", Object{"sessionId": ids[model], "configId": encoded("model"), "value": encoded(other)})
-		if err := json.Unmarshal(switched["configOptions"], &opts); err != nil || len(opts) == 0 || opts[0].CurrentValue != other {
-			t.Fatalf("switching %s to %s offered %s", model, other, switched["configOptions"])
+		switched := reopen("session/set_config_option", Object{"sessionId": ids[model], "configId": encoded("model"), "value": encoded(other[model])})
+		if err := json.Unmarshal(switched["configOptions"], &opts); err != nil || len(opts) == 0 || opts[0].CurrentValue != other[model] {
+			t.Fatalf("switching %s to %s offered %s", model, other[model], switched["configOptions"])
+		}
+		// The pending handoff survives a close and resume or a restart.
+		path, err := editorBindingPath(projectKey(cwd), stringField(Object{"sessionId": ids[model]}, "sessionId"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, err := os.ReadFile(path)
+		if _, handoff, _ := strings.Cut(string(binding), "\n"); err != nil || decodeRouteID(handoff, 3) == nil {
+			t.Fatalf("binding after the switch = %q, %v; want the pending handoff on its second line", binding, err)
+		}
+		reopen("session/prompt", Object{"sessionId": ids[model], "prompt": json.RawMessage(`[{"type":"text","text":"continue"}]`)})
+		if binding, err = os.ReadFile(path); err != nil || strings.Contains(string(binding), "\n") {
+			t.Fatalf("binding after the prompt = %q, %v; want the handoff consumed", binding, err)
 		}
 	}
 }

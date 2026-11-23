@@ -38,7 +38,7 @@ The model option of every editor session lists all of Petal's models, with the c
 
 Petal opens a session on the new model and closes the old one. The next prompt carries the conversation so far: the latest compaction summary, if the old model compacted, and every saved message after it. Tool calls are carried as their one-line summaries, not their full output. Later switches carry that context forward, because the first prompt on each model includes it.
 
-A switch that has not been followed by a prompt is lost if Petal exits before the next prompt.
+Petal saves the pending context with the session, so it still reaches the next prompt after you close and resume the conversation or restart Petal.
 
 ## Capability negotiation
 

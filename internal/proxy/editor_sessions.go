@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -45,6 +46,14 @@ type editorSession struct {
 	handoff string
 }
 
+// saveBinding persists a change to the pending handoff, so a close and resume
+// or a restart before the next prompt keeps it. The caller holds s.mu.
+func (s *editorSession) saveBinding(id string) {
+	if err := saveEditorBinding(s.cwd, id, s.routedID, s.handoff); err != nil {
+		slog.Error("save editor session binding", "error", err)
+	}
+}
+
 // openRequest keeps the fields of session/new from a session/new, load, or
 // resume request.
 func openRequest(params Object) Object {
@@ -80,7 +89,12 @@ func editorBindingPath(key, id string) (string, error) {
 	return paths.XDG("STATE", fmt.Sprintf("editor-sessions/%x", sha256.Sum256([]byte(key+"\x00"+id))))
 }
 
-func saveEditorBinding(cwd, id, routed string) error {
+// saveEditorBinding records the route an editor session runs on and, on a
+// second line, the routed session whose context its next prompt carries.
+func saveEditorBinding(cwd, id, routed, handoff string) error {
+	if handoff != "" {
+		routed += "\n" + handoff
+	}
 	path, err := editorBindingPath(cwd, id)
 	if err != nil {
 		return err
@@ -222,7 +236,7 @@ func (p *proxy) bindEditorSession(ctx context.Context, s *editorSession, id, mod
 		return nil, fmt.Errorf("invalid session/new response")
 	}
 	routed := stringField(opened, "sessionId")
-	if err = saveEditorBinding(s.cwd, id, routed); err != nil {
+	if err = saveEditorBinding(s.cwd, id, routed, s.handoff); err != nil {
 		return nil, err
 	}
 	s.route, s.routedID = route, routed
@@ -308,7 +322,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			if pathErr == nil {
 				routed, err = os.ReadFile(legacy)
 				if err == nil {
-					if err = saveEditorBinding(projectKey(cwd), id, string(routed)); err == nil {
+					if err = saveEditorBinding(projectKey(cwd), id, string(routed), ""); err == nil {
 						_ = os.Remove(legacy)
 					}
 				}
@@ -325,7 +339,8 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		if err != nil {
 			return nil, err
 		}
-		parts := decodeRouteID(string(routed), 3)
+		bound, handoff, _ := strings.Cut(string(routed), "\n")
+		parts := decodeRouteID(bound, 3)
 		if parts == nil {
 			return nil, unknownSession(id)
 		}
@@ -333,7 +348,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		if err != nil {
 			return nil, err
 		}
-		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: projectKey(stringField(params, "cwd")), routedID: string(routed), request: openRequest(params)})
+		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: projectKey(stringField(params, "cwd")), routedID: bound, handoff: handoff, request: openRequest(params)})
 		found = true
 	}
 	if !found {
@@ -425,6 +440,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			// Keep the oldest unsent handoff when the model changes twice.
 			if s.setup == nil && s.handoff == "" {
 				s.handoff = oldID
+				s.saveBinding(id)
 			}
 			oldRoute.aliases.Delete(oldID)
 			closeParams, _ := json.Marshal(Object{"sessionId": encoded(oldID)})
@@ -457,6 +473,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			// route, which records the prompt, rather than the one before it.
 			params["prompt"], handoff = prompt, s.handoff
 			s.handoff = ""
+			s.saveBinding(id)
 		}
 	}
 	if method == "session/set_config_option" && stringField(params, "configId") == "effort" {
@@ -484,6 +501,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		s.mu.Lock()
 		if s.route == route && s.routedID == routed && s.handoff == "" {
 			s.handoff = handoff
+			s.saveBinding(id)
 		}
 		s.mu.Unlock()
 	}
