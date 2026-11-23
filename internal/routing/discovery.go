@@ -248,7 +248,9 @@ func (c Config) resolvedDefault(model string) string {
 		if c.PinnedAccount != "" && name != c.PinnedAccount || len(a.Models[model]) == 0 {
 			continue
 		}
-		if a.DefaultRoute == "" || route != "" && route != a.DefaultRoute {
+		// DefaultRoute describes only the provider's own default alias, not a
+		// custom route that also ends in "/default".
+		if model != a.Provider+"/default" || a.DefaultRoute == "" || route != "" && route != a.DefaultRoute {
 			return ""
 		}
 		route = a.DefaultRoute

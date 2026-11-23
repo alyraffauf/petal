@@ -56,3 +56,16 @@ func TestResolvedDefaultIsListedAsItsRealModel(t *testing.T) {
 		t.Error("unresolved claude/default was hidden, leaving no way to pick the provider default")
 	}
 }
+
+func TestResolvedDefaultLeavesCustomDefaultRoutesAlone(t *testing.T) {
+	a := claudeAccount()
+	a.DefaultRoute = "opus"
+	a.Models["review/default"] = []string{"review-agent"}
+	c := Config{Accounts: map[string]Account{"claude": a}}
+	if !slices.Contains(c.PickerModels(), "review/default") {
+		t.Errorf("PickerModels() = %v; the custom review/default route was hidden", c.PickerModels())
+	}
+	if got := c.PickerModel("review/default"); got != "review/default" {
+		t.Errorf("PickerModel(review/default) = %q, want it unchanged", got)
+	}
+}
