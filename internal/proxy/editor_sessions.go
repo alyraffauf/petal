@@ -52,7 +52,7 @@ type editorSession struct {
 // saveBinding persists a change to the pending handoff, so a close and resume
 // or a restart before the next prompt keeps it. The caller holds s.mu.
 func (s *editorSession) saveBinding(id string) {
-	if err := saveEditorBinding(s.cwd, id, s.routedID, s.handoff); err != nil {
+	if err := saveEditorBinding(s.cwd, id, s.routedID, s.handoff, s.fork); err != nil {
 		slog.Error("save editor session binding", "error", err)
 	}
 }
@@ -92,11 +92,15 @@ func editorBindingPath(key, id string) (string, error) {
 	return paths.XDG("STATE", fmt.Sprintf("editor-sessions/%x", sha256.Sum256([]byte(key+"\x00"+id))))
 }
 
-// saveEditorBinding records the route an editor session runs on and, on a
-// second line, the routed session whose context its next prompt carries.
-func saveEditorBinding(cwd, id, routed, handoff string) error {
-	if handoff != "" {
+// saveEditorBinding records the route an editor session runs on. A second
+// line holds the routed session whose context its next prompt carries, and a
+// third line marks a fork.
+func saveEditorBinding(cwd, id, routed, handoff string, fork bool) error {
+	if handoff != "" || fork {
 		routed += "\n" + handoff
+	}
+	if fork {
+		routed += "\nfork"
 	}
 	path, err := editorBindingPath(cwd, id)
 	if err != nil {
@@ -239,7 +243,7 @@ func (p *proxy) bindEditorSession(ctx context.Context, s *editorSession, id, mod
 		return nil, fmt.Errorf("invalid session/new response")
 	}
 	routed := stringField(opened, "sessionId")
-	if err = saveEditorBinding(s.cwd, id, routed, s.handoff); err != nil {
+	if err = saveEditorBinding(s.cwd, id, routed, s.handoff, s.fork); err != nil {
 		return nil, err
 	}
 	s.route, s.routedID = route, routed
@@ -325,7 +329,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			if pathErr == nil {
 				routed, err = os.ReadFile(legacy)
 				if err == nil {
-					if err = saveEditorBinding(projectKey(cwd), id, string(routed), ""); err == nil {
+					if err = saveEditorBinding(projectKey(cwd), id, string(routed), "", false); err == nil {
 						_ = os.Remove(legacy)
 					}
 				}
@@ -342,7 +346,11 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		if err != nil {
 			return nil, err
 		}
-		bound, handoff, _ := strings.Cut(string(routed), "\n")
+		lines := strings.SplitN(string(routed), "\n", 3)
+		bound, handoff, fork := lines[0], "", len(lines) == 3 && lines[2] == "fork"
+		if len(lines) > 1 {
+			handoff = lines[1]
+		}
 		parts := decodeRouteID(bound, 3)
 		if parts == nil {
 			return nil, unknownSession(id)
@@ -351,7 +359,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		if err != nil {
 			return nil, err
 		}
-		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: projectKey(stringField(params, "cwd")), routedID: bound, handoff: handoff, request: openRequest(params)})
+		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: projectKey(stringField(params, "cwd")), routedID: bound, handoff: handoff, fork: fork, request: openRequest(params)})
 		found = true
 	}
 	if !found {
@@ -546,6 +554,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 				fs := &editorSession{route: route, routedID: forked, fork: true, options: opened["configOptions"], request: openRequest(params), cwd: projectKey(stringField(params, "cwd"))}
 				route.aliases.Store(forked, forked)
 				e.sessions.Store(forked, fs)
+				fs.saveBinding(forked)
 				if opened["configOptions"] != nil {
 					opened["configOptions"] = p.sessionModelOptions(fs)["configOptions"]
 				}

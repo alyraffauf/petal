@@ -249,3 +249,20 @@ func TestForkedSessionRefusesModelSwitch(t *testing.T) {
 		t.Fatalf("switching a fork returned %v; want it refused", err)
 	}
 }
+
+func TestForkMarkerSurvivesResume(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	id := `["a","m","fork"]`
+	(&editorSession{cwd: projectKey(cwd), routedID: id, fork: true}).saveBinding(id)
+
+	p := &proxy{editorSessions: &editorSessions{}, Config: routing.Config{Accounts: map[string]routing.Account{"a": {Models: map[string][]string{"m": {"adapter"}}}}}}
+	p.initialized = true
+	p.Model = "m"
+	params, _ := json.Marshal(Object{"sessionId": encoded(id), "cwd": encoded(cwd), "mcpServers": json.RawMessage("[]")})
+	_, _ = p.handleEditor(t.Context(), "session/resume", params) // No adapter runs here; the binding is read first.
+	value, ok := p.editorSessions.sessions.Load(id)
+	if !ok || !value.(*editorSession).fork {
+		t.Fatal("a resumed fork lost its fork marker, so it could switch models and drop the conversation before the fork")
+	}
+}
