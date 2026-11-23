@@ -28,7 +28,7 @@ func TestHandoffCarriesContextSinceLastCompaction(t *testing.T) {
 	}, false); err != nil {
 		t.Fatal(err)
 	}
-	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[{"type":"text","text":"now fix it"}]`))
+	prompt, err := handoffPrompt(cwd, nil, id, json.RawMessage(`[{"type":"text","text":"now fix it"}]`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestHandoffCarriesContextSinceLastCompaction(t *testing.T) {
 func TestHandoffWithoutHistoryLeavesPromptAlone(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	prompt := json.RawMessage(`[{"type":"text","text":"hello"}]`)
-	got, err := handoffPrompt(t.TempDir(), `["claude","opus","none"]`, prompt)
+	got, err := handoffPrompt(t.TempDir(), nil, `["claude","opus","none"]`, prompt)
 	if err != nil || string(got) != string(prompt) {
 		t.Fatalf("got %s, %v", got, err)
 	}
@@ -77,7 +77,7 @@ func TestClosingSessionKeepsUnsavedV2Turn(t *testing.T) {
 	if err := finish(nil); err != nil {
 		t.Fatal(err)
 	}
-	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[]`))
+	prompt, err := handoffPrompt(cwd, nil, id, json.RawMessage(`[]`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestHandoffKeepsLeadingSkillInvocable(t *testing.T) {
 	if err := sessions.SaveTranscript(cwd, id, []sessions.Message{{Role: "assistant", Body: "the codename is BLUE-HERON"}}, false); err != nil {
 		t.Fatal(err)
 	}
-	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[{"type":"text","text":"$bro"}]`))
+	prompt, err := handoffPrompt(cwd, nil, id, json.RawMessage(`[{"type":"text","text":"$bro"}]`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestCompactionDuringTurnKeepsArchiveOrder(t *testing.T) {
 	r.observe(id, 2, message("m2", "answer after compaction"))
 	r.flush()
 
-	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[]`))
+	prompt, err := handoffPrompt(cwd, nil, id, json.RawMessage(`[]`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestLateCompactionChunksKeepWholeSummary(t *testing.T) {
 	for _, chunk := range []string{"first half ", "second half"} {
 		r.observe(id, 1, Object{"sessionUpdate": encoded("compaction_summary_chunk"), "compactionId": encoded("c1"), "content": json.RawMessage(`{"type":"text","text":` + string(encoded(chunk)) + `}`)})
 	}
-	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[]`))
+	prompt, err := handoffPrompt(cwd, nil, id, json.RawMessage(`[]`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,11 +181,45 @@ func TestStreamedCompactionSummaryStaysWhole(t *testing.T) {
 	update(`{"sessionUpdate":"compaction_summary_chunk","compactionId":"c1","content":{"type":"text","text":"first half "}}`)
 	update(`{"sessionUpdate":"compaction_summary_chunk","compactionId":"c1","content":{"type":"text","text":"second half"}}`)
 	update(`{"sessionUpdate":"compaction_update","compactionId":"c1","status":"completed"}`)
-	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[]`))
+	prompt, err := handoffPrompt(cwd, nil, id, json.RawMessage(`[]`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(prompt), "first half second half") {
 		t.Fatalf("handoff = %s; want the whole streamed summary", prompt)
+	}
+}
+
+func TestForkHandoffCarriesParentHistoryUpToTheFork(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	parent, fork := `["claude","opus","parent"]`, `["claude","opus","fork"]`
+	save := func(id string, messages ...sessions.Message) {
+		t.Helper()
+		if _, err := sessions.Create(cwd, sessions.Record{ID: id, Model: "opus"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := sessions.SaveTranscript(cwd, id, messages, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save(parent, sessions.Message{Role: "user", Body: "the codename is BLUE-HERON"}, sessions.Message{Role: "assistant", Body: "noted"})
+	head, err := sessions.TranscriptHead(t.Context(), cwd, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	save(parent, sessions.Message{Role: "user", Body: "parent turn after the fork"})
+	save(fork, sessions.Message{Role: "user", Body: "fork turn"})
+
+	prompt, err := handoffPrompt(cwd, []historySegment{{ID: parent, Head: head}}, fork, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried := string(prompt)
+	if !strings.Contains(carried, "BLUE-HERON") || !strings.Contains(carried, "fork turn") || strings.Contains(carried, "parent turn after the fork") {
+		t.Fatalf("handoff = %s; want the parent's history before the fork and the fork's own turns", carried)
+	}
+	if strings.Index(carried, "BLUE-HERON") > strings.Index(carried, "fork turn") {
+		t.Fatalf("handoff puts the fork's turns before the parent's history: %s", carried)
 	}
 }

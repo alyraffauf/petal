@@ -12,12 +12,27 @@ import (
 
 // handoffPrompt prepends the earlier conversation to the first prompt after a
 // model switch. The new model gets what the old one still had in context: the
-// latest compaction summary, if any, and every message after it.
-func handoffPrompt(cwd, previous string, prompt json.RawMessage) (json.RawMessage, error) {
-	rows, err := sessions.Transcript(cwd, previous)
+// latest compaction summary, if any, and every message after it. A fork's
+// lineage supplies the conversation before the fork, ahead of the previous
+// route's own archive.
+func handoffPrompt(cwd string, lineage []historySegment, previous string, prompt json.RawMessage) (json.RawMessage, error) {
+	var rows []sessiondb.ReadTranscriptRow
+	for _, segment := range lineage {
+		inherited, err := sessions.Transcript(cwd, segment.ID)
+		if err != nil {
+			return nil, fmt.Errorf("read the conversation before the fork: %w", err)
+		}
+		for _, row := range inherited {
+			if row.Rowid <= segment.Head {
+				rows = append(rows, row)
+			}
+		}
+	}
+	own, err := sessions.Transcript(cwd, previous)
 	if err != nil {
 		return nil, fmt.Errorf("read the conversation before the model switch: %w", err)
 	}
+	rows = append(rows, own...)
 	context := handoffText(rows)
 	if context == "" {
 		return prompt, nil

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -236,33 +237,41 @@ func TestForkWaitsForPendingHandoff(t *testing.T) {
 	}
 }
 
-func TestForkedSessionRefusesModelSwitch(t *testing.T) {
+func TestForkWithoutLineageRefusesModelSwitch(t *testing.T) {
 	p := &proxy{editorSessions: &editorSessions{}, Config: routing.Config{Accounts: map[string]routing.Account{
 		"a": {Models: map[string][]string{"m": {"adapter"}, "n": {"adapter"}}},
 	}}}
 	p.initialized = true
 	p.Model = "m"
-	p.editorSessions.sessions.Store(`["a","m","fork"]`, &editorSession{route: p, routedID: `["a","m","fork"]`, fork: true})
+	p.editorSessions.sessions.Store(`["a","m","fork"]`, &editorSession{route: p, routedID: `["a","m","fork"]`, legacyFork: true})
 	_, err := p.handleEditor(t.Context(), "session/set_config_option", json.RawMessage(`{"sessionId":"[\"a\",\"m\",\"fork\"]","configId":"model","value":"n"}`))
 	var re *acp.RequestError
-	if !errors.As(err, &re) || !strings.Contains(fmt.Sprint(re.Data), "forked conversation") {
-		t.Fatalf("switching a fork returned %v; want it refused", err)
+	if !errors.As(err, &re) || !strings.Contains(fmt.Sprint(re.Data), "forked from") {
+		t.Fatalf("switching a fork with unknown lineage returned %v; want it refused", err)
 	}
 }
 
-func TestForkMarkerSurvivesResume(t *testing.T) {
+func TestForkLineageSurvivesResume(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cwd := t.TempDir()
-	id := `["a","m","fork"]`
-	(&editorSession{cwd: projectKey(cwd), routedID: id, fork: true}).saveBinding(id)
-
 	p := &proxy{editorSessions: &editorSessions{}, Config: routing.Config{Accounts: map[string]routing.Account{"a": {Models: map[string][]string{"m": {"adapter"}}}}}}
 	p.initialized = true
 	p.Model = "m"
-	params, _ := json.Marshal(Object{"sessionId": encoded(id), "cwd": encoded(cwd), "mcpServers": json.RawMessage("[]")})
-	_, _ = p.handleEditor(t.Context(), "session/resume", params) // No adapter runs here; the binding is read first.
-	value, ok := p.editorSessions.sessions.Load(id)
-	if !ok || !value.(*editorSession).fork {
-		t.Fatal("a resumed fork lost its fork marker, so it could switch models and drop the conversation before the fork")
+	lineage := []historySegment{{ID: `["a","m","parent"]`, Head: 7}}
+	for id, saved := range map[string]*editorSession{
+		`["a","m","fork"]`:   {cwd: projectKey(cwd), routedID: `["a","m","fork"]`, lineage: lineage},
+		`["a","m","legacy"]`: {cwd: projectKey(cwd), routedID: `["a","m","legacy"]`, legacyFork: true},
+	} {
+		saved.saveBinding(id)
+		params, _ := json.Marshal(Object{"sessionId": encoded(id), "cwd": encoded(cwd), "mcpServers": json.RawMessage("[]")})
+		_, _ = p.handleEditor(t.Context(), "session/resume", params) // No adapter runs here; the binding is read first.
+		value, ok := p.editorSessions.sessions.Load(id)
+		if !ok {
+			t.Fatalf("%s was not resumed", id)
+		}
+		got := value.(*editorSession)
+		if !slices.Equal(got.lineage, saved.lineage) || got.legacyFork != saved.legacyFork {
+			t.Errorf("%s resumed with lineage %v legacy %v, want %v %v", id, got.lineage, got.legacyFork, saved.lineage, saved.legacyFork)
+		}
 	}
 }

@@ -44,15 +44,37 @@ type editorSession struct {
 	// handoff is the routed session whose context the next prompt carries to
 	// the route chosen by a model switch.
 	handoff string
-	// fork marks a session opened by session/fork. Petal's archive holds only
-	// the fork's own turns, so a model switch could not hand off the rest.
-	fork bool
+	// lineage is the history a fork inherited from the conversations it was
+	// forked from, oldest first. Petal's archive holds only a fork's own turns,
+	// so a model switch hands these off too.
+	lineage []historySegment
+	// legacyFork marks a fork saved before Petal recorded lineage. Its earlier
+	// history is unknown, so it cannot switch models.
+	legacyFork bool
+}
+
+// historySegment is an archived conversation up to the row where a fork left it.
+type historySegment struct {
+	ID   string `json:"id"`
+	Head int64  `json:"head"`
+}
+
+// forkLine encodes the fork's lineage for the third line of its binding.
+func (s *editorSession) forkLine() string {
+	if s.legacyFork {
+		return "fork"
+	}
+	if len(s.lineage) == 0 {
+		return ""
+	}
+	line, _ := json.Marshal(s.lineage)
+	return string(line)
 }
 
 // saveBinding persists a change to the pending handoff, so a close and resume
 // or a restart before the next prompt keeps it. The caller holds s.mu.
 func (s *editorSession) saveBinding(id string) {
-	if err := saveEditorBinding(s.cwd, id, s.routedID, s.handoff, s.fork); err != nil {
+	if err := saveEditorBinding(s.cwd, id, s.routedID, s.handoff, s.forkLine()); err != nil {
 		slog.Error("save editor session binding", "error", err)
 	}
 }
@@ -94,13 +116,13 @@ func editorBindingPath(key, id string) (string, error) {
 
 // saveEditorBinding records the route an editor session runs on. A second
 // line holds the routed session whose context its next prompt carries, and a
-// third line marks a fork.
-func saveEditorBinding(cwd, id, routed, handoff string, fork bool) error {
-	if handoff != "" || fork {
+// third line holds a fork's lineage.
+func saveEditorBinding(cwd, id, routed, handoff, fork string) error {
+	if handoff != "" || fork != "" {
 		routed += "\n" + handoff
 	}
-	if fork {
-		routed += "\nfork"
+	if fork != "" {
+		routed += "\n" + fork
 	}
 	path, err := editorBindingPath(cwd, id)
 	if err != nil {
@@ -243,7 +265,7 @@ func (p *proxy) bindEditorSession(ctx context.Context, s *editorSession, id, mod
 		return nil, fmt.Errorf("invalid session/new response")
 	}
 	routed := stringField(opened, "sessionId")
-	if err = saveEditorBinding(s.cwd, id, routed, s.handoff, s.fork); err != nil {
+	if err = saveEditorBinding(s.cwd, id, routed, s.handoff, s.forkLine()); err != nil {
 		return nil, err
 	}
 	s.route, s.routedID = route, routed
@@ -329,7 +351,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			if pathErr == nil {
 				routed, err = os.ReadFile(legacy)
 				if err == nil {
-					if err = saveEditorBinding(projectKey(cwd), id, string(routed), "", false); err == nil {
+					if err = saveEditorBinding(projectKey(cwd), id, string(routed), "", ""); err == nil {
 						_ = os.Remove(legacy)
 					}
 				}
@@ -347,9 +369,15 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			return nil, err
 		}
 		lines := strings.SplitN(string(routed), "\n", 3)
-		bound, handoff, fork := lines[0], "", len(lines) == 3 && lines[2] == "fork"
+		bound, handoff := lines[0], ""
 		if len(lines) > 1 {
 			handoff = lines[1]
+		}
+		var lineage []historySegment
+		legacyFork := false
+		if len(lines) == 3 {
+			// A fork saved before lineage was recorded has only a "fork" marker.
+			legacyFork = json.Unmarshal([]byte(lines[2]), &lineage) != nil
 		}
 		parts := decodeRouteID(bound, 3)
 		if parts == nil {
@@ -359,7 +387,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		if err != nil {
 			return nil, err
 		}
-		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: projectKey(stringField(params, "cwd")), routedID: bound, handoff: handoff, fork: fork, request: openRequest(params)})
+		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: projectKey(stringField(params, "cwd")), routedID: bound, handoff: handoff, lineage: lineage, legacyFork: legacyFork, request: openRequest(params)})
 		found = true
 	}
 	if !found {
@@ -393,9 +421,9 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	// Choosing the real model shown for a "/default" route binds that model's
 	// route, because the session's workspace may default to another model.
 	repick := selecting && s.route != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
-	if repick && s.fork {
+	if repick && s.legacyFork {
 		s.mu.Unlock()
-		return nil, acp.NewInvalidParams("Petal cannot switch the model of a forked conversation; switch models before forking, or start a new conversation")
+		return nil, acp.NewInvalidParams("Petal did not record where this conversation was forked from, so switching models would lose the earlier conversation; start a new conversation to use another model")
 	}
 	if selecting && s.route != nil && requested == s.route.Model {
 		options := p.sessionModelOptions(s)
@@ -434,7 +462,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			// A conversation the editor imported from an adapter may have none.
 			// Closing the old route saves history it has observed but not stored.
 			rows, err := sessions.Transcript(stringField(s.request, "cwd"), oldID)
-			if err == nil && len(rows) == 0 && (p.recorder == nil || !p.recorder.unsaved(oldID)) {
+			if err == nil && len(rows) == 0 && len(s.lineage) == 0 && (p.recorder == nil || !p.recorder.unsaved(oldID)) {
 				err = acp.NewInvalidParams("Petal has no saved history for this conversation, so switching models would lose it; start a new conversation to use another model")
 			}
 			if err != nil {
@@ -488,7 +516,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	if method == "session/prompt" {
 		s.setup = nil
 		if s.handoff != "" {
-			prompt, err := handoffPrompt(stringField(s.request, "cwd"), s.handoff, params["prompt"])
+			prompt, err := handoffPrompt(stringField(s.request, "cwd"), s.lineage, s.handoff, params["prompt"])
 			if err != nil {
 				s.mu.Unlock()
 				return nil, err
@@ -496,7 +524,9 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			// The prompt consumes the handoff. A later switch hands off from this
 			// route, which records the prompt, rather than the one before it.
 			params["prompt"], handoff = prompt, s.handoff
-			s.handoff = ""
+			// The new route records this prompt, so its archive now holds the
+			// inherited history and the lineage is no longer needed.
+			s.handoff, s.lineage = "", nil
 			s.saveBinding(id)
 		}
 	}
@@ -515,6 +545,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		}
 	}
 	route, routed := s.route, s.routedID
+	lineage, legacyFork := slices.Clone(s.lineage), s.legacyFork
 	route.aliases.Store(routed, id)
 	s.mu.Unlock()
 	params["sessionId"] = encoded(routed)
@@ -551,7 +582,14 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		// Track the fork so its model option and selections go through Petal.
 		if opened, ok := result.(Object); ok {
 			if forked := stringField(opened, "sessionId"); forked != "" && forked != routed {
-				fs := &editorSession{route: route, routedID: forked, fork: true, options: opened["configOptions"], request: openRequest(params), cwd: projectKey(stringField(params, "cwd"))}
+				fs := &editorSession{route: route, routedID: forked, legacyFork: legacyFork, options: opened["configOptions"], request: openRequest(params), cwd: projectKey(stringField(params, "cwd"))}
+				// The fork inherits the parent's conversation up to its last
+				// archived row. Rows the parent adds later are not the fork's.
+				if head, err := sessions.TranscriptHead(ctx, stringField(params, "cwd"), routed); err == nil {
+					fs.lineage = append(lineage, historySegment{ID: routed, Head: head})
+				} else {
+					fs.legacyFork = true
+				}
 				route.aliases.Store(forked, forked)
 				e.sessions.Store(forked, fs)
 				fs.saveBinding(forked)
