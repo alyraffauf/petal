@@ -434,7 +434,7 @@ command=[%q, "-test.run=^TestPTYChild$"]
 	third.await(t, ctx, "status-command-confirmed")
 	third.detach(t)
 	t.Setenv("XDG_STATE_HOME", workspace)
-	record, err := sessions.Latest(workspace, "fixture")
+	record, err := sessions.Latest(after.Cwd, "fixture")
 	if err != nil || len(record.Selections) != 1 || record.Selections[0].Value != "alternate" {
 		t.Fatalf("restored selections = %+v, %v", record.Selections, err)
 	}
