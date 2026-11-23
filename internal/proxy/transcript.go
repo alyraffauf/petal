@@ -16,6 +16,11 @@ import (
 // children already record their own transcripts.
 type transcriptRecorder struct{ active sync.Map }
 type recordedSession struct {
+	children                        map[string]*nativeChild
+	mail                            map[string]*acpv2.Transcript
+	dirtyMail                       []string
+	mailPending                     map[string]bool
+	nativeReplay                    []sessions.Message
 	mu                              sync.Mutex
 	cwd, id                         string
 	record                          sessions.Record
@@ -44,11 +49,15 @@ func (s *recordedSession) store(messages []sessions.Message, replay bool) error 
 
 func (s *recordedSession) save(replace bool) error {
 	msgs := sessions.ProjectTranscript(&s.projection, s.version == 2)
+	msgs = append(msgs, s.nativeReplay...)
+	msgs = append(msgs, s.mailRows()...)
 	if len(msgs) > 0 || replace {
 		if err := s.store(msgs, replace); err != nil {
 			return err
 		}
 	}
+	s.nativeReplay = nil
+	s.clearDirtyMail()
 	s.projection.Reset()
 	s.last = ""
 	s.seq = 0
@@ -151,7 +160,7 @@ func (p *proxy) beforeTranscript(method, name, native, id string, params Object)
 				}
 				return err
 			}
-			if s.full && (p.version == 2 && s.resumed || p.version == 1 && len(s.projection.Entries()) > 0) {
+			if s.full && (p.version == 2 && s.resumed || p.version == 1 && (len(s.projection.Entries()) > 0 || len(s.nativeReplay) > 0 || len(s.dirtyMail) > 0)) {
 				err = s.save(true)
 			}
 			s.projection.Reset()

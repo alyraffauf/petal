@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,6 +48,17 @@ func newDaemonProfile(config, state string, getenv func(string) string) daemonPr
 	return profile
 }
 
+func (p *daemonProfile) includeMCPEnvironment(servers []routing.MCPServer) {
+	for _, server := range servers {
+		for _, header := range server.Headers {
+			if header.FromEnv != "" {
+				value, present := os.LookupEnv(header.FromEnv)
+				p.discovery = append(p.discovery, header.FromEnv, strconv.FormatBool(present), value)
+			}
+		}
+	}
+}
+
 func relativeProviderPaths(getenv func(string) string) bool {
 	for _, key := range []string{"CODEX_HOME", "CLAUDE_CONFIG_DIR"} {
 		if value := getenv(key); value != "" && !filepath.IsAbs(value) {
@@ -83,6 +95,7 @@ func daemonDialer(configPath string, config routing.Config) (tui.DaemonDialer, e
 		return nil, err
 	}
 	profile := newDaemonProfile(configPath, statePath, os.Getenv)
+	profile.includeMCPEnvironment(config.MCPServers)
 	for _, account := range config.Accounts {
 		profile.relativeDiscovery = profile.relativeDiscovery || relativeProviderPaths(func(key string) string { return account.Env[key] })
 	}

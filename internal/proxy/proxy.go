@@ -523,7 +523,11 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 		reader.observeUpdate = func(raw json.RawMessage) {
 			var args Object
 			if json.Unmarshal(raw, &args) == nil {
-				p.recorder.observe(p.publicID(name, stringField(args, "sessionId")), version, args.member("update"))
+				native, update := stringField(args, "sessionId"), args.member("update")
+				if p.local != nil && version == 1 && p.observeNativeTranscript(name, native, update) {
+					return
+				}
+				p.recorder.observe(p.publicID(name, native), version, update)
 			}
 		}
 	}

@@ -232,7 +232,7 @@ func dialProfileFixture(t *testing.T, ctx context.Context, env []string, configP
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanupPTYDaemon(t, endpoint, pidPath)
+	cleanupPTYDaemon(t, pidPath)
 	client, err := dial(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -279,5 +279,40 @@ func waitProfileRetry(t *testing.T, ctx context.Context) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	case <-time.After(10 * time.Millisecond):
+	}
+}
+
+func TestMCPHeaderEnvironmentSelectsDaemon(t *testing.T) {
+	const key = "PETAL_TEST_HTTP_HEADER"
+	servers := []routing.MCPServer{{Headers: []routing.MCPHeader{{FromEnv: key}}}}
+	root, err := os.MkdirTemp("/tmp", "petal-profile-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	socket := func() string {
+		t.Helper()
+		var profile daemonProfile
+		profile.includeMCPEnvironment(servers)
+		endpoint, err := profile.endpoint(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return endpoint.SocketPath()
+	}
+	t.Setenv(key, "first-test-credential")
+	first := socket()
+	t.Setenv(key, "second-test-credential")
+	second := socket()
+	if first == second || strings.Contains(second, "second-test-credential") {
+		t.Fatal("credential rotation did not select a distinct opaque socket path")
+	}
+	t.Setenv(key, "")
+	empty := socket()
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	if socket() == empty {
+		t.Fatal("absent and empty credentials shared a socket")
 	}
 }

@@ -29,6 +29,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("PETAL_PTY_ROLE") != "" && len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "daemon":
+			defer os.Remove(os.Getenv("PETAL_PTY_PID"))
 			if err := os.WriteFile(os.Getenv("PETAL_PTY_PID"), []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
 				panic(err)
 			}
@@ -52,7 +53,7 @@ func ptyEnvironment(t *testing.T, workspace, configPath string) []string {
 	env := append(os.Environ(), "TERM=xterm-256color", "HOME="+workspace, "XDG_STATE_HOME="+workspace,
 		"XDG_CONFIG_HOME="+workspace, "XDG_CACHE_HOME="+workspace, "XDG_RUNTIME_DIR="+root, "TMPDIR="+root,
 		"PATH="+workspace, "PETAL_PTY_ROLE=client", "PETAL_PTY_CONFIG="+configPath)
-	endpoint, err := fixtureEndpoint(env, configPath, workspace)
+	_, err = fixtureEndpoint(env, configPath, workspace)
 	if err != nil {
 		var stat unix.Stat_t
 		if runtime.GOOS == "linux" && os.Getenv("NIX_BUILD_TOP") != "" &&
@@ -62,11 +63,11 @@ func ptyEnvironment(t *testing.T, workspace, configPath string) []string {
 		t.Fatal(err)
 	}
 	pidPath := filepath.Join(root, "daemon.pid")
-	cleanupPTYDaemon(t, endpoint, pidPath)
+	cleanupPTYDaemon(t, pidPath)
 	return append(env, "PETAL_PTY_PID="+pidPath)
 }
 
-func cleanupPTYDaemon(t *testing.T, endpoint localdaemon.Endpoint, pidPath string) {
+func cleanupPTYDaemon(t *testing.T, pidPath string) {
 	t.Helper()
 	t.Cleanup(func() {
 		raw, err := os.ReadFile(pidPath)
@@ -84,14 +85,12 @@ func cleanupPTYDaemon(t *testing.T, endpoint localdaemon.Endpoint, pidPath strin
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		for {
-			conn, err := endpoint.Dial(ctx)
-			if err != nil {
-				break
+			if _, err := os.Stat(pidPath); os.IsNotExist(err) {
+				return
 			}
-			conn.Close()
 			select {
 			case <-ctx.Done():
-				t.Errorf("daemon %d did not close its socket", pid)
+				t.Errorf("daemon %d did not finish shutdown", pid)
 				return
 			case <-time.After(10 * time.Millisecond):
 			}
