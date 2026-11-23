@@ -85,3 +85,24 @@ func TestClosingSessionKeepsUnsavedV2Turn(t *testing.T) {
 		t.Fatalf("handoff after close lost the unsaved turn: %s", prompt)
 	}
 }
+
+func TestHandoffKeepsLeadingSkillInvocable(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	id := `["claude","opus","native"]`
+	if _, err := sessions.Create(cwd, sessions.Record{ID: id, Model: "opus"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.SaveTranscript(cwd, id, []sessions.Message{{Role: "assistant", Body: "the codename is BLUE-HERON"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[{"type":"text","text":"$bro"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	forwarded, ok := invokeSkill(prompt, map[string]bool{"bro": true})
+	var blocks []struct{ Text string }
+	if err := json.Unmarshal(forwarded, &blocks); err != nil || !ok || len(blocks) != 2 || blocks[0].Text != "/bro" || !strings.Contains(blocks[1].Text, "BLUE-HERON") {
+		t.Fatalf("forwarded %s, want /bro followed by the handoff", forwarded)
+	}
+}

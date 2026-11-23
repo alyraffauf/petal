@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"petal/internal/sessions"
@@ -26,7 +27,18 @@ func handoffPrompt(cwd, previous string, prompt json.RawMessage) (json.RawMessag
 		return nil, fmt.Errorf("prompt must be an array: %w", err)
 	}
 	preamble, _ := json.Marshal(map[string]string{"type": "text", "text": context})
-	return json.Marshal(append([]json.RawMessage{preamble}, blocks...))
+	// A prompt that starts with a command, such as "$skill" or "/compact", must
+	// keep it first, so the context follows the command's block.
+	at := 0
+	if len(blocks) > 0 {
+		var first struct{ Type, Text string }
+		if json.Unmarshal(blocks[0], &first) == nil && first.Type == "text" {
+			if text := strings.TrimSpace(first.Text); strings.HasPrefix(text, "$") || strings.HasPrefix(text, "/") {
+				at = 1
+			}
+		}
+	}
+	return json.Marshal(slices.Insert(blocks, at, json.RawMessage(preamble)))
 }
 
 func handoffText(rows []sessiondb.ReadTranscriptRow) string {

@@ -440,7 +440,10 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 				s.mu.Unlock()
 				return nil, err
 			}
+			// The prompt consumes the handoff. A later switch hands off from this
+			// route, which records the prompt, rather than the one before it.
 			params["prompt"], handoff = prompt, s.handoff
+			s.handoff = ""
 		}
 	}
 	if method == "session/set_config_option" && stringField(params, "configId") == "effort" {
@@ -463,10 +466,11 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	params["sessionId"] = encoded(routed)
 	raw, _ = json.Marshal(params)
 	result, err := route.handle(ctx, method, raw)
-	if err == nil && handoff != "" {
+	if err != nil && handoff != "" {
+		// Retry the handoff with the next prompt unless the model changed since.
 		s.mu.Lock()
-		if s.handoff == handoff {
-			s.handoff = ""
+		if s.route == route && s.routedID == routed && s.handoff == "" {
+			s.handoff = handoff
 		}
 		s.mu.Unlock()
 	}
