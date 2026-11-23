@@ -319,8 +319,9 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		s.mu.Unlock()
 		return options, nil
 	}
-	// A "/default" route is listed as the real model it runs.
-	current := selecting && s.route != nil && (requested == s.route.Model || requested == p.PickerModel(s.route.Model))
+	// Choosing the real model shown for a "/default" route binds that model's
+	// route, because the session's workspace may default to another model.
+	current := selecting && s.route != nil && requested == s.route.Model
 	repick := selecting && s.route != nil && s.setup != nil && slices.Contains(p.ModelNames(), requested) && !current
 	if current && s.setup != nil {
 		options := p.pendingModelOptions(s)
