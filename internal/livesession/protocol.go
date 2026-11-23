@@ -21,7 +21,8 @@ import (
 
 const (
 	ProtocolVersion = 1
-	maxFrame        = 8 << 20
+	maxFrame        = 12 << 20
+	maxPromptBody   = 10 << 20
 	maxBody         = 4 << 20
 	attachTimeout   = 5 * time.Second
 )
@@ -65,8 +66,12 @@ type OpenOptions struct {
 	ResumeID string `json:"resumeID,omitempty"`
 }
 
-// NewHandle creates an open retry key. A previously unseen key must be
-// presented within ten minutes. Live handles remain valid until close.
+// OpenReservationGrace is the idle time allowed for an incomplete session
+// without a controller or an active operation.
+const OpenReservationGrace = 5 * time.Second
+
+// NewHandle creates an open retry key. Present a new key within ten minutes.
+// An incomplete reservation can expire before that retry window ends.
 func NewHandle() string {
 	var nonce [16]byte
 	rand.Read(nonce[:])
@@ -90,14 +95,16 @@ func handleExpiry(handle string) (time.Time, bool) {
 
 // Info identifies a live daemon session. SessionID is set after setup succeeds.
 type Info struct {
-	Handle        string `json:"handle"`
-	SessionID     string `json:"sessionID,omitempty"`
-	ResumeID      string `json:"resumeID,omitempty"`
-	Cwd           string `json:"cwd"`
-	Model         string `json:"model,omitempty"`
-	Account       string `json:"account,omitempty"`
-	ACPVersion    uint16 `json:"acpVersion,omitempty"`
-	AdapterExited bool   `json:"adapterExited,omitempty"`
+	Handle        string    `json:"handle"`
+	SessionID     string    `json:"sessionID,omitempty"`
+	ResumeID      string    `json:"resumeID,omitempty"`
+	Cwd           string    `json:"cwd"`
+	Model         string    `json:"model,omitempty"`
+	PinnedAccount string    `json:"pinnedAccount,omitempty"`
+	Account       string    `json:"account,omitempty"`
+	ACPVersion    uint16    `json:"acpVersion,omitempty"`
+	LastAttached  time.Time `json:"lastAttached"`
+	AdapterExited bool      `json:"adapterExited,omitempty"`
 }
 
 // AttachOptions selects a live session by handle or durable ID. After is the
@@ -106,6 +113,7 @@ type Info struct {
 type AttachOptions struct {
 	Handle    string  `json:"handle"`
 	SessionID string  `json:"sessionID,omitempty"`
+	Cwd       string  `json:"cwd,omitempty"`
 	After     *uint64 `json:"after"`
 	Control   bool    `json:"control"`
 }
@@ -121,16 +129,26 @@ type Snapshot struct {
 	Head              uint64          `json:"head"`
 	Control           bool            `json:"control"`
 	NextOperation     uint64          `json:"nextOperation"`
+	ActiveMethod      string          `json:"activeMethod,omitempty"`
 	ActiveOperation   uint64          `json:"activeOperation,omitempty"`
 	SteeringOperation uint64          `json:"steeringOperation,omitempty"`
+	TurnStarted       bool            `json:"turnStarted,omitempty"`
 	Turn              uint64          `json:"turn,omitempty"`
+	Foreground        string          `json:"foreground,omitempty"`
 	Running           bool            `json:"running,omitempty"`
 	Canceling         bool            `json:"canceling,omitempty"`
 	Closed            bool            `json:"closed,omitempty"`
 	Hello             json.RawMessage `json:"hello,omitempty"`
 	Setup             json.RawMessage `json:"setup,omitempty"`
+	SettingsPending   bool            `json:"settingsPending,omitempty"`
+	SettingsRevision  uint64          `json:"settingsRevision,omitempty"`
+	ArchiveCursor     uint64          `json:"archiveCursor,omitempty"`
+	ArchiveHead       int64           `json:"archiveHead,omitempty"`
 	SetupMethod       string          `json:"setupMethod,omitempty"`
 	Pending           []Question      `json:"pending,omitempty"`
+
+	// AwaitingStart marks an ACP v2 prompt that has yet to enter active foreground.
+	AwaitingStart bool `json:"awaitingStart,omitempty"`
 }
 
 type EventKind string
@@ -147,14 +165,17 @@ const (
 )
 
 type Event struct {
-	Sequence   uint64          `json:"sequence"`
-	Kind       EventKind       `json:"kind"`
-	Method     string          `json:"method"`
-	Params     json.RawMessage `json:"params,omitempty"`
-	Question   *Question       `json:"question,omitempty"`
-	QuestionID uint64          `json:"questionID"`
-	Operation  uint64          `json:"operation"`
-	Outcome    *Outcome        `json:"outcome,omitempty"`
+	// ArchiveHead bounds the archive preceding an ACP v1 prompt.
+	ArchiveHead *int64          `json:"archiveHead,omitempty"`
+	Sequence    uint64          `json:"sequence"`
+	Kind        EventKind       `json:"kind"`
+	Method      string          `json:"method"`
+	Params      json.RawMessage `json:"params,omitempty"`
+	Question    *Question       `json:"question,omitempty"`
+	QuestionID  uint64          `json:"questionID"`
+	Operation   uint64          `json:"operation"`
+	Turn        uint64          `json:"turn,omitempty"`
+	Outcome     *Outcome        `json:"outcome,omitempty"`
 }
 
 // Question carries an ACP permission or elicitation callback, or a daemon-host

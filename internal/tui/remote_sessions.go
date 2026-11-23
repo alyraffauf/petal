@@ -41,7 +41,7 @@ func (m *terminal) browseSessions() tea.Cmd {
 		cursors := map[string]bool{}
 		req := acp.ListSessionsRequest{}
 		for {
-			result, err := acp.SendRequest[acp.ListSessionsResponse](h.conn, ctx, "session/list", req)
+			result, err := sendRequest[acp.ListSessionsResponse](h, ctx, "session/list", req)
 			if err != nil {
 				return remoteSessions{picker, records, other, err}
 			}
@@ -98,11 +98,14 @@ func (h *harness) endSession(ctx context.Context, command, cwd, model string) te
 	if err != nil || id != "confirm" {
 		return endedSession{err: err}
 	}
-	if _, err := acp.SendRequest[json.RawMessage](h.conn, ctx, method, params); err != nil {
+	if _, err := sendRequest[json.RawMessage](h, ctx, method, params); err != nil {
 		return endedSession{err: err}
 	}
-	if method == "session/delete" {
+	if h.daemon == nil && method == "session/delete" {
 		err = sessions.Forget(cwd, model, h.id)
+	}
+	if h.daemon != nil && method != "session/delete" {
+		err = h.daemon.client.CloseSession(ctx)
 	}
 	return endedSession{err, true}
 }

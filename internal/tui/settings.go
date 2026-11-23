@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	acp "github.com/coder/acp-go-sdk"
 	"petal/internal/proxy"
 	"petal/internal/sessions"
 )
@@ -261,7 +260,7 @@ func (h *harness) changeSetting(ctx context.Context, target setting, value strin
 			params["value"] = value == "true"
 		}
 	}
-	r, err := acp.SendRequest[proxy.Object](h.conn, ctx, method, params)
+	r, err := sendRequest[proxy.Object](h, ctx, method, params)
 	updated := settingsFrom(r)
 	if err == nil && target.Type == "mode" {
 		updated.CurrentModeID = value

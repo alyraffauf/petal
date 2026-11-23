@@ -33,7 +33,7 @@ func (b *agentBrowser) completedEntries(entries []entry) []entry {
 }
 
 func (m *terminal) indexMessages(entries []entry, replace bool) {
-	if m.h == nil || m.h.record.ID == "" || m.Cwd == "" || (len(entries) == 0 && !replace) {
+	if m.h == nil || m.h.daemon != nil || m.h.record.ID == "" || m.Cwd == "" || (len(entries) == 0 && !replace) {
 		return
 	}
 	messages := make([]sessions.Message, 0, len(entries))

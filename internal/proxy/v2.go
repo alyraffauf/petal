@@ -384,13 +384,13 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			return nil, fmt.Errorf("empty forked sessionId")
 		}
 		routed := p.publicID(name, id)
-		if endpoint != nil {
+		if endpoint != nil && p.local == nil {
 			if err := p.bindDelegation(endpoint, name, routed); err != nil {
 				return nil, err
 			}
 		}
 		fork["sessionId"] = encoded(routed)
-		if p.recorder != nil {
+		if p.recorder != nil && p.local == nil {
 			p.recorder.open(routed, routed, stringField(params, "cwd"), name, p.Model)
 		}
 		return fork, nil
@@ -409,7 +409,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 	}
-	if err == nil && p.recorder != nil {
+	if err == nil && p.recorder != nil && p.local == nil {
 		id := stringField(session, "sessionId")
 		p.recorder.open(id, id, stringField(params, "cwd"), name, p.Model)
 	}
@@ -495,7 +495,11 @@ func (p *proxy) newSessionV2(ctx context.Context, b *backend, name string, resul
 		return nil, fmt.Errorf("adapter did not return sessionId")
 	}
 	native := stringField(session, "sessionId")
-	session["sessionId"] = encoded(p.publicID(name, native))
+	id := p.publicID(name, native)
+	if err := p.reserveLocalRoute(id); err != nil {
+		return nil, err
+	}
+	session["sessionId"] = encoded(id)
 	if p.Accounts[name].SelectModel[p.Model] {
 		opts, err := forward[Object](b.conn, ctx, "session/set_config_option", map[string]string{
 			"sessionId": native, "configId": "model", "type": "id", "value": p.Model,

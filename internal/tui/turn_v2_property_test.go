@@ -1,12 +1,26 @@
 package tui
 
 import (
+	"slices"
 	"testing"
 
 	"bloomfx.dev/bloom"
 	tea "charm.land/bubbletea/v2"
 	acp "github.com/coder/acp-go-sdk"
 )
+
+func TestV2LiveMessagesFollowArchiveAfterGap(t *testing.T) {
+	m := &terminal{screen: screen{connection: connected, Messages: []entry{{"user", "archived prompt"}}}}
+	m.conversationV2().archiveRows = 1
+	m.recordV2Update([]byte(`{"sessionUpdate":"agent_message_chunk","messageId":"reply","content":{"type":"text","text":"first"}}`))
+	m.publishV2Transcript(false)
+	m.recordV2Update([]byte(`{"sessionUpdate":"agent_message_chunk","messageId":"reply","content":{"type":"text","text":" second"}}`))
+	m.publishV2Transcript(false)
+	want := []entry{{"user", "archived prompt"}, {"assistant", "first second"}}
+	if !slices.Equal(m.Messages, want) {
+		t.Fatalf("messages = %+v, want %+v", m.Messages, want)
+	}
+}
 
 func FuzzV2ForegroundHistory(f *testing.F) {
 	// Fast local completion before acknowledgment, early acknowledgment,

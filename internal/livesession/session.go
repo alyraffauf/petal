@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"sync"
 	"time"
 
@@ -20,19 +21,26 @@ const (
 	maxMetadata  = 512 << 10
 	maxQuestions = 16
 	maxQuestion  = 64 << 10
+	// Reserve IDs for turns with no frontend prompt, within JSON safe integers.
+	independentTurnBase = 1 << 52
 )
 
 type operation struct {
-	number         uint64
-	method         string
-	fingerprint    [32]byte
-	dispatched     chan struct{}
-	done           chan struct{}
-	receipt        Receipt
-	size           int
-	replay         *journal
-	replayComplete bool
-	resumeState    bool
+	number      uint64
+	method      string
+	fingerprint [32]byte
+	dispatched  chan struct{}
+	done        chan struct{}
+	receipt     Receipt
+	size        int
+	replay      *setupReplay
+}
+
+type setupReplay struct {
+	journal
+	archive     setupArchiveV2
+	foreground  string
+	stateCursor uint64
 }
 
 type session struct {
@@ -49,38 +57,53 @@ type session struct {
 	backend *proxy.Local
 	config  routing.Config
 	initErr error
+	leases  map[string]*os.File
 
-	mu           sync.Mutex
-	info         Info
-	controller   *peer
-	changed      chan struct{}
-	events       journal
-	closed       bool
-	closingDone  chan struct{}
-	hello        json.RawMessage
-	resumeMethod string
-	setup        json.RawMessage
-	nextOp       uint64
-	active       *operation
-	steering     *operation
-	turn         *operation
-	running      bool
-	canceling    bool
-	cancelled    uint64
-	receipts     []*operation
-	receiptSize  int
-	questionID   uint64
-	pending      map[uint64]*pendingQuestion
-	answered     map[uint64][32]byte
-	answerOrder  []uint64
+	// Guarded by mu.
+	preparing            bool
+	reservationIdleSince time.Time
+
+	mu                  sync.Mutex
+	info                Info
+	controller          *peer
+	changed             chan struct{}
+	events              journal
+	closed              bool
+	closingDone         chan struct{}
+	hello               json.RawMessage
+	resumeMethod        string
+	archiveHead         int64
+	archiveCursor       uint64
+	archiveV2           archiveV2
+	settingsConfirmed   bool
+	settingsRevision    uint64
+	setup               json.RawMessage
+	nextOp              uint64
+	active              *operation
+	steering            *operation
+	turn                *operation
+	pendingPrompt       *operation
+	turnV2              uint64
+	nextIndependentTurn uint64
+	running             bool
+	foreground          string
+	canceling           bool
+	cancelled           uint64
+	receipts            []*operation
+	receiptSize         int
+	questionID          uint64
+	pending             map[uint64]*pendingQuestion
+	answered            map[uint64][32]byte
+	answerOrder         []uint64
+	listing             *operation
 }
 
 func newSession(server *Server, options OpenOptions) *session {
 	ctx, stop := context.WithCancel(server.ctx)
 	return &session{
 		server: server, options: options, ctx: ctx, stop: stop, ready: make(chan struct{}), callbacks: make(chan struct{}, 32),
-		info:    Info{Handle: options.Handle, Cwd: options.Cwd, Model: options.Model, Account: options.Account, ResumeID: options.ResumeID},
-		changed: make(chan struct{}), nextOp: 1, pending: make(map[uint64]*pendingQuestion), answered: make(map[uint64][32]byte),
+		info:                 Info{Handle: options.Handle, Cwd: options.Cwd, Model: options.Model, Account: options.Account, PinnedAccount: options.Account, ResumeID: options.ResumeID},
+		reservationIdleSince: time.Now(), changed: make(chan struct{}), nextOp: 1, pending: make(map[uint64]*pendingQuestion), answered: make(map[uint64][32]byte),
 	}
 }
 
@@ -120,7 +143,12 @@ func (s *session) prepare() {
 		return
 	}
 	s.host = host
-	s.backend = proxy.NewLocal(s.ctx, config, s.options.Cwd, s.callback, s.update)
+	s.backend = proxy.NewLocal(s.ctx, config, s.options.Cwd, host, s.callback, s.update, func(id string) error {
+		if err := s.leaseRoute(id); err != nil {
+			return err
+		}
+		return nil
+	})
 	s.mu.Lock()
 	s.info.Model = config.Model
 	s.info.Account = config.PinnedAccount
@@ -129,6 +157,10 @@ func (s *session) prepare() {
 
 func (s *session) publish(event Event) {
 	s.events.append(event)
+	s.notify()
+}
+
+func (s *session) notify() {
 	close(s.changed)
 	s.changed = make(chan struct{})
 }
@@ -151,6 +183,8 @@ func (s *session) attach(p *peer, opts AttachOptions) (Snapshot, *Error) {
 			return Snapshot{}, failure(Conflict, "another connection controls the session")
 		}
 		s.controller = p
+		s.notify()
+		s.info.LastAttached = time.Now()
 	}
 	snapshot := s.state(p)
 	snapshot.After = after
@@ -160,16 +194,23 @@ func (s *session) attach(p *peer, opts AttachOptions) (Snapshot, *Error) {
 func (s *session) state(p *peer) Snapshot {
 	snapshot := Snapshot{
 		Info: s.info, Floor: s.events.floor(), Head: s.events.head, After: s.events.head,
-		Control: s.controller == p, NextOperation: s.nextOp, Running: s.running, Canceling: s.canceling,
-		Closed: s.closed, Hello: s.hello, Setup: s.setup, SetupMethod: s.resumeMethod,
+		Control: s.controller == p, NextOperation: s.nextOp, Foreground: s.foreground, Running: s.running, Canceling: s.canceling,
+		SettingsPending: s.settingsPending(), SettingsRevision: s.settingsRevision, ArchiveCursor: s.archiveCursor,
+		Closed: s.closed, Hello: s.hello, Setup: s.setup, SetupMethod: s.resumeMethod, ArchiveHead: s.archiveHead,
+		AwaitingStart: s.pendingPrompt != nil,
 	}
 	if s.active != nil {
 		snapshot.ActiveOperation = s.active.number
+		snapshot.ActiveMethod = s.active.method
 	}
 	if s.steering != nil {
 		snapshot.SteeringOperation = s.steering.number
 	}
-	if s.turn != nil {
+	switch {
+	case s.info.ACPVersion == 2:
+		snapshot.Turn = s.currentV2Turn()
+		snapshot.TurnStarted = s.running
+	case s.turn != nil:
 		snapshot.Turn = s.turn.number
 	}
 	// Question IDs are monotonic, but a long-running question can survive
@@ -197,6 +238,8 @@ func (s *session) claim(p *peer) (Snapshot, *Error) {
 		return Snapshot{}, failure(Conflict, "another connection controls the session")
 	}
 	s.controller = p
+	s.notify()
+	s.info.LastAttached = time.Now()
 	return s.state(p), nil
 }
 
@@ -205,6 +248,8 @@ func (s *session) detach(p *peer) {
 	defer s.mu.Unlock()
 	if s.controller == p {
 		s.controller = nil
+		s.reservationIdleSince = time.Now()
+		s.notify()
 	}
 }
 
@@ -243,8 +288,6 @@ func poll[T any](ctx context.Context, s *session, read func() (T, bool, *Error))
 		case <-changed:
 		case <-ctx.Done():
 			return value, failure(Closed, "connection is closed")
-		case <-s.ctx.Done():
-			return value, failure(Closed, "session is closed")
 		case <-timer.C:
 			return value, nil
 		}
@@ -263,7 +306,7 @@ func (s *session) closeBy(p *peer) *Error {
 	}
 	s.closed = true
 	s.publish(Event{Kind: SessionClosed})
-	if s.info.SessionID != "" && !s.info.AdapterExited && s.active == nil && s.steering == nil && !s.running && !s.canceling {
+	if s.info.SessionID != "" && !s.info.AdapterExited && s.active == nil && s.listing == nil && s.steering == nil && s.pendingPrompt == nil && !s.running && !s.canceling {
 		done := make(chan struct{})
 		s.closingDone = done
 		go s.closeAdapter(s.info.SessionID, done)
@@ -274,16 +317,57 @@ func (s *session) closeBy(p *peer) *Error {
 	return nil
 }
 
+// Await the daemon stop or the end of an abandoned, incomplete reservation.
+func (s *session) awaitRetirement() {
+	for {
+		s.mu.Lock()
+		if s.info.SessionID != "" || s.closed {
+			s.mu.Unlock()
+			<-s.ctx.Done()
+			return
+		}
+		changed := s.changed
+		var timer *time.Timer
+		var expired <-chan time.Time
+		if s.controller == nil && s.active == nil {
+			remaining := time.Until(s.reservationIdleSince.Add(s.server.reservationGrace))
+			if remaining <= 0 {
+				s.closed = true
+				s.publish(Event{Kind: SessionClosed})
+				s.stop()
+				s.mu.Unlock()
+				return
+			}
+			timer = time.NewTimer(remaining)
+			expired = timer.C
+		}
+		s.mu.Unlock()
+		select {
+		case <-s.ctx.Done():
+		case <-changed:
+		case <-expired:
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		if s.ctx.Err() != nil {
+			return
+		}
+	}
+}
+
 func (s *session) retire() {
-	<-s.ctx.Done()
+	s.awaitRetirement()
 	s.mu.Lock()
 	if !s.closed {
 		s.closed = true
 		s.publish(Event{Kind: SessionClosed})
 	}
-	active, steering, closing := s.active, s.steering, s.closingDone
+	active, steering, listing, closing, preparing := s.active, s.steering, s.listing, s.closingDone, s.preparing
 	s.mu.Unlock()
-	<-s.ready
+	if preparing {
+		<-s.ready
+	}
 	if closing != nil {
 		<-closing
 	}
@@ -298,8 +382,14 @@ func (s *session) retire() {
 	if steering != nil {
 		<-steering.done
 	}
+	if listing != nil {
+		<-listing.done
+	}
 	if s.backend != nil {
 		s.backend.Wait()
+	}
+	if s.info.ACPVersion == 2 && len(s.setup) != 0 && !s.archiveV2.deleted {
+		s.checkpointV2(s.events.head)
 	}
 	s.server.remove(s)
 }

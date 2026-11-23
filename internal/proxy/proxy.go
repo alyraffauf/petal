@@ -234,6 +234,9 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		if p.PinnedAccount != "" && name != p.PinnedAccount {
 			canonical := p.publicID(p.PinnedAccount, native)
 			if method == "session/load" || method == "session/resume" {
+				if err := p.reserveLocalRoute(canonical); err != nil {
+					return nil, err
+				}
 				p.aliases.Store(canonical, id)
 			} else if existing, ok := p.aliases.Load(canonical); !ok || !slices.Equal(decodeRouteID(existing.(string), 3), parts) {
 				return nil, acp.NewInvalidParams("session belongs to another account")
@@ -345,6 +348,11 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 			session["sessionId"] = encoded(public)
 		} else {
 			delegationParent = p.publicID(name, returnedNative)
+			if method != "session/fork" {
+				if err := p.reserveLocalRoute(delegationParent); err != nil {
+					return nil, err
+				}
+			}
 			session["sessionId"] = encoded(delegationParent)
 		}
 		native = returnedNative
@@ -361,12 +369,12 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	if p.embedded && b.hello.Meta["steering"] != nil {
 		session["petalSteering"] = b.hello.Meta["steering"]
 	}
-	if endpoint != nil {
+	if endpoint != nil && (method != "session/fork" || p.local == nil) {
 		if err := p.bindDelegation(endpoint, name, delegationParent); err != nil {
 			return nil, err
 		}
 	}
-	if p.recorder != nil && (method == "session/new" || method == "session/fork") {
+	if p.recorder != nil && (method == "session/new" || method == "session/fork" && p.local == nil) {
 		id := stringField(session, "sessionId")
 		p.recorder.open(id, id, stringField(params, "cwd"), name, p.Model)
 	}
@@ -511,11 +519,24 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	if p.editorWire != nil && p.editorWire.traceLog != nil {
 		reader.traceUpdates = p.editorWire.traceLog
 	}
-	if receive == nil && p.recorder != nil {
+	if receive == nil && p.recorder != nil && (p.local == nil || version != 2) {
 		reader.observeUpdate = func(raw json.RawMessage) {
 			var args Object
 			if json.Unmarshal(raw, &args) == nil {
-				p.recorder.observe(p.publicID(name, stringField(args, "sessionId")), version, args.member("update"))
+				native, update := stringField(args, "sessionId"), args.member("update")
+				if p.local != nil && version == 1 && p.observeNativeTranscript(name, native, update) {
+					return
+				}
+				p.recorder.observe(p.publicID(name, native), version, update)
+			}
+		}
+	}
+	if receive == nil && p.local != nil && version == 2 {
+		// Apply daemon updates before the reader exposes a subsequent ACP
+		// response. Resume validation and archive checkpoints use this order.
+		reader.sessionUpdate = func(raw json.RawMessage) {
+			if b.ready.Load() {
+				_, _ = p.relayV2ClientCall(lifetime, name, notificationPrefix+"session/update", raw, clientCaps, lifetime)
 			}
 		}
 	}
@@ -740,6 +761,9 @@ func connectProxy(lifetime context.Context, out io.Writer, in io.Reader, c routi
 	p := proxy{local: local, editorWire: editorWire, editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
 	if !embedded || local != nil {
 		p.recorder = &transcriptRecorder{}
+		if local != nil {
+			p.recorder.host = local.host
+		}
 	}
 	if !embedded && c.Model == "" {
 		p.Model = c.DefaultModel()

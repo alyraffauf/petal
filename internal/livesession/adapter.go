@@ -97,12 +97,20 @@ func (s *session) setupAdapter(ctx context.Context, op *operation, raw json.RawM
 			}
 		}
 	}
+	var archiveHead int64
+	if method == "session/resume" && s.info.ACPVersion == 1 {
+		var err error
+		archiveHead, err = sessions.TranscriptHead(ctx, s.options.Cwd, id)
+		if err != nil {
+			return nil, fmt.Errorf("read archived transcript: %w", err)
+		}
+	}
 	result, err := s.backend.Call(ctx, method, bytesOf(params), nil)
 	if err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
-	validReplay := op.resumeState
+	validReplay := op.replay.foreground != ""
 	s.mu.Unlock()
 	if method == "session/resume" && s.info.ACPVersion == 2 && !validReplay {
 		return nil, errors.New("ACP v2 resume ended without replay completion and current state")
@@ -122,11 +130,14 @@ func (s *session) setupAdapter(ctx context.Context, op *operation, raw json.RawM
 	if route == nil || route[2] == "" {
 		return nil, errors.New("adapter did not return a durable session ID")
 	}
-	if err := s.server.register(s, id); err != nil {
-		return nil, err
-	}
 	record := sessions.Record{ID: id, Account: route[0], Model: route[1], Opened: time.Now()}
-	_, archiveErr := sessions.Create(s.options.Cwd, record)
+	if len(body) > maxMetadata {
+		return nil, failure(Limit, "adapter session metadata exceeds daemon limit")
+	}
+	if _, err := sessions.Create(s.options.Cwd, record); err != nil {
+		return nil, fmt.Errorf("save session %s: %w", id, err)
+	}
+	s.server.register(s, id)
 	s.mu.Lock()
 	s.info.SessionID = id
 	s.info.Account = route[0]
@@ -134,21 +145,15 @@ func (s *session) setupAdapter(ctx context.Context, op *operation, raw json.RawM
 		s.info.Account = s.config.PinnedAccount
 	}
 	s.resumeMethod = method
+	s.archiveHead = archiveHead
 	if !s.closed {
 		s.commitSetup(op.replay)
 	}
 	op.replay = nil
-	if len(body) <= maxMetadata {
-		s.setup = body
-	}
+	s.setup = body
+	s.settingsRevision++
 	s.mu.Unlock()
 	go s.watchAdapter(s.backend.SessionDone(id))
-	if archiveErr != nil {
-		return nil, fmt.Errorf("save session %s: %w", id, archiveErr)
-	}
-	if len(body) > maxMetadata {
-		return nil, failure(Limit, "adapter session metadata exceeds daemon limit")
-	}
 	return returned, nil
 }
 
@@ -163,6 +168,7 @@ func (s *session) watchAdapter(done <-chan struct{}) {
 	if !s.closed {
 		s.info.AdapterExited = true
 		s.running = false
+		s.turnV2, s.pendingPrompt = 0, nil
 		s.cancelQuestions()
 		s.publish(Event{Kind: AdapterExited})
 	}
@@ -191,6 +197,13 @@ func (s *session) fork(ctx context.Context, raw json.RawMessage) (any, error) {
 	if route == nil || route[2] == "" {
 		return nil, errors.New("adapter did not return a durable fork ID")
 	}
+	// The next live session will own the fork. Protect only its initial
+	// archive write here so a controller can resume it before the parent exits.
+	lease, err := sessions.LeaseRoute(s.options.Cwd, routeKey(response.SessionID))
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
 	parent, err := sessions.Lookup(s.options.Cwd, s.info.SessionID)
 	if err != nil {
 		return nil, err

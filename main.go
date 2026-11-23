@@ -4,11 +4,15 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
 	"petal/internal/agentmcp"
+	"petal/internal/livesession"
+	"petal/internal/localdaemon"
 	"petal/internal/proxy"
 	"petal/internal/routing"
 	"petal/internal/tui"
@@ -57,7 +61,11 @@ func main() {
 		if err != nil {
 			return err
 		}
-		return tui.Run(cmd.Context(), c, resume)
+		dial, err := daemonDialer(settings.GetString("config"), c)
+		if err != nil {
+			return err
+		}
+		return tui.Run(cmd.Context(), c, resume, dial)
 	}
 	root.Flags().BoolVar(&resume, "resume", false, "choose a saved conversation for this directory")
 	server.Flags().StringVar(&terminalAuth, "terminal-auth", "", "ACP terminal authentication")
@@ -81,7 +89,15 @@ func main() {
 		}
 		return fmt.Errorf("unknown MCP server %q", args[0])
 	}})
-	root.AddCommand(server, bridge, mcp)
+	daemon := &cobra.Command{Use: "daemon", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		service := livesession.NewServer(ctx, func(options livesession.OpenOptions) (routing.Config, error) {
+			return routing.Load(settings.GetString("config"), options.Model, options.Account)
+		})
+		return localdaemon.ServeStarted(ctx, service.Handler(), service.Close)
+	}}
+	root.AddCommand(server, bridge, mcp, daemon)
 
 	if err := root.Execute(); err != nil {
 		log.Fatal(err)

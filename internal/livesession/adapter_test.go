@@ -42,28 +42,66 @@ func TestLiveAdapterFixture(t *testing.T) {
 	if os.Getenv("PETAL_LIVE_MODEL") == "child" {
 		adapter.id = "child"
 	}
+	awaitingStart := false
 	for adapter.in.Scan() {
 		frame := adapter.frame()
 		switch frame.Method {
 		case "initialize":
 			if adapter.v2 {
-				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"mcp":{"stdio":{}}}}}`))
+				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"fork":{},"list":{},"mcp":{"stdio":{}}}}}`))
 			} else {
-				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"close":{}}}}`))
+				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"fork":{},"close":{},"list":{}}}}`))
 			}
+		case "session/fork":
+			adapter.reply(frame.ID, map[string]string{"sessionId": "forked"})
 		case "session/new", "session/load", "session/resume":
+			if id := field(frame.Params, "sessionId"); id != "" {
+				adapter.id = id
+			}
 			supplied, err := filepath.EvalSymlinks(field(frame.Params, "cwd"))
 			resolved, resolveErr := filepath.EvalSymlinks(cwd)
 			if err != nil || resolveErr != nil || supplied != resolved {
 				t.Fatalf("adapter cwd %s, supplied %s", cwd, frame.Params["cwd"])
 			}
 			if frame.Method == "session/resume" {
+				_, activeErr := os.Stat(filepath.Join(cwd, "resume-running"))
+				if activeErr == nil {
+					adapter.text("resumed-history")
+				}
 				adapter.update(json.RawMessage(`{"sessionUpdate":"replay_complete"}`))
-				adapter.state("idle", "")
+				if activeErr == nil {
+					adapter.state("running", "")
+					adapter.text("resumed-active")
+				} else {
+					adapter.state("idle", "")
+				}
 			}
 			adapter.reply(frame.ID, map[string]any{"sessionId": adapter.id, "fixtureMCP": frame.Params["mcpServers"]})
 		case "session/prompt":
-			adapter.prompt(frame)
+			if adapter.v2 && strings.Contains(string(frame.Params["prompt"]), "reply-before-running") {
+				adapter.reply(frame.ID, map[string]string{"messageId": "acknowledged"})
+				adapter.state("idle", "")
+				awaitingStart = true
+			} else {
+				adapter.prompt(frame)
+			}
+		case "session/list":
+			if awaitingStart {
+				awaitingStart = false
+				adapter.state("running", "")
+				adapter.state("idle", "end_turn")
+			} else {
+				adapter.update(map[string]string{"sessionUpdate": "notice", "message": "list waiting for prompt"})
+				prompt := adapter.read()
+				if prompt.Method != "session/prompt" {
+					t.Fatalf("expected prompt while listing, got %s", prompt.Method)
+				}
+				adapter.prompt(prompt)
+			}
+			adapter.reply(frame.ID, json.RawMessage(`{"sessions":[]}`))
+		case "session/cancel":
+			adapter.text("adapter-cancelled")
+			adapter.state("idle", "cancelled")
 		case "session/close":
 			adapter.reply(frame.ID, map[string]string{})
 		default:
@@ -193,13 +231,24 @@ func (a adapterFixture) prompt(frame adapterFrame) {
 		return
 	}
 	switch {
+	case text == "list overlap":
+		a.text("prompt during list")
 	case a.id == "child":
 		a.text("child-work")
 	case strings.Contains(text, "child-work") || strings.Contains(text, "activity"):
 		a.text("delegation-wake")
+		if a.v2 {
+			if cancel := a.read(); cancel.Method != "session/cancel" || field(cancel.Params, "sessionId") != a.id {
+				a.t.Fatalf("expected cancellation of the wake, got %+v", cancel)
+			}
+			a.text("wake-cancelled")
+		}
 	default:
 		a.text("before ")
 		a.waitForRelease()
+		if text == "input" {
+			a.update(map[string]string{"sessionUpdate": "session_info_update", "title": "Detached title", "updatedAt": "2024-01-12T08:00:00Z"})
+		}
 		if text != "delegate" {
 			a.permission()
 			if !a.v2 {
@@ -245,6 +294,7 @@ func (a adapterFixture) workspace() {
 	if err := json.Unmarshal(terminal, &created); err != nil || created.TerminalID == "" {
 		a.t.Fatalf("terminal creation result = %s, %v", terminal, err)
 	}
+	a.update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "run", "title": "Read source", "content": []map[string]string{{"type": "terminal", "terminalId": created.TerminalID}}})
 	args := map[string]any{"terminalId": created.TerminalID}
 	a.request("terminal/wait_for_exit", args)
 	output := a.request("terminal/output", args)
@@ -253,4 +303,5 @@ func (a adapterFixture) workspace() {
 		a.t.Fatalf("terminal output = %s, %v", output, err)
 	}
 	a.request("terminal/release", args)
+	a.update(map[string]string{"sessionUpdate": "tool_call_update", "toolCallId": "run", "status": "completed"})
 }

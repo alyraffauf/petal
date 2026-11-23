@@ -48,6 +48,22 @@ func TestDelegationFollowsUpWithNoController(t *testing.T) {
 			if !strings.Contains(string(wake.Params), "thread") {
 				t.Fatalf("child result reached wrong session: %+v", wake)
 			}
+			if version == 2 {
+				reconnected := dial()
+				active := takeControl(t, ctx, reconnected, AttachOptions{Handle: setup.Handle, Control: true})
+				if !active.Running || active.Turn == 0 || active.Turn == 3 || active.ActiveOperation != 0 {
+					t.Fatalf("delegation wake lacks independent turn identity: %+v", active)
+				}
+				if err := reconnected.Cancel(ctx, 3); !hasCode(err, NotFound) {
+					t.Fatalf("cancel by old prompt operation: %v", err)
+				}
+				if err := reconnected.Cancel(ctx, active.Turn); err != nil {
+					t.Fatal(err)
+				}
+				advance(t, ctx, observer, &cursor, func(event Event) bool {
+					return strings.Contains(string(event.Params), "wake-cancelled")
+				})
+			}
 			if rows, err := sessions.Transcript(cwd, childID); err != nil || len(rows) == 0 || rows[len(rows)-1].Body != "child-work" {
 				t.Fatalf("child archive = %+v, %v", rows, err)
 			}

@@ -36,6 +36,7 @@ type event struct {
 	chunk          bool
 }
 type harness struct {
+	daemon               *daemonSession
 	requestedModel       string
 	updateSlots          chan struct{}
 	resumedHistory       []entry
@@ -76,7 +77,7 @@ func (h *harness) callback(ctx context.Context, method string, raw json.RawMessa
 		case "session/request_permission":
 			return h.permissionV2(ctx, raw)
 		case "session/update":
-			handled, err := h.updateV2(ctx, raw)
+			handled, err := h.updateV2(ctx, raw, 0)
 			if handled || err != nil {
 				return nil, err
 			}
@@ -240,10 +241,8 @@ func (h *harness) callback(ctx context.Context, method string, raw json.RawMessa
 							}
 						case "terminal":
 							output = append(output, "Terminal · "+p.TerminalID)
-							if h.host != nil {
-								if view := h.host.OutputView(sessionID, p.TerminalID); view != nil {
-									tool.terminals = append(tool.terminals, view)
-								}
+							if view := h.terminalView(sessionID, p.TerminalID); view != nil {
+								tool.terminals = append(tool.terminals, view)
 							}
 						}
 					}
@@ -372,17 +371,7 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	if err != nil {
 		return "", err
 	}
-	h.promptCaps = hello.AgentCapabilities.PromptCapabilities
-	h.canDelete = hello.AgentCapabilities.SessionCapabilities.Delete != nil
-	h.canLogout = hello.AgentCapabilities.Auth.Logout != nil
-	h.canFork = hello.AgentCapabilities.SessionCapabilities.Fork != nil && (hello.AgentCapabilities.LoadSession || hello.AgentCapabilities.SessionCapabilities.Resume != nil)
-	h.canList = hello.AgentCapabilities.SessionCapabilities.List != nil
-	h.canClose = hello.AgentCapabilities.SessionCapabilities.Close != nil
-	authenticate := "authenticate"
-	if h.v2.Load() {
-		authenticate = "auth/login"
-		h.canLogout = len(hello.AuthMethods) != 0
-	}
+	h.setCapabilities(hello)
 	// The embedded proxy resolves configured MCP credentials and transport capabilities.
 	p := map[string]any{"cwd": cwd, "mcpServers": []any{}}
 	method := "session/new"
@@ -406,61 +395,7 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 		}
 	}
 	h.replayed = method == "session/load" || (resume && h.v2.Load())
-	r, err := acp.SendRequest[proxy.Object](h.conn, ctx, method, p)
-	var authErr *acp.RequestError
-	if errors.As(err, &authErr) && authErr.Code == -32000 {
-		var options []option
-		for _, m := range hello.AuthMethods {
-			if m.Terminal != nil {
-				options = append(options, option{string(m.Terminal.Id), m.Terminal.Name})
-			}
-			if m.Agent != nil {
-				options = append(options, option{string(m.Agent.Id), m.Agent.Name})
-			}
-		}
-		if len(options) > 0 {
-			id, askErr := h.choose(ctx, "Choose a sign-in method", options)
-			if askErr != nil {
-				return "", askErr
-			}
-			if id != "" {
-				for _, m := range hello.AuthMethods {
-					if m.Terminal == nil || string(m.Terminal.Id) != id {
-						continue
-					}
-					login := m.Terminal
-					if len(login.Args) != 1 || !strings.HasPrefix(login.Args[0], "--terminal-auth=") {
-						return "", fmt.Errorf("invalid terminal sign-in invocation")
-					}
-					cmd, err := proxy.LoginCommand(ctx, c, strings.TrimPrefix(login.Args[0], "--terminal-auth="))
-					if err != nil {
-						return "", err
-					}
-					for k, v := range login.Env {
-						cmd.Env = append(cmd.Env, k+"="+v)
-					}
-					q := terminalSignIn{cmd, make(chan error, 1)}
-					select {
-					case h.events <- q:
-					case <-ctx.Done():
-						return "", ctx.Err()
-					}
-					select {
-					case err := <-q.done:
-						if err != nil {
-							return "", err
-						}
-						return "", signedIn
-					case <-ctx.Done():
-						return "", ctx.Err()
-					}
-				}
-				if _, err = acp.SendRequest[proxy.Object](h.conn, ctx, authenticate, map[string]string{"methodId": id}); err == nil {
-					r, err = acp.SendRequest[proxy.Object](h.conn, ctx, method, p)
-				}
-			}
-		}
-	}
+	r, err := h.openWithAuth(ctx, c, hello, method, p)
 	if err != nil {
 		return "", err
 	}
@@ -499,24 +434,8 @@ func (h *harness) open(ctx context.Context, c routing.Config, cwd string, resume
 	if err := h.prepareSessionRecord(ctx, initialRecord, resume); err != nil {
 		return "", err
 	}
-	if model := h.requestedModel; !resume && model != "" {
-		target := h.initialSettings.byCategory("model")
-		if target.current() != model {
-			if target.ID == "" {
-				return "", fmt.Errorf("adapter does not offer the requested model %q", model)
-			}
-			result := h.changeSetting(ctx, target, model)
-			if result.err != nil {
-				return "", result.err
-			}
-			h.initialSettings.Config = result.options.Config
-			if h.initialSettings.byCategory("model").current() != model {
-				return "", fmt.Errorf("adapter did not confirm model %q", model)
-			}
-		}
-		if err := h.rememberSetting(sessions.Selection{ID: target.ID, Value: model}); err != nil {
-			return "", err
-		}
+	if err := h.applyRequestedModel(ctx, resume); err != nil {
+		return "", err
 	}
 	if c.PinnedAccount != "" {
 		return c.PinnedAccount, nil
@@ -550,4 +469,105 @@ func (h *harness) updateRecord(edit func(*sessions.Record) bool) error {
 		h.record = updated
 	}
 	return err
+}
+
+func (h *harness) setCapabilities(hello acp.InitializeResponse) {
+	h.promptCaps = hello.AgentCapabilities.PromptCapabilities
+	h.canDelete = hello.AgentCapabilities.SessionCapabilities.Delete != nil
+	h.canLogout = hello.AgentCapabilities.Auth.Logout != nil
+	h.canFork = hello.AgentCapabilities.SessionCapabilities.Fork != nil && (h.v2.Load() || hello.AgentCapabilities.LoadSession || hello.AgentCapabilities.SessionCapabilities.Resume != nil)
+	h.canList = hello.AgentCapabilities.SessionCapabilities.List != nil
+	h.canClose = hello.AgentCapabilities.SessionCapabilities.Close != nil
+	if h.v2.Load() {
+		h.canLogout = len(hello.AuthMethods) != 0
+	}
+}
+
+func (h *harness) openWithAuth(ctx context.Context, c routing.Config, hello acp.InitializeResponse, method string, p map[string]any) (proxy.Object, error) {
+	authenticate := "authenticate"
+	if h.v2.Load() {
+		authenticate = "auth/login"
+	}
+	r, err := sendRequest[proxy.Object](h, ctx, method, p)
+	var authErr *acp.RequestError
+	if errors.As(err, &authErr) && authErr.Code == -32000 {
+		var options []option
+		for _, m := range hello.AuthMethods {
+			if m.Terminal != nil {
+				options = append(options, option{string(m.Terminal.Id), m.Terminal.Name})
+			}
+			if m.Agent != nil {
+				options = append(options, option{string(m.Agent.Id), m.Agent.Name})
+			}
+		}
+		if len(options) > 0 {
+			id, askErr := h.choose(ctx, "Choose a sign-in method", options)
+			if askErr != nil {
+				return nil, askErr
+			}
+			if id != "" {
+				for _, m := range hello.AuthMethods {
+					if m.Terminal == nil || string(m.Terminal.Id) != id {
+						continue
+					}
+					login := m.Terminal
+					if len(login.Args) != 1 || !strings.HasPrefix(login.Args[0], "--terminal-auth=") {
+						return nil, fmt.Errorf("invalid terminal sign-in invocation")
+					}
+					cmd, err := proxy.LoginCommand(ctx, c, strings.TrimPrefix(login.Args[0], "--terminal-auth="))
+					if err != nil {
+						return nil, err
+					}
+					for k, v := range login.Env {
+						cmd.Env = append(cmd.Env, k+"="+v)
+					}
+					if h.cwd != "" {
+						cmd.Dir = h.cwd
+					}
+					q := terminalSignIn{cmd, make(chan error, 1)}
+					select {
+					case h.events <- q:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+					select {
+					case err := <-q.done:
+						if err != nil {
+							return nil, err
+						}
+						return nil, signedIn
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				}
+				if _, err = sendRequest[proxy.Object](h, ctx, authenticate, map[string]string{"methodId": id}); err == nil {
+					r, err = sendRequest[proxy.Object](h, ctx, method, p)
+				}
+			}
+		}
+	}
+	return r, err
+}
+
+func (h *harness) applyRequestedModel(ctx context.Context, resume bool) error {
+	if model := h.requestedModel; !resume && model != "" {
+		target := h.initialSettings.byCategory("model")
+		if target.current() != model {
+			if target.ID == "" {
+				return fmt.Errorf("adapter does not offer the requested model %q", model)
+			}
+			result := h.changeSetting(ctx, target, model)
+			if result.err != nil {
+				return result.err
+			}
+			h.initialSettings.Config = result.options.Config
+			if h.initialSettings.byCategory("model").current() != model {
+				return fmt.Errorf("adapter did not confirm model %q", model)
+			}
+		}
+		if err := h.rememberSetting(sessions.Selection{ID: target.ID, Value: model}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

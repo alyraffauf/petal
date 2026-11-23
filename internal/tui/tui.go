@@ -11,17 +11,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"bloomfx.dev/bloom"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
-	"github.com/charmbracelet/x/ansi"
+
 	acp "github.com/coder/acp-go-sdk"
 
-	"petal/internal/proxy"
+	"petal/internal/acphost"
+	"petal/internal/livesession"
 	"petal/internal/routing"
 	"petal/internal/sessions"
 )
@@ -60,17 +60,7 @@ type screen struct {
 	commandIndex                int
 }
 
-func clean(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\t' {
-			return ' '
-		}
-		if unicode.IsControl(r) && r != '\n' {
-			return -1
-		}
-		return r
-	}, ansi.Strip(s))
-}
+func clean(s string) string { return acphost.CleanText(s) }
 
 type animationFrame struct{}
 
@@ -129,6 +119,7 @@ type sessionStart struct {
 	requestedModel string
 	cwd            string
 	id             string
+	handle         string
 	cfg            routing.Config
 	resume         bool
 	editor         *composer
@@ -142,19 +133,31 @@ func (m *terminal) retrySession() *sessionStart {
 	return start
 }
 
-func Run(parent context.Context, c routing.Config, resume bool) error {
+func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDialer) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 	c.ResolveDefaultLabels(parent, cwd)
-	start, ok, err := pick(cwd, c, resume)
-	if err != nil || !ok {
+	client, err := dial(parent)
+	if err != nil {
 		return err
+	}
+	live, err := client.List(parent)
+	client.Close()
+	if err != nil {
+		return err
+	}
+	start, ok := recentLiveSession(cwd, c, live)
+	if resume || !ok {
+		start, ok, err = pick(cwd, c, resume)
+		if err != nil || !ok {
+			return err
+		}
 	}
 	drafts := make(sessionDrafts)
 	for {
-		next, err := runSession(parent, start, drafts)
+		next, err := runSession(parent, start, drafts, dial)
 		if err != nil || next == nil {
 			return err
 		}
@@ -164,34 +167,54 @@ func Run(parent context.Context, c routing.Config, resume bool) error {
 		start = *next
 	}
 }
-func runSession(parent context.Context, start sessionStart, drafts sessionDrafts) (*sessionStart, error) {
+func recentLiveSession(cwd string, cfg routing.Config, sessions []livesession.Info) (sessionStart, bool) {
+	var latest livesession.Info
+	for _, live := range sessions {
+		if live.Cwd != cwd || live.AdapterExited || (cfg.PinnedAccount != "" && live.PinnedAccount != cfg.PinnedAccount) {
+			continue
+		}
+		if latest.Handle == "" || live.LastAttached.After(latest.LastAttached) {
+			latest = live
+		}
+	}
+	if latest.Handle == "" {
+		return sessionStart{}, false
+	}
+	cfg.Model, cfg.PinnedAccount = latest.Model, latest.PinnedAccount
+	id := latest.SessionID
+	if id == "" {
+		id = latest.ResumeID
+	}
+	return sessionStart{cwd: cwd, cfg: cfg, resume: id != "", id: id, handle: latest.Handle}, true
+}
+
+func runSession(parent context.Context, start sessionStart, drafts sessionDrafts, dial DaemonDialer) (*sessionStart, error) {
 	c := start.cfg
 	ctx, stop := context.WithCancel(parent)
 	defer stop()
 	m := &terminal{root: bloom.New(), ctx: ctx, cfg: c, resume: start.resume, resumeID: start.id}
 	cwd := start.cwd
 	m.screen = screen{transcriptRevision: 1, background: canvasBackground(c.TransparentBackground), Cwd: cwd, Model: c.Model, Account: c.PinnedAccount, connection: connecting}
-	m.h = startHarness(ctx, c)
+	client, err := dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	m.h = &harness{
+		daemon:   &daemonSession{client: client, dial: dial, handle: start.handle},
+		graphics: directGraphicsTerminal(), lifetime: ctx, events: make(chan tea.Msg, 128), permissions: make(chan struct{}, 1),
+	}
 	m.h.requestedModel = start.requestedModel
 	m.h.id = start.id
-	defer m.h.close()
 	m.draftSessionID = start.id
 	m.editor = drafts.take(cwd, start)
 	m.markdown = &markdownCache{}
 	if directGraphicsTerminal() {
 		defer os.Stdout.WriteString("\x1b[?5522l")
 	}
-	err := runChat(m)
-	if m.v2 != nil && m.connection == connected {
-		m.publishV2Transcript(true)
-	}
+	err = runChat(m)
 	if m.next != nil {
 		drafts.remember(m)
-	}
-	if m.h != nil && m.connection == connected && m.h.canClose {
-		closeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		_, _ = acp.SendRequest[proxy.Object](m.h.conn, closeCtx, "session/close", map[string]string{"sessionId": m.h.id})
-		cancel()
 	}
 	return m.next, err
 }
@@ -287,7 +310,16 @@ func (m *terminal) Init() tea.Cmd {
 		pasteMode = tea.Raw("\x1b[?5522h")
 	}
 	return tea.Batch(m.openingTranscript(), pasteMode, m.root.Init(), m.listen, func() tea.Msg {
-		a, e := m.h.open(m.ctx, m.cfg, m.Cwd, m.resume)
+		var a string
+		var e error
+		if m.h.daemon != nil {
+			a, e = m.h.openDaemon(m.ctx, m.cfg, m.Cwd, m.resume)
+			if e == nil {
+				return nil
+			}
+		} else {
+			a, e = m.h.open(m.ctx, m.cfg, m.Cwd, m.resume)
+		}
 		select {
 		case m.h.events <- opened{a, e}:
 		case <-m.ctx.Done():
@@ -304,6 +336,10 @@ func (m *terminal) View() tea.View {
 		return m.urlView()
 	}
 	v := m.screen
+	if m.connection == connecting && m.ask == nil && m.h != nil && m.h.daemon != nil {
+		v.Messages = nil
+		v.planRows = nil
+	}
 	if len(m.urls) > 0 && m.ask == nil {
 		v.notice = &acp.SessionUpdateNotice{Severity: "info", Title: "External sign-in requested · F6 Review"}
 	}
@@ -392,6 +428,7 @@ func (m *terminal) submit() tea.Cmd {
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(m.Cwd, path)
 		}
+		path = filepath.Clean(path)
 		info, err := os.Stat(path)
 		if err != nil {
 			m.recordNote(terminalError(err))
@@ -690,6 +727,110 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		cmd = m.deliver()
+	case daemonReplayReset:
+		m.connection = connecting
+		m.Messages, m.openingPreview = nil, nil
+		m.pending, m.turnStart = turnLog{}, 0
+		m.agents = agentBrowser{}
+		m.plans, m.planRows, m.legacyPlan = nil, nil, nil
+		m.v2, m.Busy = nil, false
+		m.streamSource, m.streamPreview = nil, ""
+		m.cancelling, m.waitForTurn = false, false
+		clear(m.tools)
+		if m.ask != nil {
+			m.ask = nil
+			m.restorePermissionDraft()
+		}
+		cmd = m.listen
+	case daemonReplayStart:
+		m.Messages = append(m.Messages, t.prompt...)
+		m.turnStart = len(m.Messages)
+		cmd = m.listen
+	case daemonReplayFinish:
+		m.agents.publish()
+		if !t.active {
+			m.Messages = m.pending.commit(m.Messages[:m.turnStart])
+			m.turnStart = len(m.Messages)
+			clear(m.tools)
+		}
+		cmd = m.listen
+	case daemonOpened:
+		m.openingPreview = nil
+		m.connection = connected
+		m.resume, m.resumeID, m.draftSessionID = true, t.snapshot.SessionID, t.snapshot.SessionID
+		m.Account = t.snapshot.Account
+		m.Model, m.cfg.Model = t.snapshot.Model, t.snapshot.Model
+		m.agentSettings = settingsFrom(v2Object(t.snapshot.Setup))
+		if m.agentCommands == nil {
+			m.agentCommands = m.h.initialCommands
+		}
+		m.saveSessionInfo()
+		m.Messages = append(t.history, m.Messages...)
+		m.turnStart += len(t.history)
+		m.agents.publish()
+		m.cancelling = t.snapshot.Canceling
+		if m.h.v2.Load() {
+			conversation := m.conversationV2()
+			conversation.archiveRows = len(t.history)
+			conversation.turn = t.snapshot.Turn
+			foreground := &conversation.foreground
+			if t.snapshot.Foreground != "" {
+				foreground.report(t.snapshot.Foreground)
+			}
+			foreground.submitting = t.snapshot.ActiveMethod == "session/prompt"
+			foreground.awaitingStart = t.snapshot.Turn != 0 && !t.snapshot.TurnStarted
+			m.refreshForegroundV2()
+			m.publishV2Transcript(true)
+		} else {
+			m.Busy = t.snapshot.Running
+			m.Status = "ready"
+			if m.Busy {
+				m.Status = "working"
+				if m.cfg.StreamResponses && m.pending.last != nil && m.pending.last.role == "assistant" {
+					m.streamSource = m.pending.last
+				}
+			}
+		}
+		if t.partial {
+			m.recordNote("Some updates after the saved transcript expired. Showing the saved transcript and retained updates.")
+		} else if t.gap {
+			m.recordNote("Some live events expired. Showing the saved transcript and available updates.")
+		}
+		cmd = m.listen
+	case daemonNotice:
+		m.recordNote(t.text)
+		cmd = m.listen
+	case daemonCancelFinished:
+		if t.err != nil {
+			m.cancelling = false
+			m.recordNote(terminalError(t.err))
+		}
+		cmd = m.listen
+		if m.v2 != nil {
+			if m.v2.turn != t.turn && !m.v2.foreground.awaitingStart {
+				m.cancelling = false
+			}
+			m.refreshForegroundV2()
+			cmd = tea.Batch(cmd, m.deliver())
+		} else {
+			m.Status = "working"
+		}
+	case daemonDisconnected:
+		if m.connection == connecting {
+			m.Messages = m.openingPreview
+			m.pending = turnLog{}
+		}
+		m.connection = connectionFailed
+		m.Busy, m.cancelling = false, false
+		m.Status = "disconnected"
+		if m.ask != nil {
+			m.ask = nil
+			m.restorePermissionDraft()
+		}
+		if m.h.id != "" {
+			m.resume, m.resumeID = true, m.h.id
+		}
+		m.recordNote("Live session disconnected · " + terminalError(t.err))
 	case cachedPreview:
 		if m.connection == connecting {
 			m.openingPreview = t
@@ -702,6 +843,11 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.resume {
 				m.resumeID = m.h.id
 			}
+		}
+		if t.err == reopenAfterExit {
+			m.resume, m.resumeID = true, m.h.id
+			m.next = m.retrySession()
+			return m, tea.Quit
 		}
 		if t.err == signedIn {
 			m.next = m.retrySession()
@@ -771,7 +917,11 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.listen
 		conversation := m.conversationV2()
 		if t.SessionUpdate == "state_update" {
+			conversation.turn = t.turn
 			completed := conversation.foreground.report(t.State)
+			if !conversation.foreground.awaitingStart && !conversation.foreground.submitting {
+				conversation.promptWrite = nil
+			}
 			if t.State == "idle" && !conversation.foreground.awaitingStart {
 				m.cancelling = false
 			}
@@ -786,8 +936,10 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case promptV2Result:
 		foreground := &m.conversationV2().foreground
-		m.v2.promptWritten = nil
 		foreground.settlePrompt(t.err)
+		if !foreground.awaitingStart {
+			m.v2.promptWrite = nil
+		}
 		if t.err != nil {
 			if foreground.state == "" || foreground.state == "idle" {
 				m.cancelling = false

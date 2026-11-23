@@ -2,7 +2,9 @@
 
 ## Start a conversation
 
-Run `petal` in your project directory. Select **new session** to choose a model, or press **Ctrl+N** to use the default model. To pick the subscription yourself, press **Tab** in the model picker.
+Run `petal` in your project directory. If the directory has a live conversation, Petal reattaches to the one you used most recently. Otherwise it opens the control center. Select **new session** to choose a model, or press **Ctrl+N** to use the default model. To pick the subscription yourself, press **Tab** in the model picker.
+
+On Linux and macOS, Petal starts a background daemon on demand and connects through a private Unix socket. An explicit `--config` path uses a separate daemon so that it can load that file independently.
 
 Send a prompt to start the turn. Press **Shift+Enter** for a new line. Press **Escape** to cancel a running turn.
 
@@ -10,25 +12,28 @@ If you send another message while the agent works, Petal steers the turn when th
 
 When the agent asks for permission, type the number of an option. **Escape** declines.
 
+Press **Ctrl+C** or type `/quit` to detach. The agent and its delegated children keep running, and any unanswered permissions are waiting when you return. Use `/close` to end the live session and keep its saved conversation. Only one terminal can control a live session at a time.
+
 ## Run a command
 
 Type `/` to list the commands from Petal and from the agent. Petal shows only the commands that apply to the current conversation.
 
 ![Slash commands above the composer, with the selected command and its Run action](screenshots/commands.png)
 
-| Command                            | Action                                                    |
-| ---------------------------------- | --------------------------------------------------------- |
-| `/new`, `/resume`                  | Start a thread, or resume a saved one.                    |
+| Command                            | Action                                                                                                        |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `/new`, `/resume`                  | Start a thread, or resume a saved one.                                                                        |
 | `/new <directory>`                 | Start a fresh thread there using the current model. Relative paths start from the current thread’s directory. |
-| `/model`, `/subscription`          | Change the model, or start a thread on a chosen account.  |
-| `/effort`, `/mode`, `/permissions` | Change reasoning effort, agent mode, or the Codex preset. |
-| `/config`                          | Change any other setting that the agent offers.           |
-| `/fork`, `/parent`                 | Branch the conversation, or return to its parent.         |
-| `/sessions`, `/agents`             | Open the control center, or focus a subagent in it.       |
-| `/search`, `/history`              | Search project transcripts, or read this conversation.    |
-| `/attach`, `/paste-image`          | Send a file, or an image from the clipboard.              |
-| `/usage`                           | Show context usage and session cost.                      |
-| `/delete`, `/logout`, `/quit`      | Delete the conversation, sign out, or exit.               |
+| `/model`, `/subscription`          | Change the model, or start a thread on a chosen account.                                                      |
+| `/effort`, `/mode`, `/permissions` | Change reasoning effort, agent mode, or the Codex preset.                                                     |
+| `/config`                          | Change any other setting that the agent offers.                                                               |
+| `/fork`, `/parent`                 | Branch the conversation, or return to its parent.                                                             |
+| `/sessions`, `/agents`             | Open the control center, or focus a subagent in it.                                                           |
+| `/search`, `/history`              | Search project transcripts, or read this conversation.                                                        |
+| `/attach`, `/paste-image`          | Send a file, or an image from the clipboard.                                                                  |
+| `/usage`                           | Show context usage and session cost.                                                                          |
+| `/delete`, `/logout`               | Delete the conversation or sign out.                                                                          |
+| `/close`, `/quit`                  | End the live session or detach the terminal.                                                                  |
 
 If an agent command has the same name as a Petal command, type `/agent:` before its name.
 
@@ -44,7 +49,7 @@ To search the saved messages in this project, press **Ctrl+F** in the control ce
 
 Press **Page Up** to scroll back, or press **F3** to open the full-screen reader. In the control center, open **conversation turns** to jump to a prompt in the active thread.
 
-`petal --resume` starts with your most recent saved thread selected in the control center. While Petal runs, it keeps the unsent draft of each thread that you switch away from.
+`petal --resume` starts with your most recent saved thread selected in the control center. While the terminal process runs, it keeps the unsent draft of each thread that you switch away from. Drafts and follow-ups still queued in the terminal disappear when you exit. After a daemon restart, choose a saved conversation to reopen it.
 
 ## Follow subagents
 

@@ -70,6 +70,10 @@ func TestLiveSessionDetachOverUnixSocket(t *testing.T) {
 			}
 			observerCursor := before.Sequence
 			questionEvent := advance(t, ctx, observer, &observerCursor, func(event Event) bool { return event.Kind == QuestionOpened })
+			record, err = sessions.Lookup(cwd, sessionID)
+			if err != nil || record.Title != "Detached title" || record.Updated.UTC().Format(time.RFC3339) != "2024-01-12T08:00:00Z" {
+				t.Fatalf("detached metadata = %+v, %v", record, err)
+			}
 			question := questionEvent.Question
 			if err := observer.Answer(ctx, Answer{QuestionID: question.ID, OptionID: "allow"}); !hasCode(err, ReadOnly) {
 				t.Fatalf("observer answer: %v", err)
@@ -152,10 +156,20 @@ func TestLiveSessionDetachOverUnixSocket(t *testing.T) {
 				t.Fatalf("replay/live boundary %d: question %d (%d/%d), tail %d", replay.Head, questionEvent.Sequence, openings, closures, after.Sequence)
 			}
 			rows, err := sessions.Transcript(cwd, sessionID)
-			if err != nil || len(rows) != 2 || rows[0].Body != "input" || rows[1].Body != "before after" {
+			if err != nil || len(rows) == 0 || rows[0].Body != "input" {
 				t.Fatalf("archived transcript = %+v, %v", rows, err)
 			}
+			if version == 2 && (len(rows) != 2 || rows[1].Body != "before after") {
+				t.Fatalf("archived v2 response = %+v", rows)
+			}
 			if version == 1 {
+				if len(rows) != 4 || rows[1].Body != "before " || rows[2].Role != "tool" || rows[3].Body != "after" {
+					t.Fatalf("archived v1 response = %+v", rows)
+				}
+				hits, err := sessions.Search(cwd, "", "workspace contents", 0, 10)
+				if err != nil || len(hits) != 1 || hits[0].Session != sessionID || hits[0].Row != rows[2].Rowid {
+					t.Fatalf("terminal output search = %+v, %v", hits, err)
+				}
 				written, err := os.ReadFile(filepath.Join(cwd, "written"))
 				if err != nil || string(written) != "workspace contents" {
 					t.Fatalf("host write = %q, %v", written, err)
@@ -205,6 +219,91 @@ func TestLiveSessionDetachOverUnixSocket(t *testing.T) {
 	}
 }
 
+func TestResumedSettingsGateAndV2CancellationSurviveReconnect(t *testing.T) {
+	ctx, dial := startSocket(t, 2, false)
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "resume-running"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	const id = `["fake","fixture","thread"]`
+	opts := OpenOptions{Handle: NewHandle(), Cwd: cwd, Model: "fixture", ResumeID: id}
+	client := dial()
+	resumed := openSession(t, ctx, client, opts, 2)
+	if !resumed.SettingsPending || !resumed.Running || !resumed.TurnStarted || resumed.Turn == 0 || resumed.ActiveOperation != 0 {
+		t.Fatalf("resumed state = %+v", resumed)
+	}
+	rows, err := sessions.Transcript(cwd, id)
+	if err != nil || resumed.ArchiveCursor == 0 || resumed.ArchiveHead == 0 ||
+		len(rows) != 1 || rows[0].Body != "resumed-history" {
+		t.Fatalf("resume checkpoint must exclude active updates: %+v, rows %+v, %v", resumed, rows, err)
+	}
+	archiveCursor := resumed.ArchiveCursor
+	tail := advance(t, ctx, client, &archiveCursor, func(event Event) bool {
+		return strings.Contains(string(event.Params), "resumed-active")
+	})
+	if tail.Sequence > resumed.Head {
+		t.Fatalf("active tail should be retained at the setup snapshot: %+v", tail)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	client = dial()
+	reconnected := takeControl(t, ctx, client, AttachOptions{Handle: opts.Handle, Control: true})
+	if !reconnected.SettingsPending || reconnected.Turn != resumed.Turn {
+		t.Fatalf("reconnected state = %+v", reconnected)
+	}
+	prompt := Call{Operation: reconnected.NextOperation, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"cancel"}]}`)}
+	if _, err := client.Submit(ctx, prompt); !hasCode(err, Conflict) {
+		t.Fatalf("prompt bypassed required settings review: %v", err)
+	}
+	if err := client.ConfirmSettings(ctx, reconnected.SettingsRevision-1); !hasCode(err, Conflict) {
+		t.Fatalf("confirmation accepted a stale revision: %v", err)
+	}
+	if err := client.Cancel(ctx, resumed.Turn); err != nil {
+		t.Fatal(err)
+	}
+	cursor := reconnected.Head
+	idle, cancelled := false, false
+	advance(t, ctx, client, &cursor, func(event Event) bool {
+		idle = idle || strings.Contains(string(event.Params), `"state":"idle"`)
+		cancelled = cancelled || event.Kind == CancelFinished && event.Turn == resumed.Turn
+		return idle && cancelled
+	})
+	if _, err := client.Submit(ctx, prompt); !hasCode(err, Conflict) {
+		t.Fatalf("prompt bypassed settings review after idle: %v", err)
+	}
+	if err := client.ConfirmSettings(ctx, reconnected.SettingsRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	client = dial()
+	confirmed := takeControl(t, ctx, client, AttachOptions{Handle: opts.Handle, Control: true})
+	if confirmed.SettingsPending {
+		t.Fatalf("confirmation lost on reconnect: %+v", confirmed)
+	}
+	submit(t, ctx, client, prompt)
+	cursor = confirmed.Head
+	started := advance(t, ctx, client, &cursor, func(event Event) bool { return strings.Contains(string(event.Params), `"state":"running"`) })
+	if started.Turn == 0 || started.Turn == resumed.Turn {
+		t.Fatalf("new turn identity = %d", started.Turn)
+	}
+	if err := client.Cancel(ctx, resumed.Turn); !hasCode(err, NotFound) {
+		t.Fatalf("cancel by previous turn ID: %v", err)
+	}
+	state, err := client.Snapshot(ctx)
+	if err != nil || !state.Running || state.Turn != started.Turn {
+		t.Fatalf("stale cancellation changed the current turn: %+v, %v", state, err)
+	}
+	if err := client.Cancel(ctx, started.Turn); err != nil {
+		t.Fatal(err)
+	}
+	advance(t, ctx, client, &cursor, func(event Event) bool { return strings.Contains(string(event.Params), "adapter-cancelled") })
+}
+
 func TestLiveV2AdapterExitClearsRunningState(t *testing.T) {
 	ctx, dial := startSocket(t, 2, false)
 	client := dial()
@@ -227,6 +326,11 @@ func hasCode(err error, want Code) bool {
 }
 
 func startSocket(t *testing.T, version int, delegation bool) (context.Context, func() *Client) {
+	t.Helper()
+	return startSocketWithGrace(t, version, delegation, OpenReservationGrace)
+}
+
+func startSocketWithGrace(t *testing.T, version int, delegation bool, grace time.Duration) (context.Context, func() *Client) {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root, err := os.MkdirTemp("/tmp", "petal-live-")
@@ -262,6 +366,7 @@ func startSocket(t *testing.T, version int, delegation bool) (context.Context, f
 			Accounts: map[string]routing.Account{"fake": fixture("fixture"), "child": fixture("child")},
 		}, nil
 	})
+	server.reservationGrace = grace
 	done := make(chan error, 1)
 	go func() { done <- endpoint.Serve(ctx, server.Handler()) }()
 	t.Cleanup(func() {
@@ -366,9 +471,20 @@ func TestSteeringAcrossReceiptEviction(t *testing.T) {
 	client := dial()
 	opts := OpenOptions{Handle: NewHandle(), Cwd: t.TempDir(), Model: "fixture"}
 	setup := openSession(t, ctx, client, opts, 1)
+	if err := sessions.SaveTranscript(opts.Cwd, setup.SessionID, []sessions.Message{{Role: "assistant", Body: "prior turn"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	priorHead, err := sessions.TranscriptHead(ctx, opts.Cwd, setup.SessionID)
+	if err != nil || priorHead == 0 {
+		t.Fatalf("prior archive boundary = %d, %v", priorHead, err)
+	}
 	prompt := Call{Operation: 3, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"hold for steering"}]}`)}
 	submit(t, ctx, client, prompt)
 	cursor := setup.Head
+	started := advance(t, ctx, client, &cursor, func(e Event) bool { return e.Kind == CallStarted && e.Operation == prompt.Operation })
+	if started.ArchiveHead == nil || *started.ArchiveHead != priorHead {
+		t.Fatalf("prompt replay boundary = %v, want %d", started.ArchiveHead, priorHead)
+	}
 	advance(t, ctx, client, &cursor, func(e Event) bool { return strings.Contains(string(e.Params), "ready for steering") })
 	for i := range receiptCount + 2 {
 		text := "defer input"
@@ -399,7 +515,126 @@ func TestSteeringAcrossReceiptEviction(t *testing.T) {
 		return e.Kind == CallFinished && e.Operation == 3
 	})
 	rows, err := sessions.Transcript(opts.Cwd, setup.SessionID)
-	if count != 1 || err != nil || len(rows) != 3 || rows[2].Role != "user" || rows[2].Body != "accepted input" {
+	if count != 1 || err != nil || len(rows) != 4 || rows[1].Rowid <= priorHead || rows[3].Role != "user" || rows[3].Body != "accepted input" {
 		t.Fatalf("replayed %d accepted inputs, archive %+v, error %v", count, rows, err)
+	}
+}
+
+func TestLiveV2ReattachesAfterPromptReplyBeforeRunning(t *testing.T) {
+	ctx, dial := startSocket(t, 2, false)
+	client := dial()
+	setup := openSession(t, ctx, client, OpenOptions{Handle: NewHandle(), Cwd: t.TempDir(), Model: "fixture"}, 2)
+	prompt := Call{Operation: setup.NextOperation, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"reply-before-running"}]}`)}
+	submit(t, ctx, client, prompt)
+	waitForResult(t, ctx, client, prompt.Operation)
+	cursor := setup.Head
+	idle := func(event Event) bool {
+		return event.Kind == Update && strings.Contains(string(event.Params), `"state":"idle"`)
+	}
+	advance(t, ctx, client, &cursor, idle)
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reconnected := dial()
+	snapshot := takeControl(t, ctx, reconnected, AttachOptions{Handle: setup.Handle, Control: true})
+	if !snapshot.AwaitingStart || snapshot.Running || snapshot.Turn != prompt.Operation || snapshot.ActiveOperation != 0 {
+		t.Fatalf("acknowledged prompt state = %+v", snapshot)
+	}
+	followUp := Call{Operation: snapshot.NextOperation, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"list overlap"}]}`)}
+	if _, err := reconnected.Submit(ctx, followUp); !hasCode(err, Busy) {
+		t.Fatalf("follow-up while awaiting start: %v", err)
+	}
+	// Release the adapter after observing the reattached state and checking
+	// admission. The adapter emits running and idle before the list response.
+	submit(t, ctx, reconnected, Call{Operation: followUp.Operation, Method: "session/list"})
+	waitForResult(t, ctx, reconnected, followUp.Operation)
+	advance(t, ctx, reconnected, &cursor, idle)
+	followUp.Operation++
+	submit(t, ctx, reconnected, followUp)
+	waitForResult(t, ctx, reconnected, followUp.Operation)
+}
+
+func TestLivePromptWhileSessionListIsPending(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
+			ctx, dial := startSocket(t, version, false)
+			client := dial()
+			cwd := t.TempDir()
+			setup := openSession(t, ctx, client, OpenOptions{Handle: NewHandle(), Cwd: cwd, Model: "fixture"}, version)
+			list := setup.NextOperation
+			submit(t, ctx, client, Call{Operation: list, Method: "session/list"})
+			cursor := setup.Head
+			advance(t, ctx, client, &cursor, func(event Event) bool {
+				return event.Kind == Update && strings.Contains(string(event.Params), "list waiting for prompt")
+			})
+			receipt, err := client.Result(ctx, list)
+			if err != nil || receipt.Done {
+				t.Fatalf("list must still be pending: %+v, %v", receipt, err)
+			}
+			prompt := Call{Operation: list + 1, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"list overlap"}]}`)}
+			submit(t, ctx, client, prompt)
+			waitForResult(t, ctx, client, prompt.Operation)
+			waitForResult(t, ctx, client, list)
+			if version == 2 {
+				advance(t, ctx, client, &cursor, func(event Event) bool {
+					return event.Kind == Update && strings.Contains(string(event.Params), `"state":"idle"`)
+				})
+			}
+			rows, err := sessions.Transcript(cwd, setup.SessionID)
+			if err != nil || len(rows) != 2 || rows[0].Role != "user" || rows[0].Body != "list overlap" || rows[1].Body != "prompt during list" {
+				t.Fatalf("transcript after overlap = %+v, %v", rows, err)
+			}
+		})
+	}
+}
+
+func waitForResult(t *testing.T, ctx context.Context, client *Client, operation uint64) {
+	t.Helper()
+	receipt, err := client.WaitResult(ctx, operation)
+	if err != nil || !receipt.Done || receipt.Err() != nil {
+		t.Fatalf("call %d receipt = %+v, %v", operation, receipt, err)
+	}
+}
+
+func TestResumeForkWhileParentIsAttached(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
+			ctx, dial := startSocket(t, version, false)
+			cwd := t.TempDir()
+			parent := dial()
+			root := openSession(t, ctx, parent, OpenOptions{Handle: NewHandle(), Cwd: cwd, Model: "fixture"}, version)
+			submit(t, ctx, parent, Call{Operation: 3, Method: "session/fork"})
+			result, err := parent.WaitResult(ctx, 3)
+			if err != nil || result.Err() != nil {
+				t.Fatalf("fork: %+v, %v", result, err)
+			}
+			var fork struct{ SessionID string }
+			if err := json.Unmarshal(result.Outcome.Result, &fork); err != nil || fork.SessionID == "" {
+				t.Fatalf("fork ID: %s, %v", result.Outcome.Result, err)
+			}
+			child := dial()
+			opts := OpenOptions{Handle: NewHandle(), Cwd: cwd, Model: "fixture", ResumeID: fork.SessionID}
+			if _, err := child.Open(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			takeControl(t, ctx, child, AttachOptions{Handle: opts.Handle, Control: true})
+			for i, method := range []string{"initialize", "session/open"} {
+				op := uint64(i + 1)
+				submit(t, ctx, child, Call{Operation: op, Method: method})
+				res, err := child.WaitResult(ctx, op)
+				if err != nil || res.Err() != nil {
+					t.Fatalf("%s: %+v, %v", method, res, err)
+				}
+			}
+			snap, err := child.Snapshot(ctx)
+			if err != nil || snap.SessionID != fork.SessionID {
+				t.Fatalf("resumed: %+v, %v", snap, err)
+			}
+			snap, err = parent.Snapshot(ctx)
+			if err != nil || snap.SessionID != root.SessionID || snap.Closed {
+				t.Fatalf("parent: %+v, %v", snap, err)
+			}
+		})
 	}
 }

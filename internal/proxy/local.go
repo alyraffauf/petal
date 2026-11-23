@@ -13,20 +13,23 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"petal/internal/acphost"
 	"petal/internal/routing"
 )
 
 // Local is a model-bound proxy owned by a daemon session. Requests come from
 // the session owner. The internal ACP connection serves adapter callbacks for
 // the whole session lifetime, including when no frontend is attached.
+// The owner archives ACP v2 updates alongside its journal.
 type Local struct {
 	proxy *proxy
 }
 
 // NewLocal starts the callback connection. update runs inline with notification
 // writes, so updates preceding an ACP response are visible before Call returns.
-// update must not call back into the proxy or wait on a frontend.
-func NewLocal(ctx context.Context, config routing.Config, cwd string, callback acp.MethodHandler, update func(string, json.RawMessage)) *Local {
+// update must not call back into the proxy or wait on a frontend. reserveRoute
+// runs before a newly returned route can record transcripts or bind delegation.
+func NewLocal(ctx context.Context, config routing.Config, cwd string, workspaceHost *acphost.Host, callback acp.MethodHandler, update func(string, json.RawMessage), reserveRoute func(string) error) *Local {
 	editor, host := net.Pipe()
 	context.AfterFunc(ctx, func() {
 		editor.Close()
@@ -34,18 +37,27 @@ func NewLocal(ctx context.Context, config routing.Config, cwd string, callback a
 	})
 	client := acp.NewConnection(callback, host, host)
 	client.SetLogger(slog.New(slog.DiscardHandler))
-	p := connectProxy(ctx, localOutput{editor, update}, editor, config, true, nil, &localRuntime{cwd: cwd})
+	p := connectProxy(ctx, localOutput{editor, update}, editor, config, true, nil, &localRuntime{host: workspaceHost, cwd: cwd, reserveRoute: reserveRoute})
 	return &Local{proxy: p}
 }
 
 type localRuntime struct {
-	cwd      string
-	mu       sync.Mutex
-	stopping bool
-	active   int
-	children sync.WaitGroup
-	next     atomic.Uint64
-	dispatch sync.Map
+	host         *acphost.Host
+	reserveRoute func(string) error
+	cwd          string
+	mu           sync.Mutex
+	stopping     bool
+	active       int
+	children     sync.WaitGroup
+	next         atomic.Uint64
+	dispatch     sync.Map
+}
+
+func (p *proxy) reserveLocalRoute(id string) error {
+	if p.local == nil || p.local.reserveRoute == nil {
+		return nil
+	}
+	return p.local.reserveRoute(id)
 }
 
 func (r *localRuntime) reserve() error {

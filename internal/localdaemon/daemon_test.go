@@ -185,7 +185,7 @@ func TestDaemonHelper(t *testing.T) {
 			if _, err := conn.Read(request[:]); err == nil {
 				fmt.Fprintf(conn, "identity %d %d\n", os.Getpid(), sid)
 			}
-		})
+		}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

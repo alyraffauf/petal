@@ -24,7 +24,7 @@ type Handler func(ctx context.Context, conn net.Conn)
 // ServeStarted serves the endpoint passed by DialOrStart. Call it once in the
 // dedicated subprocess. The caller supplies the shutdown context, typically
 // from signal.NotifyContext for SIGTERM and SIGINT.
-func ServeStarted(ctx context.Context, handler Handler) error {
+func ServeStarted(ctx context.Context, handler Handler, shutdown func()) error {
 	dir, ok := os.LookupEnv(directoryEnv)
 	if !ok {
 		return errors.New("missing daemon launch environment")
@@ -32,6 +32,10 @@ func ServeStarted(ctx context.Context, handler Handler) error {
 	os.Unsetenv(directoryEnv)
 	lock := os.NewFile(lockFD, filepath.Join(dir, "daemon.lock"))
 	defer lock.Close()
+	// Retire sessions and flush archives while replacement daemons are still excluded.
+	if shutdown != nil {
+		defer shutdown()
+	}
 	unix.CloseOnExec(lockFD)
 	endpoint := Endpoint{dir: dir}
 	if err := checkAncestors(filepath.Dir(dir)); err != nil {
