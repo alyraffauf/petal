@@ -43,12 +43,16 @@ def write_config(root):
     ]
     lines = ['[history.embeddings]', 'provider = "off"', ""]
     for name, provider, role, quota_left, capacity in accounts:
+        executable_env = {"claude": "CLAUDE_CODE_EXECUTABLE", "codex": "CODEX_PATH"}[provider]
         lines += [
             "[[accounts]]",
             f'name = "{name}"',
             f'provider = "{provider}"',
             f"capacity = {capacity}",
             f'usage = ["echo", "{quota_left}"]',
+            "[[accounts.env]]",
+            f'name = "{executable_env}"',
+            f'value = {json.dumps(str(root / "bin" / provider))}',
             "[[accounts.env]]",
             'name = "DEMO_ROLE"',
             f'value = "{role}"',
@@ -97,7 +101,7 @@ class Session:
             command += ["-e", f"{name}={value}"]
         # Petal only emits 24-bit color when it does not detect tmux.
         # The shell tmux starts may rebuild PATH, so set it again on the command itself.
-        launch = f"env -u TMUX -u TMUX_PANE TERM=xterm-256color PATH={root / 'bin'} {petal} --config {config}"
+        launch = f"env -u NO_COLOR -u TMUX -u TMUX_PANE TERM=xterm-256color PATH={root / 'bin'} {petal} --config {config}"
         started = self.tmux(*command, launch)
         if started.returncode != 0:
             raise RuntimeError(started.stderr)
