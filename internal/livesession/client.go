@@ -17,15 +17,16 @@ import (
 // Client multiplexes control requests with a single event reader on an
 // endpoint connection. Its Close releases the attachment and controller lease.
 type Client struct {
-	instance string
-	conn     net.Conn
-	writes   chan struct{}
-	slots    chan struct{}
-	mu       sync.Mutex
-	nextID   uint64
-	pending  map[uint64]chan response
-	done     chan struct{}
-	readErr  error
+	instance     string
+	projectIndex bool
+	conn         net.Conn
+	writes       chan struct{}
+	slots        chan struct{}
+	mu           sync.Mutex
+	nextID       uint64
+	pending      map[uint64]chan response
+	done         chan struct{}
+	readErr      error
 }
 
 // Connect negotiates the local protocol on a connection from localdaemon.
@@ -48,6 +49,7 @@ func Connect(ctx context.Context, conn net.Conn) (*Client, error) {
 		return nil, failure(Version, "daemon returned an unexpected protocol version")
 	}
 	client.instance = hello.Instance
+	client.projectIndex = hello.ProjectIndex
 	return client, nil
 }
 
@@ -55,6 +57,9 @@ func Connect(ctx context.Context, conn net.Conn) (*Client, error) {
 // only against the same instance. After replacement, use the durable ID to
 // reopen the archive instead.
 func (c *Client) Instance() string { return c.instance }
+
+// SupportsProjectIndex reports whether the daemon can index a registered scope.
+func (c *Client) SupportsProjectIndex() bool { return c.projectIndex }
 
 func (c *Client) Close() error { return c.conn.Close() }
 
@@ -172,6 +177,18 @@ func rpc[T any](ctx context.Context, c *Client, method string, params any) (T, e
 
 func (c *Client) Open(ctx context.Context, opts OpenOptions) (Info, error) {
 	return rpc[Info](ctx, c, "open", opts)
+}
+
+type projectOptions struct{ Cwd, Account string }
+
+// ListProject lists live sessions and registers the scope on daemons that
+// support project indexing. The registration lasts until the connection
+// closes or registers another scope.
+func (c *Client) ListProject(ctx context.Context, cwd, account string) ([]Info, error) {
+	if !c.projectIndex {
+		return c.List(ctx)
+	}
+	return rpc[[]Info](ctx, c, "list", projectOptions{cwd, account})
 }
 
 func (c *Client) List(ctx context.Context) ([]Info, error) {

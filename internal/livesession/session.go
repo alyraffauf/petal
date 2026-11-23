@@ -44,12 +44,13 @@ type setupReplay struct {
 }
 
 type session struct {
-	server    *Server
-	options   OpenOptions
-	ctx       context.Context
-	stop      context.CancelFunc
-	ready     chan struct{}
-	callbacks chan struct{}
+	releaseIndex func()
+	server       *Server
+	options      OpenOptions
+	ctx          context.Context
+	stop         context.CancelFunc
+	ready        chan struct{}
+	callbacks    chan struct{}
 
 	// Preparation writes these fields before closing ready. The backend and
 	// host have the same lifetime as ctx, which belongs to the daemon.
@@ -137,6 +138,7 @@ func (s *session) prepare() {
 		return
 	}
 	s.config = config
+	s.releaseIndex = s.server.retainIndex(s.options.Cwd, config.PinnedAccount, config.History.Embeddings)
 	host, err := acphost.Open(s.ctx, s.options.Cwd, s.approveHost)
 	if err != nil {
 		s.initErr = err
@@ -390,6 +392,9 @@ func (s *session) retire() {
 	}
 	if s.info.ACPVersion == 2 && len(s.setup) != 0 && !s.archiveV2.deleted {
 		s.checkpointV2(s.events.head)
+	}
+	if s.releaseIndex != nil {
+		s.releaseIndex()
 	}
 	s.server.remove(s)
 }

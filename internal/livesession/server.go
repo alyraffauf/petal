@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"petal/internal/embeddings"
 	"petal/internal/localdaemon"
 	"petal/internal/proxy"
 	"petal/internal/routing"
@@ -32,7 +33,17 @@ const (
 // chosen by its entry point, never by a wire request.
 type Resolver func(OpenOptions) (routing.Config, error)
 
+type projectIndexKey struct {
+	cwd, account string
+	settings     embeddings.Settings
+}
+type projectIndex struct {
+	users int
+	wake  chan struct{}
+}
+
 type Server struct {
+	indexes          map[projectIndexKey]*projectIndex
 	instance         string
 	ctx              context.Context
 	stop             context.CancelFunc
@@ -49,7 +60,7 @@ type Server struct {
 func NewServer(ctx context.Context, resolve Resolver) *Server {
 	ctx, stop := context.WithCancel(ctx)
 	return &Server{
-		instance: rand.Text(), ctx: ctx, stop: stop, resolve: resolve, clients: make(chan struct{}, maxConnections),
+		indexes: make(map[projectIndexKey]*projectIndex), instance: rand.Text(), ctx: ctx, stop: stop, resolve: resolve, clients: make(chan struct{}, maxConnections),
 		live: make(map[string]*session), byID: make(map[workspaceRoute]*session),
 		closed: make(map[string]time.Time), reservationGrace: OpenReservationGrace,
 	}
@@ -62,6 +73,46 @@ func (s *Server) Close() {
 	s.stop()
 	s.mu.Unlock()
 	s.workers.Wait()
+}
+
+// A picker connection and a detached live session can share one worker.
+func (s *Server) retainIndex(cwd, account string, settings embeddings.Settings) func() {
+	cfg, err := settings.Resolve()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil || cfg.Provider == "off" || s.ctx.Err() != nil {
+		return func() {}
+	}
+	key := projectIndexKey{cwd, account, cfg}
+	worker := s.indexes[key]
+	if worker == nil {
+		worker = &projectIndex{wake: make(chan struct{}, 1)}
+		s.indexes[key] = worker
+		s.workers.Go(func() {
+			sessions.IndexProject(s.ctx, cwd, account, cfg, worker.wake, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				if worker.users != 0 || len(worker.wake) != 0 {
+					return false
+				}
+				delete(s.indexes, key)
+				return true
+			})
+		})
+	}
+	worker.users++
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		worker.users--
+		if worker.users == 0 {
+			// Drain messages saved just before the last client or session closed.
+			select {
+			case worker.wake <- struct{}{}:
+			default:
+			}
+		}
+	}
 }
 
 func (s *Server) Handler() localdaemon.Handler { return s.serve }
@@ -247,12 +298,13 @@ func (s *Server) list() []Info {
 }
 
 type peer struct {
-	ctx       context.Context
-	conn      net.Conn
-	writeMu   sync.Mutex
-	session   *session
-	attachKey [32]byte
-	attached  Snapshot
+	releaseIndex func()
+	ctx          context.Context
+	conn         net.Conn
+	writeMu      sync.Mutex
+	session      *session
+	attachKey    [32]byte
+	attached     Snapshot
 }
 
 func (p *peer) reply(id uint64, value any, protocolErr *Error) {
@@ -285,6 +337,9 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	var waits sync.WaitGroup
 	defer func() {
 		cancel()
+		if p.releaseIndex != nil {
+			p.releaseIndex()
+		}
 		conn.Close()
 		if p.session != nil {
 			p.session.detach(p)
@@ -302,7 +357,7 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 		p.reply(hello.ID, nil, failure(Version, fmt.Sprintf("daemon protocol version is %d", ProtocolVersion)))
 		return
 	}
-	p.reply(hello.ID, handshake{Version: ProtocolVersion, Instance: s.instance}, nil)
+	p.reply(hello.ID, handshake{Version: ProtocolVersion, Instance: s.instance, ProjectIndex: s.resolve != nil}, nil)
 	_ = conn.SetReadDeadline(time.Time{})
 
 	nextSlots := make(chan struct{}, 1)
@@ -354,6 +409,25 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 func (s *Server) dispatch(p *peer, req request) (any, *Error) {
 	switch req.Method {
 	case "list":
+		if len(req.Params) > 0 && string(req.Params) != "null" {
+			return decodeRequest(req.Params, func(project projectOptions) ([]Info, *Error) {
+				if !filepath.IsAbs(project.Cwd) || len(project.Cwd) > 4096 || len(project.Account) > 256 {
+					return nil, failure(Invalid, "invalid project scope")
+				}
+				if s.resolve != nil {
+					cfg, err := s.resolve(OpenOptions{Cwd: project.Cwd, Account: project.Account})
+					if err != nil {
+						return nil, failure(Internal, err.Error())
+					}
+					release := s.retainIndex(filepath.Clean(project.Cwd), project.Account, cfg.History.Embeddings)
+					if p.releaseIndex != nil {
+						p.releaseIndex()
+					}
+					p.releaseIndex = release
+				}
+				return s.list(), nil
+			})
+		}
 		return s.list(), nil
 	case "open":
 		return decodeRequest(req.Params, s.open)

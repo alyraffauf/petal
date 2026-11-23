@@ -235,8 +235,9 @@ type TerminalRef struct {
 }
 
 type handshake struct {
-	Version  int    `json:"version"`
-	Instance string `json:"instance"`
+	Version      int    `json:"version"`
+	Instance     string `json:"instance"`
+	ProjectIndex bool   `json:"projectIndex,omitempty"`
 }
 
 type request struct {
