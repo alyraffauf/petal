@@ -55,7 +55,7 @@ func (p *proxy) delegationCatalog(search string) any {
 	targets := []delegationTarget{}
 	omitted := 0
 	search = strings.ToLower(strings.TrimSpace(search))
-	for _, id := range p.Config.ModelNames() {
+	for _, id := range p.Config.PickerModels() {
 		providers := map[string]bool{}
 		for name, account := range p.Accounts {
 			if (p.PinnedAccount == "" || p.PinnedAccount == name) && len(account.Models[id]) > 0 {

@@ -47,6 +47,12 @@ func main() {
 			}
 			return login.Run()
 		}
+		if model == "" {
+			// Start editors on the provider's real default model, not a "/default" alias.
+			if cwd, err := os.Getwd(); err == nil {
+				c.ResolveDefaults(cmd.Context(), cwd)
+			}
+		}
 		if model == "" && c.DefaultModel() == "" {
 			if c.PinnedAccount != "" {
 				return fmt.Errorf("no ACP model available for account %q", c.PinnedAccount)
