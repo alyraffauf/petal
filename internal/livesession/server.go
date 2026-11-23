@@ -1,0 +1,368 @@
+//go:build linux || darwin
+
+package livesession
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"net"
+	"path/filepath"
+	"sort"
+	"sync"
+	"time"
+
+	"petal/internal/localdaemon"
+	"petal/internal/proxy"
+	"petal/internal/routing"
+)
+
+const (
+	maxSessions    = 16
+	maxConnections = 64
+	maxClosedKeys  = 1024
+)
+
+// Resolver loads daemon-side routing for the requested model and account.
+// It can be called concurrently. The daemon's configuration source is
+// chosen by its entry point, never by a wire request.
+type Resolver func(OpenOptions) (routing.Config, error)
+
+type Server struct {
+	instance string
+	ctx      context.Context
+	stop     context.CancelFunc
+	workers  sync.WaitGroup
+	resolve  Resolver
+	clients  chan struct{}
+	mu       sync.Mutex
+	live     map[string]*session
+	byID     map[string]*session
+	closed   map[string]time.Time
+}
+
+func NewServer(ctx context.Context, resolve Resolver) *Server {
+	ctx, stop := context.WithCancel(ctx)
+	return &Server{
+		instance: rand.Text(), ctx: ctx, stop: stop, resolve: resolve, clients: make(chan struct{}, maxConnections),
+		live: make(map[string]*session), byID: make(map[string]*session),
+		closed: make(map[string]time.Time),
+	}
+}
+
+// Close stops all live sessions and waits for their adapters and archives.
+// The endpoint Serve context still controls the listener.
+func (s *Server) Close() {
+	s.mu.Lock()
+	s.stop()
+	s.mu.Unlock()
+	s.workers.Wait()
+}
+
+func (s *Server) Handler() localdaemon.Handler { return s.serve }
+
+func routeKey(id string) string {
+	parts := proxy.DecodeSessionRoute(id)
+	if parts == nil {
+		return id
+	}
+	raw, _ := json.Marshal(parts)
+	return string(raw)
+}
+
+func (s *Server) open(opts OpenOptions) (Info, *Error) {
+	if !filepath.IsAbs(opts.Cwd) || len(opts.Cwd) > 4096 || len(opts.Model) > 256 ||
+		len(opts.Account) > 256 || len(opts.ResumeID) > 4096 {
+		return Info{}, failure(Invalid, "expected an absolute workspace directory and valid routing options")
+	}
+	opts.Cwd = filepath.Clean(opts.Cwd)
+	expiry, valid := handleExpiry(opts.Handle)
+	if !valid {
+		return Info{}, failure(Invalid, "invalid open key")
+	}
+
+	s.mu.Lock()
+	if s.ctx.Err() != nil {
+		s.mu.Unlock()
+		return Info{}, failure(Closed, "daemon is shutting down")
+	}
+	if live := s.live[opts.Handle]; live != nil {
+		s.mu.Unlock()
+		live.mu.Lock()
+		defer live.mu.Unlock()
+		if live.options != opts {
+			return Info{}, failure(Conflict, "open key is already bound to different options")
+		}
+		if live.closed {
+			return Info{}, failure(Closed, "session is closed")
+		}
+		return live.info, nil
+	}
+	if _, closed := s.closed[opts.Handle]; closed {
+		s.mu.Unlock()
+		return Info{}, failure(Closed, "session is closed")
+	}
+	now := time.Now()
+	if !expiry.After(now) || expiry.After(now.Add(handleLifetime+time.Minute)) {
+		s.mu.Unlock()
+		return Info{}, failure(Expired, "open key is outside its retry window")
+	}
+	for key, expires := range s.closed {
+		if !expires.After(now) {
+			delete(s.closed, key)
+		}
+	}
+	if len(s.live) >= maxSessions || len(s.live)+len(s.closed) >= maxClosedKeys {
+		s.mu.Unlock()
+		return Info{}, failure(Limit, "daemon live-session or open-key limit reached")
+	}
+	resumeKey := routeKey(opts.ResumeID)
+	if opts.ResumeID != "" && s.byID[resumeKey] != nil {
+		s.mu.Unlock()
+		return Info{}, failure(Conflict, "durable session already has a live owner")
+	}
+	// Reserve the handle and durable route before loading config or starting
+	// services. Concurrent retries can attach and wait for the same result.
+	live := newSession(s, opts)
+	s.live[opts.Handle] = live
+	if opts.ResumeID != "" {
+		s.byID[resumeKey] = live
+	}
+	s.workers.Go(func() { live.retire() })
+	s.mu.Unlock()
+	go live.prepare()
+	return live.initialInfo(), nil
+}
+
+func (s *Server) register(live *session, id string) *Error {
+	key := routeKey(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if owner := s.byID[key]; owner != nil && owner != live {
+		return failure(Conflict, "adapter returned an ID already owned by another live session")
+	}
+	s.byID[key] = live
+	return nil
+}
+
+func (s *Server) remove(live *session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.live, live.options.Handle)
+	for key, owner := range s.byID {
+		if owner == live {
+			delete(s.byID, key)
+		}
+	}
+	if expires, _ := handleExpiry(live.options.Handle); expires.After(time.Now()) {
+		s.closed[live.options.Handle] = expires
+	}
+}
+
+func (s *Server) lookup(opts AttachOptions) (*session, *Error) {
+	if (opts.Handle == "") == (opts.SessionID == "") {
+		return nil, failure(Invalid, "specify exactly one handle or durable session ID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var live *session
+	if opts.Handle != "" {
+		live = s.live[opts.Handle]
+		if _, ok := s.closed[opts.Handle]; ok {
+			return nil, failure(Closed, "session is closed")
+		}
+	} else {
+		live = s.byID[routeKey(opts.SessionID)]
+	}
+	if live == nil {
+		return nil, failure(NotFound, "session is not live")
+	}
+	return live, nil
+}
+
+func (s *Server) list() []Info {
+	s.mu.Lock()
+	live := make([]*session, 0, len(s.live))
+	for _, session := range s.live {
+		live = append(live, session)
+	}
+	s.mu.Unlock()
+
+	result := make([]Info, 0, len(live))
+	for _, session := range live {
+		session.mu.Lock()
+		if !session.closed {
+			result = append(result, session.info)
+		}
+		session.mu.Unlock()
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Handle < result[j].Handle })
+	return result
+}
+
+type peer struct {
+	ctx       context.Context
+	conn      net.Conn
+	writeMu   sync.Mutex
+	session   *session
+	attachKey [32]byte
+	attached  Snapshot
+}
+
+func (p *peer) reply(id uint64, value any, protocolErr *Error) {
+	res := response{ID: id, Error: protocolErr}
+	if protocolErr == nil {
+		var err error
+		res.Result, err = json.Marshal(value)
+		if err != nil || len(res.Result) >= maxFrame-256 {
+			res.Result = nil
+			res.Error = failure(Limit, "daemon response exceeds frame limit")
+		}
+	}
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	if err := writeFrame(p.conn, res, time.Now().Add(attachTimeout)); err != nil {
+		p.conn.Close()
+	}
+}
+
+func (s *Server) serve(ctx context.Context, conn net.Conn) {
+	select {
+	case s.clients <- struct{}{}:
+		defer func() { <-s.clients }()
+	default:
+		return
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	p := &peer{ctx: ctx, conn: conn}
+	var waits sync.WaitGroup
+	defer func() {
+		cancel()
+		conn.Close()
+		if p.session != nil {
+			p.session.detach(p)
+		}
+		waits.Wait()
+	}()
+
+	reader := readFrames(conn)
+	_ = conn.SetReadDeadline(time.Now().Add(attachTimeout))
+	var hello request
+	if err := reader.read(&hello); err != nil || hello.ID == 0 || hello.Method != "hello" {
+		return
+	}
+	if hello.Version != ProtocolVersion {
+		p.reply(hello.ID, nil, failure(Version, fmt.Sprintf("daemon protocol version is %d", ProtocolVersion)))
+		return
+	}
+	p.reply(hello.ID, handshake{Version: ProtocolVersion, Instance: s.instance}, nil)
+	_ = conn.SetReadDeadline(time.Time{})
+
+	nextSlots := make(chan struct{}, 1)
+	resultSlots := make(chan struct{}, 4)
+	previous := hello.ID
+	for {
+		var req request
+		if err := reader.read(&req); err != nil || req.ID <= previous {
+			return
+		}
+		previous = req.ID
+		if live := p.session; live != nil && (req.Method == "next" || req.Method == "wait_result") {
+			var value uint64
+			if err := json.Unmarshal(req.Params, &value); err != nil {
+				p.reply(req.ID, nil, failure(Invalid, "expected an event cursor or operation number"))
+				continue
+			}
+			slots := nextSlots
+			if req.Method == "wait_result" {
+				slots = resultSlots
+			}
+			select {
+			case slots <- struct{}{}:
+				waits.Go(func() {
+					var result any
+					var err *Error
+					if req.Method == "next" {
+						result, err = live.next(ctx, value)
+					} else {
+						result, err = live.waitResult(ctx, value)
+					}
+					// Release before replying. The client can start another
+					// poll as soon as the reply reaches it.
+					<-slots
+					if ctx.Err() == nil {
+						p.reply(req.ID, result, err)
+					}
+				})
+			default:
+				p.reply(req.ID, nil, failure(Busy, "too many pending polls"))
+			}
+			continue
+		}
+		result, err := s.dispatch(p, req)
+		p.reply(req.ID, result, err)
+	}
+}
+
+func (s *Server) dispatch(p *peer, req request) (any, *Error) {
+	switch req.Method {
+	case "list":
+		return s.list(), nil
+	case "open":
+		return decodeRequest(req.Params, s.open)
+	case "attach":
+		return decodeRequest(req.Params, func(opts AttachOptions) (Snapshot, *Error) {
+			key := fingerprint(opts)
+			if p.session != nil {
+				if p.attachKey == key {
+					return p.attached, nil
+				}
+				return Snapshot{}, failure(Conflict, "connection is already attached")
+			}
+			live, err := s.lookup(opts)
+			if err != nil {
+				return Snapshot{}, err
+			}
+			snapshot, err := live.attach(p, opts)
+			if err == nil {
+				p.session, p.attachKey, p.attached = live, key, snapshot
+			}
+			return snapshot, err
+		})
+	}
+	live := p.session
+	if live == nil {
+		return nil, failure(Invalid, "attach to a live session first")
+	}
+	switch req.Method {
+	case "snapshot":
+		return live.snapshot(p)
+	case "claim":
+		return live.claim(p)
+	case "call":
+		return decodeRequest(req.Params, func(call Call) (uint64, *Error) { return live.submit(p, call) })
+	case "result":
+		return decodeRequest(req.Params, live.result)
+	case "terminal/output":
+		return decodeRequest(req.Params, live.terminalOutput)
+	case "answer":
+		return decodeRequest(req.Params, func(answer Answer) (bool, *Error) { return true, live.answer(p, answer) })
+	case "cancel":
+		return decodeRequest(req.Params, func(turn uint64) (bool, *Error) { return true, live.cancelTurn(p, turn) })
+	case "close":
+		return nil, live.closeBy(p)
+	default:
+		return nil, failure(Invalid, "unknown daemon method")
+	}
+}
+
+func decodeRequest[P, R any](raw json.RawMessage, apply func(P) (R, *Error)) (R, *Error) {
+	var params P
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &params) != nil {
+		var zero R
+		return zero, failure(Invalid, "invalid daemon request parameters")
+	}
+	return apply(params)
+}

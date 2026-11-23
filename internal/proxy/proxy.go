@@ -49,6 +49,7 @@ type proxy struct {
 
 	embedded      bool
 	editorUpdates chan struct{}
+	local         *localRuntime
 	routing.Config
 	lifetime            context.Context
 	editor              *acp.Connection
@@ -301,6 +302,9 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 	doneTrace := traceAdapter(ctx, b.wire, method, params)
 	result, err := forward[json.RawMessage](b.conn, ctx, method, params)
 	doneTrace(result, err)
+	if p.version == 1 && method == "_session/steering" && err == nil && p.recorder != nil && SteeringInjected(result) {
+		p.recorder.recordSteering(p.publicID(name, native), params)
+	}
 	if promptEndpoint != nil && err == nil {
 		result = promptEndpoint.continueV1(wakeCtx, b, native, result)
 		t, _ := ctx.Value(traceKey{}).(*requestTrace)
@@ -451,6 +455,10 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	a := p.Accounts[name]
 	lifetime, stop := context.WithCancel(p.lifetime)
 	cmd := a.Command(lifetime, a.Models[p.Model])
+	if p.local != nil {
+		cmd.Dir = p.local.cwd
+		cmd.Env = append(cmd.Env, "PWD="+p.local.cwd)
+	}
 	if !p.embedded {
 		cmd.Stderr = os.Stderr
 	}
@@ -467,8 +475,20 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 		return nil, err
 	}
 	cmd.Stdout = childOutput
+	if p.local != nil {
+		if err := p.local.reserve(); err != nil {
+			stop()
+			in.Close()
+			out.Close()
+			childOutput.Close()
+			return nil, err
+		}
+	}
 	group, err := processgroup.Start(cmd)
 	if err != nil {
+		if p.local != nil {
+			p.local.release()
+		}
 		childOutput.Close()
 		stop()
 		in.Close()
@@ -480,6 +500,13 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	exited := make(chan struct{})
 	b := &backend{close: stop, exited: exited}
 	wire := &adapterWire{Writer: in, lifetime: lifetime, updates: make(chan struct{}, 128), nativeV2: version == 2}
+	if p.local != nil {
+		wire.dispatched = func(id json.RawMessage) {
+			if signal, ok := p.local.dispatch.LoadAndDelete(string(id)); ok {
+				signal.(func())()
+			}
+		}
+	}
 	reader := incoming(out, wire)
 	if p.editorWire != nil && p.editorWire.traceLog != nil {
 		reader.traceUpdates = p.editorWire.traceLog
@@ -642,11 +669,17 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 		conn.SetLogger(slog.New(slog.DiscardHandler))
 	}
 	go func() {
+		if p.local != nil {
+			defer p.local.release()
+		}
 		_ = group.Wait()
 		close(exited)
 		// A surviving helper may still hold stdout. Allow the reader to drain
 		// buffered frames, then terminate any blocked read.
 		_ = out.SetReadDeadline(time.Now().Add(time.Second))
+		if p.local != nil {
+			<-conn.Done()
+		}
 	}()
 	go func() { <-conn.Done(); stop() }()
 	rawHello, err := forward[Object](conn, ctx, "initialize", init)
@@ -697,11 +730,15 @@ func ConnectEmbedded(ctx context.Context, c routing.Config, out io.Writer, in io
 }
 
 func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Reader, embedded bool, updates chan struct{}) *acp.Connection {
+	return connectProxy(lifetime, out, in, c, embedded, updates, nil).editor
+}
+
+func connectProxy(lifetime context.Context, out io.Writer, in io.Reader, c routing.Config, embedded bool, updates chan struct{}, local *localRuntime) *proxy {
 	lifetime, stop := context.WithCancel(lifetime)
 	editorWire := &adapterWire{Writer: out, lifetime: lifetime}
 	enableTrace(lifetime, editorWire)
-	p := proxy{editorWire: editorWire, editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
-	if !embedded {
+	p := proxy{local: local, editorWire: editorWire, editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
+	if !embedded || local != nil {
 		p.recorder = &transcriptRecorder{}
 	}
 	if !embedded && c.Model == "" {
@@ -747,5 +784,5 @@ func connect(lifetime context.Context, c routing.Config, out io.Writer, in io.Re
 		p.editor.SetLogger(slog.New(slog.DiscardHandler))
 	}
 	close(ready)
-	return p.editor
+	return &p
 }

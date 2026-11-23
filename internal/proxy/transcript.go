@@ -112,6 +112,22 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 	}
 }
 
+// flush checkpoints the last observed updates during daemon shutdown,
+// including an ACP v2 turn that did not report idle before closing.
+func (r *transcriptRecorder) flush() {
+	r.active.Range(func(_, value any) bool {
+		session := value.(*recordedSession)
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		if !session.replay {
+			if err := session.save(false); err != nil {
+				slog.Error("save ACP transcript on close", "error", err)
+			}
+		}
+		return true
+	})
+}
+
 // Stage replay separately until the provider confirms the load. A partial
 // v2 replay has no durable cursor base and must not overwrite local history.
 func (p *proxy) beforeTranscript(method, name, native, id string, params Object) (func(error) error, error) {
@@ -162,13 +178,8 @@ func (p *proxy) beforeTranscript(method, name, native, id string, params Object)
 		}, nil
 	case "session/prompt":
 		if p.version == 1 {
-			var prompt acpv2.Transcript
-			data, _ := json.Marshal(Object{"sessionUpdate": encoded("user_message"), "messageId": encoded("prompt"), "content": params["prompt"]})
-			_, _ = prompt.Apply(data)
-			for _, e := range prompt.Entries() {
-				if err := s.store([]sessions.Message{{Role: "user", Body: e.Text}}, false); err != nil {
-					return nil, fmt.Errorf("record ACP prompt: %w", err)
-				}
+			if err := s.storePrompt(params); err != nil {
+				return nil, err
 			}
 			return func(err error) error {
 				s.mu.Lock()
@@ -182,4 +193,36 @@ func (p *proxy) beforeTranscript(method, name, native, id string, params Object)
 		}
 	}
 	return noop, nil
+}
+
+func SteeringInjected(raw json.RawMessage) bool {
+	var reply struct{ Outcome string }
+	return json.Unmarshal(raw, &reply) == nil && reply.Outcome == "injected"
+}
+
+func (s *recordedSession) storePrompt(params Object) error {
+	var prompt acpv2.Transcript
+	data, _ := json.Marshal(Object{"sessionUpdate": encoded("user_message"), "messageId": encoded("prompt"), "content": params["prompt"]})
+	_, _ = prompt.Apply(data)
+	for _, e := range prompt.Entries() {
+		if err := s.store([]sessions.Message{{Role: "user", Body: e.Text}}, false); err != nil {
+			return fmt.Errorf("record ACP prompt: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *transcriptRecorder) recordSteering(key string, params Object) {
+	if value, ok := r.active.Load(key); ok {
+		s := value.(*recordedSession)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		err := s.save(false)
+		if err == nil {
+			err = s.storePrompt(params)
+		}
+		if err != nil {
+			slog.Error("record accepted steering input", "error", err)
+		}
+	}
 }

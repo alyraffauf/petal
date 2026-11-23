@@ -92,6 +92,7 @@ type adapterWire struct {
 	updates                 chan struct{}
 	lifetime                context.Context
 	nativeV2                bool
+	dispatched              func(json.RawMessage)
 	conn                    *acp.Connection
 	nextRequest             atomic.Uint64
 	wakes                   sync.Map // wake request token -> guarded submission
@@ -163,6 +164,9 @@ func (w *adapterWire) Write(line []byte) (int, error) {
 				_ = w.conn.SendNotification(w.lifetime, "$/cancel_request", Object{"requestId": id})
 			}
 		})
+	}
+	if w.dispatched != nil && editorID != nil {
+		w.dispatched(editorID)
 	}
 	return len(line), nil
 }
