@@ -223,3 +223,29 @@ func TestForkHandoffCarriesParentHistoryUpToTheFork(t *testing.T) {
 		t.Fatalf("handoff puts the fork's turns before the parent's history: %s", carried)
 	}
 }
+
+func TestForkSwitchNeedsAncestorHistory(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	parent := `["claude","opus","parent"]`
+	if _, err := sessions.Create(cwd, sessions.Record{ID: parent, Model: "opus"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.SaveTranscript(cwd, parent, []sessions.Message{{Role: "user", Body: "before the fork"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	head, err := sessions.TranscriptHead(t.Context(), cwd, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineage := []historySegment{{ID: parent, Head: head}}
+	if err := lineageAvailable(cwd, lineage); err != nil {
+		t.Fatalf("intact lineage reported %v", err)
+	}
+	if err := sessions.Forget(cwd, "", parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := lineageAvailable(cwd, lineage); err == nil {
+		t.Fatal("a deleted parent still allows the switch, which would drop the conversation before the fork")
+	}
+}

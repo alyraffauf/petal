@@ -275,3 +275,21 @@ func TestForkLineageSurvivesResume(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedHandoffPromptKeepsForkLineage(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	p := &proxy{editorSessions: &editorSessions{}, Config: routing.Config{Accounts: map[string]routing.Account{"a": {Models: map[string][]string{"m": {"adapter"}}}}}}
+	p.initialized = true
+	p.Model = "m"
+	lineage := []historySegment{{ID: `["a","m","parent"]`, Head: 3}}
+	s := &editorSession{route: p, routedID: `["a","m","new"]`, cwd: projectKey(cwd), handoff: `["a","m","fork"]`, lineage: lineage, request: Object{"cwd": encoded(cwd)}}
+	p.editorSessions.sessions.Store("petal-x", s)
+	// No adapter runs here, so the prompt fails after taking the handoff.
+	if _, err := p.handleEditor(t.Context(), "session/prompt", json.RawMessage(`{"sessionId":"petal-x","prompt":[{"type":"text","text":"hi"}]}`)); err == nil {
+		t.Fatal("prompt unexpectedly succeeded without an adapter")
+	}
+	if s.handoff != `["a","m","fork"]` || !slices.Equal(s.lineage, lineage) {
+		t.Fatalf("after a failed prompt, handoff %q lineage %v; want both restored", s.handoff, s.lineage)
+	}
+}

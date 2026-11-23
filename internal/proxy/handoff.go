@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 
+	acp "github.com/coder/acp-go-sdk"
+
 	"petal/internal/sessions"
 	"petal/internal/sessions/sessiondb"
 )
@@ -54,6 +56,25 @@ func handoffPrompt(cwd string, lineage []historySegment, previous string, prompt
 		}
 	}
 	return json.Marshal(slices.Insert(blocks, at, json.RawMessage(preamble)))
+}
+
+// lineageAvailable reports an error when an ancestor's history before the fork
+// is gone, as after the parent conversation is deleted. A switch would then
+// hand off the fork's own turns without what came before.
+func lineageAvailable(cwd string, lineage []historySegment) error {
+	for _, segment := range lineage {
+		if segment.Head == 0 {
+			continue
+		}
+		rows, err := sessions.Transcript(cwd, segment.ID)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 || rows[0].Rowid > segment.Head {
+			return acp.NewInvalidParams("the conversation this one was forked from was deleted, so switching models would lose it; start a new conversation to use another model")
+		}
+	}
+	return nil
 }
 
 func handoffText(rows []sessiondb.ReadTranscriptRow) string {

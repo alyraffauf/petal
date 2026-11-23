@@ -461,7 +461,11 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			// The new model learns the conversation only from Petal's archive.
 			// A conversation the editor imported from an adapter may have none.
 			// Closing the old route saves history it has observed but not stored.
-			rows, err := sessions.Transcript(stringField(s.request, "cwd"), oldID)
+			cwd := stringField(s.request, "cwd")
+			rows, err := sessions.Transcript(cwd, oldID)
+			if err == nil {
+				err = lineageAvailable(cwd, s.lineage)
+			}
 			if err == nil && len(rows) == 0 && len(s.lineage) == 0 && (p.recorder == nil || !p.recorder.unsaved(oldID)) {
 				err = acp.NewInvalidParams("Petal has no saved history for this conversation, so switching models would lose it; start a new conversation to use another model")
 			}
@@ -513,6 +517,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		return nil, acp.NewInvalidParams("send a prompt after switching models before forking this conversation")
 	}
 	handoff := ""
+	var handoffLineage []historySegment
 	if method == "session/prompt" {
 		s.setup = nil
 		if s.handoff != "" {
@@ -523,7 +528,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			}
 			// The prompt consumes the handoff. A later switch hands off from this
 			// route, which records the prompt, rather than the one before it.
-			params["prompt"], handoff = prompt, s.handoff
+			params["prompt"], handoff, handoffLineage = prompt, s.handoff, s.lineage
 			// The new route records this prompt, so its archive now holds the
 			// inherited history and the lineage is no longer needed.
 			s.handoff, s.lineage = "", nil
@@ -555,7 +560,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		// Retry the handoff with the next prompt unless the model changed since.
 		s.mu.Lock()
 		if s.route == route && s.routedID == routed && s.handoff == "" {
-			s.handoff = handoff
+			s.handoff, s.lineage = handoff, handoffLineage
 			s.saveBinding(id)
 		}
 		s.mu.Unlock()
