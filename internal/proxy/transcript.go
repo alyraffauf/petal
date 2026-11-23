@@ -31,6 +31,10 @@ type recordedSession struct {
 	record                          sessions.Record
 	version                         uint16
 	projection                      acpv2.Transcript
+	// compactionStatus keeps each compaction's last status, so a summary chunk
+	// that arrives after a checkpoint cleared the projection still counts as
+	// finished.
+	compactionStatus map[string]json.RawMessage
 	last                            string
 	seq                             int
 	replay, full, complete, resumed bool
@@ -122,14 +126,24 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 			return
 		}
 	}
+	if id := stringField(u, "compactionId"); id != "" && !s.replay {
+		if status := u["status"]; status != nil {
+			if s.compactionStatus == nil {
+				s.compactionStatus = map[string]json.RawMessage{}
+			}
+			s.compactionStatus[id] = status
+		} else if status := s.compactionStatus[id]; status != nil {
+			_, _ = s.projection.ApplyFields(Object{"sessionUpdate": encoded("compaction_update"), "compactionId": encoded(id), "status": status}, version)
+		}
+	}
 	changed, _ := s.projection.ApplyFields(u, version)
 	// Manual compaction can complete between turns, with no subsequent
-	// prompt response or idle update to trigger a checkpoint.
+	// prompt response or idle update to trigger a checkpoint. Save everything
+	// observed so far, so the archive keeps the messages before the summary
+	// ahead of it.
 	if changed && !s.replay && (kind == "compaction_update" || kind == "compaction_summary_chunk") {
-		id := stringField(u, "compactionId")
-		if entry, ok := s.projection.FinishedCompaction(id); ok {
-			message := sessions.Message{Role: entry.Role, Body: entry.Text, SourceID: id}
-			if err := s.store([]sessions.Message{message}, false); err != nil {
+		if _, ok := s.projection.FinishedCompaction(stringField(u, "compactionId")); ok {
+			if err := s.save(false); err != nil {
 				slog.Error("save ACP compaction", "error", err)
 			}
 		}

@@ -120,3 +120,27 @@ func TestRecorderReportsUnsavedV2Turn(t *testing.T) {
 		t.Fatal("a v2 turn before idle is not reported, so a switch would be refused")
 	}
 }
+
+func TestCompactionDuringTurnKeepsArchiveOrder(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	r := &transcriptRecorder{}
+	id := `["claude","opus","native"]`
+	r.open(id, id, cwd, "claude", "opus")
+	message := func(id, text string) Object {
+		return Object{"sessionUpdate": encoded("agent_message"), "messageId": encoded(id), "content": json.RawMessage(`[{"type":"text","text":` + string(encoded(text)) + `}]`)}
+	}
+	r.observe(id, 2, message("m1", "long pre-compaction answer"))
+	r.observe(id, 2, Object{"sessionUpdate": encoded("compaction_update"), "compactionId": encoded("c1"), "status": encoded("completed"), "summary": json.RawMessage(`[{"type":"text","text":"compacted summary"}]`)})
+	r.observe(id, 2, message("m2", "answer after compaction"))
+	r.flush()
+
+	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried := string(prompt)
+	if strings.Contains(carried, "long pre-compaction answer") || !strings.Contains(carried, "compacted summary") || !strings.Contains(carried, "answer after compaction") {
+		t.Fatalf("handoff = %s; want the summary and the later answer only", carried)
+	}
+}
