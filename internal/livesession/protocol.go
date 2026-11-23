@@ -165,15 +165,17 @@ const (
 )
 
 type Event struct {
-	Sequence   uint64          `json:"sequence"`
-	Kind       EventKind       `json:"kind"`
-	Method     string          `json:"method"`
-	Params     json.RawMessage `json:"params,omitempty"`
-	Question   *Question       `json:"question,omitempty"`
-	QuestionID uint64          `json:"questionID"`
-	Operation  uint64          `json:"operation"`
-	Turn       uint64          `json:"turn,omitempty"`
-	Outcome    *Outcome        `json:"outcome,omitempty"`
+	// ArchiveHead bounds the archive preceding an ACP v1 prompt.
+	ArchiveHead *int64          `json:"archiveHead,omitempty"`
+	Sequence    uint64          `json:"sequence"`
+	Kind        EventKind       `json:"kind"`
+	Method      string          `json:"method"`
+	Params      json.RawMessage `json:"params,omitempty"`
+	Question    *Question       `json:"question,omitempty"`
+	QuestionID  uint64          `json:"questionID"`
+	Operation   uint64          `json:"operation"`
+	Turn        uint64          `json:"turn,omitempty"`
+	Outcome     *Outcome        `json:"outcome,omitempty"`
 }
 
 // Question carries an ACP permission or elicitation callback, or a daemon-host

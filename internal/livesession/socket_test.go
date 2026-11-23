@@ -457,9 +457,20 @@ func TestSteeringAcrossReceiptEviction(t *testing.T) {
 	client := dial()
 	opts := OpenOptions{Handle: NewHandle(), Cwd: t.TempDir(), Model: "fixture"}
 	setup := openSession(t, ctx, client, opts, 1)
+	if err := sessions.SaveTranscript(opts.Cwd, setup.SessionID, []sessions.Message{{Role: "assistant", Body: "prior turn"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	priorHead, err := sessions.TranscriptHead(ctx, opts.Cwd, setup.SessionID)
+	if err != nil || priorHead == 0 {
+		t.Fatalf("prior archive boundary = %d, %v", priorHead, err)
+	}
 	prompt := Call{Operation: 3, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"hold for steering"}]}`)}
 	submit(t, ctx, client, prompt)
 	cursor := setup.Head
+	started := advance(t, ctx, client, &cursor, func(e Event) bool { return e.Kind == CallStarted && e.Operation == prompt.Operation })
+	if started.ArchiveHead == nil || *started.ArchiveHead != priorHead {
+		t.Fatalf("prompt replay boundary = %v, want %d", started.ArchiveHead, priorHead)
+	}
 	advance(t, ctx, client, &cursor, func(e Event) bool { return strings.Contains(string(e.Params), "ready for steering") })
 	for i := range receiptCount + 2 {
 		text := "defer input"
@@ -490,7 +501,7 @@ func TestSteeringAcrossReceiptEviction(t *testing.T) {
 		return e.Kind == CallFinished && e.Operation == 3
 	})
 	rows, err := sessions.Transcript(opts.Cwd, setup.SessionID)
-	if count != 1 || err != nil || len(rows) != 3 || rows[2].Role != "user" || rows[2].Body != "accepted input" {
+	if count != 1 || err != nil || len(rows) != 4 || rows[1].Rowid <= priorHead || rows[3].Role != "user" || rows[3].Body != "accepted input" {
 		t.Fatalf("replayed %d accepted inputs, archive %+v, error %v", count, rows, err)
 	}
 }

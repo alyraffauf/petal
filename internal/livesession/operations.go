@@ -65,6 +65,17 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 	if err != nil {
 		return 0, err
 	}
+	// ACP v1 adapters need not echo the user prompt. Preserve the accepted
+	// input so a newly attached TUI can show the in-flight user message.
+	started := Event{Kind: CallStarted, Method: call.Method, Operation: call.Operation}
+	if call.Method == "session/prompt" && s.info.ACPVersion == 1 {
+		head, err := sessions.TranscriptHead(s.ctx, s.info.Cwd, s.info.SessionID)
+		if err != nil {
+			return 0, failure(Internal, "read transcript boundary: "+err.Error())
+		}
+		started.ArchiveHead = &head
+		started.Params = promptEventParams(params)
+	}
 	op := &operation{
 		number: call.Operation, method: call.Method, fingerprint: hash,
 		dispatched: make(chan struct{}), done: make(chan struct{}),
@@ -88,12 +99,6 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 		} else {
 			s.pendingPrompt = op
 		}
-	}
-	// ACP v1 adapters need not echo the user prompt. Preserve the accepted
-	// input so a newly attached TUI can show the in-flight user message.
-	started := Event{Kind: CallStarted, Method: call.Method, Operation: op.number}
-	if call.Method == "session/prompt" && s.info.ACPVersion == 1 {
-		started.Params = promptEventParams(params)
 	}
 	s.publish(started)
 	if !s.preparing {

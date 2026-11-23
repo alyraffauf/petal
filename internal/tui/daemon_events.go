@@ -56,17 +56,11 @@ func (h *harness) readDaemonSnapshot(ctx context.Context, snapshot livesession.S
 	d := h.daemon
 	cursor := snapshot.After
 	gap := cursor > 0
-	var archive []entry
-	if gap && snapshot.ACPVersion == 2 {
-		var err error
-		archive, err = h.readArchiveHistory(snapshot.ArchiveHead)
-		if err != nil {
-			return err
-		}
-	} else if gap {
-		archive = h.archiveHistory(-1)
-	} else if snapshot.ACPVersion == 1 && snapshot.ArchiveHead != 0 {
-		archive = h.archiveHistory(snapshot.ArchiveHead)
+	var archiveHead int64
+	if gap && snapshot.ACPVersion == 1 {
+		archiveHead = -1
+	} else if gap || snapshot.ACPVersion == 1 {
+		archiveHead = snapshot.ArchiveHead
 	}
 	var active bool
 	for cursor < snapshot.Head {
@@ -82,11 +76,10 @@ func (h *harness) readDaemonSnapshot(ctx context.Context, snapshot livesession.S
 			}
 			active = !gap || e.Operation == snapshot.Turn && snapshot.Running
 			if active {
-				prompt := replayedPrompt(e.Params)
-				if gap && len(prompt) == 1 && len(archive) > 0 && archive[len(archive)-1] == prompt[0] {
-					archive = archive[:len(archive)-1]
+				if gap && e.ArchiveHead != nil {
+					archiveHead = *e.ArchiveHead
 				}
-				h.emitV2(ctx, daemonReplayStart{prompt})
+				h.emitV2(ctx, daemonReplayStart{replayedPrompt(e.Params)})
 			}
 		case snapshot.ACPVersion == 1 && active && e.Kind == livesession.CallFinished && e.Method == "_session/steering":
 			for _, row := range replayedPrompt(e.Params) {
@@ -111,6 +104,10 @@ func (h *harness) readDaemonSnapshot(ctx context.Context, snapshot livesession.S
 	}
 	if snapshot.ACPVersion == 1 {
 		h.emitV2(ctx, daemonReplayFinish{active: active && snapshot.Running})
+	}
+	archive, err := h.readArchiveHistory(archiveHead)
+	if err != nil {
+		return err
 	}
 	h.emitV2(ctx, daemonOpened{snapshot: snapshot, history: archive, gap: gap, partial: gap && snapshot.ACPVersion == 2 && snapshot.Floor > snapshot.ArchiveCursor})
 	questions := daemonQuestions{h: h, active: make(map[uint64]context.CancelFunc)}
@@ -183,11 +180,6 @@ func (h *harness) promptResult(raw json.RawMessage, err error) tea.Msg {
 		err = json.Unmarshal(raw, &result)
 	}
 	return finished{err, string(result.StopReason)}
-}
-
-func (h *harness) archiveHistory(head int64) []entry {
-	history, _ := h.readArchiveHistory(head)
-	return history
 }
 
 func (h *harness) readArchiveHistory(head int64) ([]entry, error) {
