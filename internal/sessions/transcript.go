@@ -169,6 +169,7 @@ func Transcript(cwd, id string) ([]sessiondb.ReadTranscriptRow, error) {
 }
 
 type Hit struct {
+	Semantic                                      bool
 	Row                                           int64
 	Session, Title, Model, Account, Role, Snippet string
 }
