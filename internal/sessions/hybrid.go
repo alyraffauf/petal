@@ -23,7 +23,7 @@ var indexSlot = make(chan struct{}, 1)
 
 var embeddingSlot = make(chan struct{}, 1)
 
-const scopedMessages = historyScope + ` SELECT messages.rowid AS ref,substr(body,1,1024) FROM messages LEFT JOIN message_embeddings ON reference=messages.rowid AND digest=? WHERE session_id IN (SELECT id FROM scope) AND reference IS NULL ORDER BY messages.rowid LIMIT 8`
+const scopedMessages = ` SELECT messages.rowid AS ref,substr(body,1,1024) FROM messages LEFT JOIN message_embeddings ON reference=messages.rowid AND digest=? WHERE session_id IN (SELECT id FROM scope) AND reference IS NULL ORDER BY messages.rowid LIMIT 8`
 
 func embedHistory(ctx context.Context, cfg embeddings.Settings, digest string, inputs []string) ([][]float32, string, error) {
 	vectors, model, err := cfg.Embed(ctx, embeddingClient, inputs)
@@ -41,13 +41,21 @@ func embedHistory(ctx context.Context, cfg embeddings.Settings, digest string, i
 }
 
 func indexHistoryBatch(ctx context.Context, cwd, parent string, cfg embeddings.Settings, lastDigest *string) (bool, error) {
+	return indexScopedBatch(ctx, cwd, historyScope, parent, cfg, lastDigest, false)
+}
+
+const projectAccountScope = "WITH scope(id) AS (SELECT id FROM sessions WHERE account = ?1 OR ?1 = '') "
+
+var errEmbeddingModelChanged = errors.New("embedding model changed during search")
+
+func indexScopedBatch(ctx context.Context, cwd, scope, key string, cfg embeddings.Settings, lastDigest *string, pinDigest bool) (bool, error) {
 	db, err := openStoreContext(ctx, cwd)
 	if err != nil {
 		return false, err
 	}
 	defer db.Close()
 	var hasMessages bool
-	if err := db.QueryRowContext(ctx, historyScope+` SELECT EXISTS(SELECT 1 FROM messages WHERE session_id IN (SELECT id FROM scope))`, parent).Scan(&hasMessages); err != nil || !hasMessages {
+	if err := db.QueryRowContext(ctx, scope+` SELECT EXISTS(SELECT 1 FROM messages WHERE session_id IN (SELECT id FROM scope))`, key).Scan(&hasMessages); err != nil || !hasMessages {
 		return false, err
 	}
 	digest, err := cfg.CacheKey(ctx, embeddingClient)
@@ -58,7 +66,10 @@ func indexHistoryBatch(ctx context.Context, cwd, parent string, cfg embeddings.S
 	if cfg.Provider == "openai-compatible" {
 		lookup = *lastDigest
 	}
-	rows, err := db.QueryContext(ctx, scopedMessages, parent, lookup)
+	if pinDigest && lookup != *lastDigest {
+		return false, errEmbeddingModelChanged
+	}
+	rows, err := db.QueryContext(ctx, scope+scopedMessages, key, lookup)
 	if err != nil {
 		return false, err
 	}
@@ -86,23 +97,41 @@ func indexHistoryBatch(ctx context.Context, cwd, parent string, cfg embeddings.S
 	if err != nil {
 		return false, err
 	}
+	if pinDigest && digest != *lastDigest {
+		return false, errEmbeddingModelChanged
+	}
 	if cfg.Provider == "openai-compatible" {
 		*lastDigest = digest
 	}
 	for i, id := range ids {
 		buf := new(bytes.Buffer)
 		binary.Write(buf, binary.LittleEndian, vectors[i])
-		_, err = db.ExecContext(ctx, historyScope+`INSERT OR REPLACE INTO message_embeddings(reference,vector,digest) SELECT rowid,?,? FROM messages WHERE rowid=? AND session_id IN (SELECT id FROM scope) AND substr(body,1,1024)=?`, parent, buf.Bytes(), digest, id, inputs[i])
+		_, err = db.ExecContext(ctx, scope+`INSERT OR REPLACE INTO message_embeddings(reference,vector,digest) SELECT rowid,?,? FROM messages WHERE rowid=? AND session_id IN (SELECT id FROM scope) AND substr(body,1,1024)=?`, key, buf.Bytes(), digest, id, inputs[i])
 		if err != nil {
 			return false, err
 		}
 	}
-	return len(inputs) == 8, nil
+	if len(inputs) == 8 {
+		return true, nil
+	}
+	// The archive can change while the provider is embedding the batch.
+	var more bool
+	err = db.QueryRowContext(ctx, scope+` SELECT EXISTS (`+scopedMessages+`)`, key, digest).Scan(&more)
+	return more, err
 }
 
 // IndexHistory follows the lifetime of a bound history endpoint. A full batch
 // schedules another pass; idle scopes and unavailable providers retry slowly.
 func IndexHistory(ctx context.Context, cwd, parent string, settings embeddings.Settings) {
+	indexContinuously(ctx, cwd, historyScope, parent, settings, nil, nil)
+}
+
+// IndexProject refreshes the archive used by project search, even when no search is open.
+func IndexProject(ctx context.Context, cwd, account string, settings embeddings.Settings, wake <-chan struct{}, finished func() bool) {
+	indexContinuously(ctx, cwd, projectAccountScope, account, settings, wake, finished)
+}
+
+func indexContinuously(ctx context.Context, cwd, scope, key string, settings embeddings.Settings, wake <-chan struct{}, finished func() bool) {
 	cfg, err := settings.Resolve()
 	if err != nil || cfg.Provider == "off" {
 		return
@@ -120,9 +149,12 @@ func IndexHistory(ctx context.Context, cwd, parent string, settings embeddings.S
 			return
 		}
 		batch, cancel := context.WithTimeout(ctx, 10*time.Second)
-		more, err := indexHistoryBatch(batch, cwd, parent, cfg, &digest)
+		more, err := indexScopedBatch(batch, cwd, scope, key, cfg, &digest, false)
 		<-indexSlot
 		cancel()
+		if (!more || err != nil) && finished != nil && finished() {
+			return
+		}
 		delay := 30 * time.Second
 		if more && err == nil {
 			delay = 250 * time.Millisecond
@@ -130,13 +162,19 @@ func IndexHistory(ctx context.Context, cwd, parent string, settings embeddings.S
 		select {
 		case <-ctx.Done():
 			return
+		case <-wake:
 		case <-time.After(delay):
 		}
 	}
 }
 
-func scoreHistory(ctx context.Context, db historyReader, parent, digest string, queryVector []float32, coverage *HistoryCoverage) ([]HistoryMatch, error) {
-	rows, err := db.QueryContext(ctx, historyScope+` SELECT messages.rowid,session_id,role,substr(body,1,512),vector FROM messages LEFT JOIN message_embeddings ON reference=messages.rowid AND digest=? WHERE session_id IN (SELECT id FROM scope) ORDER BY messages.rowid DESC`, parent, digest)
+func scoreHistory(ctx context.Context, db historyReader, scope, key, digest, keywordExpression string, queryVector []float32, coverage *HistoryCoverage) ([]HistoryMatch, error) {
+	rows, err := db.QueryContext(ctx, scope+` SELECT messages.rowid,session_id,role,substr(body,1,512),vector,
+		CASE WHEN ?3 = '' THEN 0 ELSE messages.rowid IN (
+			SELECT rowid FROM message_search WHERE message_search MATCH ?3
+		) END
+		FROM messages LEFT JOIN message_embeddings ON reference=messages.rowid AND digest=?2
+		WHERE session_id IN (SELECT id FROM scope) ORDER BY messages.rowid DESC`, key, digest, keywordExpression)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +187,8 @@ func scoreHistory(ctx context.Context, db historyReader, parent, digest string, 
 	for rows.Next() {
 		var hit HistoryMatch
 		var blob []byte
-		if err := rows.Scan(&hit.Reference, &hit.Session, &hit.Role, &hit.Snippet, &blob); err != nil {
+		var keyword bool
+		if err := rows.Scan(&hit.Reference, &hit.Session, &hit.Role, &hit.Snippet, &blob, &keyword); err != nil {
 			return nil, err
 		}
 		coverage.Window++
@@ -157,6 +196,9 @@ func scoreHistory(ctx context.Context, db historyReader, parent, digest string, 
 			continue
 		}
 		coverage.Indexed++
+		if keyword {
+			continue
+		}
 		hit.Source = "semantic"
 		var score float64
 		// Vectors are normalized before storage and scoring.
@@ -269,7 +311,7 @@ func searchHybridHistory(caller context.Context, cwd, parent, query string, cfg 
 		return page, ctx.Err()
 	}
 	var coverage HistoryCoverage
-	semantic, err := scoreHistory(ctx, tx, parent, digest, vector, &coverage)
+	semantic, err := scoreHistory(ctx, tx, historyScope, parent, digest, "", vector, &coverage)
 	if err != nil {
 		return page, err
 	}
