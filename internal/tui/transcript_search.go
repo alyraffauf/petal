@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -59,18 +61,26 @@ func (m *terminal) indexMessages(entries []entry, replace bool) {
 const searchPageSize = 40
 
 type transcriptSearch struct {
+	cancel                       context.CancelFunc
+	lexical                      int
 	input                        textinput.Model
 	cwd, account, status         string
 	hits                         []sessions.Hit
 	index, offset, first, firstY int
+	endY                         int
 	more                         bool
 	revision                     int
 	reader                       []entry
+	readerHit                    sessions.Hit
 	anchor                       int
 	backlog                      backlogViewport
 	markdown                     markdownCache
 }
 type transcriptResults struct {
+	semantic bool
+	search   *sessions.ProjectSearch
+	coverage sessions.HistoryCoverage
+	final    bool
 	page     *transcriptSearch
 	revision int
 	hits     []sessions.Hit
@@ -78,7 +88,15 @@ type transcriptResults struct {
 	run      bool
 }
 
+func (p *picker) stopTranscriptSearch() {
+	if s := p.transcripts; s != nil && s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+}
+
 func (p *picker) openTranscriptSearch() {
+	p.stopTranscriptSearch()
 	cwd := p.center.cwd
 	s := &transcriptSearch{cwd: cwd, account: p.cfg.PinnedAccount, input: p.search}
 	if p.center.owner != nil {
@@ -90,6 +108,10 @@ func (p *picker) openTranscriptSearch() {
 	p.transcripts = s
 }
 func (s *transcriptSearch) request(offset int) tea.Cmd {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	s.revision++
 	s.index, s.offset, s.hits, s.more = 0, offset, nil, false
 	s.status = ""
@@ -122,7 +144,7 @@ func (s *transcriptSearch) openHit() {
 		s.status = "This transcript changed. Edit the query to refresh."
 		return
 	}
-	s.reader, s.anchor = entries, anchor
+	s.reader, s.readerHit, s.anchor = entries, hit, anchor
 	s.backlog = backlogViewport{}
 	s.markdown = markdownCache{}
 }
@@ -141,6 +163,61 @@ func (p *picker) transcriptInput(msg tea.Msg) tea.Cmd {
 				return t
 			}
 		}
+		if t.semantic {
+			if t.search == nil || t.err != nil {
+				if len(s.hits) == 0 {
+					s.status = "No matching messages"
+				} else {
+					s.status = ""
+				}
+				return nil
+			}
+			selected := int64(-1)
+			if len(s.hits) > 0 {
+				selected = s.hits[s.index].Row
+			}
+			s.hits = s.hits[:s.lexical]
+			s.hits = append(s.hits, t.hits...)
+			s.index = 0
+			for i, h := range s.hits {
+				if h.Row == selected {
+					s.index = i
+					break
+				}
+			}
+			s.status = ""
+			if len(s.hits) == 0 {
+				s.status = "No matching messages"
+			}
+			if t.coverage.Indexed < t.coverage.Window && !t.final {
+				s.status = fmt.Sprintf("Indexing messages · %d/%d", t.coverage.Indexed, t.coverage.Window)
+				ctx, cancel := context.WithCancel(context.Background())
+				if s.cancel != nil {
+					s.cancel()
+				}
+				s.cancel = cancel
+				legacyIndex := p.legacyIndex
+				return func() tea.Msg {
+					if legacyIndex {
+						var more bool
+						more, t.err = t.search.Backfill(ctx, time.Second)
+						t.final = !more
+						if t.err == nil {
+							t.hits, t.coverage, t.err = t.search.Matches(ctx)
+						}
+						return t
+					}
+					select {
+					case <-ctx.Done():
+						t.err = ctx.Err()
+					case <-time.After(time.Second):
+						t.hits, t.coverage, t.err = t.search.Matches(ctx)
+					}
+					return t
+				}
+			}
+			return nil
+		}
 		s.status = ""
 		if t.err != nil {
 			s.status = t.err.Error()
@@ -151,9 +228,26 @@ func (p *picker) transcriptInput(msg tea.Msg) tea.Cmd {
 		if len(s.hits) == 0 {
 			s.status = "No matching messages"
 		}
+		s.lexical = len(s.hits)
+		if s.offset == 0 && p.cfg.History.Embeddings.Provider != "off" {
+			ctx, cancel := context.WithCancel(context.Background())
+			s.cancel = cancel
+			cwd, account, query, settings := s.cwd, s.account, s.input.Value(), p.cfg.History.Embeddings
+			if s.lexical == 0 {
+				s.status = "Searching by meaning…"
+			}
+			return func() tea.Msg {
+				t.semantic = true
+				t.search = sessions.PrepareProjectSearch(ctx, cwd, account, query, settings)
+				if t.search != nil {
+					t.hits, t.coverage, t.err = t.search.Matches(ctx)
+				}
+				return t
+			}
+		}
 		return nil
 	case tea.MouseClickMsg:
-		if s.reader == nil && t.Button == tea.MouseLeft && t.Y >= s.firstY && t.Y < p.height-navFooterHeight(p.height) {
+		if s.reader == nil && t.Button == tea.MouseLeft && t.Y >= s.firstY && t.Y < s.endY {
 			i := s.first + (t.Y-s.firstY)/2
 			if i < len(s.hits) {
 				s.index = i
@@ -177,12 +271,15 @@ func (p *picker) transcriptInput(msg tea.Msg) tea.Cmd {
 	case tea.KeyPressMsg:
 		switch t.String() {
 		case "ctrl+c":
+			p.stopTranscriptSearch()
 			return tea.Quit
 		case "esc":
 			if s.reader != nil {
 				s.reader = nil
+				s.readerHit = sessions.Hit{}
 				s.markdown = markdownCache{}
 			} else {
+				p.stopTranscriptSearch()
 				p.transcripts = nil
 			}
 			return nil

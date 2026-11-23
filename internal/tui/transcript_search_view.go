@@ -31,7 +31,7 @@ func (p *picker) transcriptView() tea.View {
 	}
 	hint := "↑↓ Select  Enter Read  Esc threads"
 	if s.reader != nil {
-		hit := s.hits[s.index]
+		hit := s.readerHit
 		row(" "+petalLabel(hit.Title+" · "+hit.Model+" / "+hit.Account), petalRose, p.background, true)
 		v := screen{Messages: s.reader, markdown: &s.markdown, backlog: &s.backlog, background: p.background}
 		gutter := min(12, w/4)
@@ -66,6 +66,9 @@ func (p *picker) transcriptView() tea.View {
 		}
 		if len(s.hits) > 0 {
 			status := fmt.Sprintf("  matches %d–%d", s.offset+1, s.offset+len(s.hits))
+			if count := len(s.hits) - s.lexical; count > 0 {
+				status = fmt.Sprintf("  %d keyword · %d by meaning", s.lexical, count)
+			}
 			if s.more || s.offset > 0 {
 				hint = "↑↓ Select  Enter Read  Pg↑ Pg↓ Results  Esc threads"
 			}
@@ -80,6 +83,9 @@ func (p *picker) transcriptView() tea.View {
 			if title == "" {
 				title = hit.Model
 			}
+			if hit.Semantic {
+				title += " · by meaning"
+			}
 			bg := p.background
 			if i == s.index {
 				bg = selectionBand
@@ -87,6 +93,7 @@ func (p *picker) transcriptView() tea.View {
 			row("  "+petalLabel(title+" · "+sentenceLabel(hit.Role)+" · "+hit.Account), petalText, bg, true)
 			row("    "+snippetText(hit.Snippet), petalMuted, bg, false)
 		}
+		s.endY = len(rows)
 	}
 	for len(rows) < bodyEnd {
 		row("", petalText, p.background, false)

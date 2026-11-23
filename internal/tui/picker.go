@@ -31,6 +31,7 @@ type picker struct {
 	motion                                  centerMotion
 	monochrome                              bool
 	transcripts                             *transcriptSearch
+	legacyIndex                             bool
 	pointerPane, pointerRows, pointerDetail image.Rectangle
 	pointerFirst                            int
 	center                                  controlCenter
@@ -581,8 +582,10 @@ func (m *picker) resultRow(i, w int) string {
 	return richBand("    "+label, w, petalText, m.background, false)
 }
 
-func pick(cwd string, c routing.Config, resume bool) (sessionStart, bool, error) {
+func pick(cwd string, c routing.Config, resume, legacyIndex bool) (sessionStart, bool, error) {
 	m := newPicker(cwd, c)
+	m.legacyIndex = legacyIndex
+	defer m.stopTranscriptSearch()
 	m.showHistory()
 	if resume && len(m.saved) > 0 {
 		m.center.selected = m.saved[0].ID
