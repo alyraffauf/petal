@@ -42,6 +42,7 @@ type backend struct {
 	conn             *acp.Connection
 	wire             *adapterWire
 	hello            acp.InitializeResponse
+	skills           sync.Map // native session ID to the skill names its adapter advertised
 }
 type proxy struct {
 	recorder       *transcriptRecorder
@@ -302,6 +303,11 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		return nil, err
 	}
 	b.trackSessionStartup(method, params)
+	if skills, ok := b.skills.Load(native); ok && method == "session/prompt" {
+		if prompt, ok := invokeSkill(params["prompt"], skills.(map[string]bool)); ok {
+			params["prompt"] = prompt
+		}
+	}
 	doneTrace := traceAdapter(ctx, b.wire, method, params)
 	result, err := forward[json.RawMessage](b.conn, ctx, method, params)
 	doneTrace(result, err)
@@ -601,11 +607,13 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 				args["elicitationId"] = encoded(p.publicID(name, id))
 			}
 		}
+		var session string
 		if _, ok := args["sessionId"]; ok {
 			id, err := SessionID(args)
 			if err != nil {
 				return nil, rpcError(err)
 			}
+			session = id
 			args["sessionId"] = encoded(p.editorID(name, id))
 		}
 		field := ""
@@ -626,6 +634,13 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 				var updateKind string
 				_ = json.Unmarshal(item["sessionUpdate"], &updateKind)
 				switch updateKind {
+				case "available_commands_update":
+					if skills, ok := advertiseSkills(item); ok {
+						b.skills.Store(session, skills)
+						changed = true
+					} else {
+						b.skills.Delete(session)
+					}
 				case "config_option_update":
 					if strings.HasPrefix(stringField(args, "sessionId"), "petal-") && item["configOptions"] != nil {
 						item["configOptions"] = p.editorOptions(item["configOptions"], false)["configOptions"]

@@ -36,6 +36,12 @@ On v2, reopening a session requests a full replay. Petal adds the newly observed
 
 Editors see the capabilities that the eligible accounts share. After routing, each session keeps its original adapter. If you pin one account, the editor sees the capabilities of that adapter.
 
+## Skills
+
+Codex advertises each skill as a command named `$name`. Some editors, such as T3 Code, list only those commands as skills. Claude Code advertises skills as plain commands and marks the source at the end of the description, such as `(user)`, `(project)`, or `(plugin:…)`.
+
+For a Claude Code session, Petal also advertises each marked skill as `$name`. When a prompt starts with one of those names, Petal sends it to Claude Code as `/name`. A `$name` later in the prompt stays as written. Built-in commands carry no source mark, so Petal does not list them as skills.
+
 ## Permissions and terminals
 
 The TUI asks before it writes files or runs commands.
