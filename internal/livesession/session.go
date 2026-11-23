@@ -21,20 +21,26 @@ const (
 	maxMetadata  = 512 << 10
 	maxQuestions = 16
 	maxQuestion  = 64 << 10
+	// Reserve IDs for turns with no frontend prompt, within JSON safe integers.
+	independentTurnBase = 1 << 52
 )
 
 type operation struct {
-	number         uint64
-	method         string
-	fingerprint    [32]byte
-	dispatched     chan struct{}
-	done           chan struct{}
-	receipt        Receipt
-	size           int
-	replay         *journal
-	replayComplete bool
-	resumeState    bool
-	started        bool
+	number      uint64
+	method      string
+	fingerprint [32]byte
+	dispatched  chan struct{}
+	done        chan struct{}
+	receipt     Receipt
+	size        int
+	replay      *setupReplay
+}
+
+type setupReplay struct {
+	journal
+	archive     setupArchiveV2
+	foreground  string
+	stateCursor uint64
 }
 
 type session struct {
@@ -57,35 +63,39 @@ type session struct {
 	preparing            bool
 	reservationIdleSince time.Time
 
-	mu           sync.Mutex
-	info         Info
-	controller   *peer
-	changed      chan struct{}
-	events       journal
-	closed       bool
-	closingDone  chan struct{}
-	hello        json.RawMessage
-	resumeMethod string
-	archiveHead  int64
-	setup        json.RawMessage
-	nextOp       uint64
-	active       *operation
-	steering     *operation
-	turn         *operation
-	running      bool
-	foreground   string
-	canceling    bool
-	cancelled    uint64
-	receipts     []*operation
-	receiptSize  int
-	questionID   uint64
-	pending      map[uint64]*pendingQuestion
-	answered     map[uint64][32]byte
-	answerOrder  []uint64
-
-	listing *operation
-	// The prompt reply can precede the first active foreground update.
-	awaitingStart *operation
+	mu                  sync.Mutex
+	info                Info
+	controller          *peer
+	changed             chan struct{}
+	events              journal
+	closed              bool
+	closingDone         chan struct{}
+	hello               json.RawMessage
+	resumeMethod        string
+	archiveHead         int64
+	archiveCursor       uint64
+	archiveV2           archiveV2
+	settingsConfirmed   bool
+	settingsRevision    uint64
+	setup               json.RawMessage
+	nextOp              uint64
+	active              *operation
+	steering            *operation
+	turn                *operation
+	pendingPrompt       *operation
+	turnV2              uint64
+	nextIndependentTurn uint64
+	running             bool
+	foreground          string
+	canceling           bool
+	cancelled           uint64
+	receipts            []*operation
+	receiptSize         int
+	questionID          uint64
+	pending             map[uint64]*pendingQuestion
+	answered            map[uint64][32]byte
+	answerOrder         []uint64
+	listing             *operation
 }
 
 func newSession(server *Server, options OpenOptions) *session {
@@ -185,8 +195,9 @@ func (s *session) state(p *peer) Snapshot {
 	snapshot := Snapshot{
 		Info: s.info, Floor: s.events.floor(), Head: s.events.head, After: s.events.head,
 		Control: s.controller == p, NextOperation: s.nextOp, Foreground: s.foreground, Running: s.running, Canceling: s.canceling,
+		SettingsPending: s.settingsPending(), SettingsRevision: s.settingsRevision, ArchiveCursor: s.archiveCursor,
 		Closed: s.closed, Hello: s.hello, Setup: s.setup, SetupMethod: s.resumeMethod, ArchiveHead: s.archiveHead,
-		AwaitingStart: s.awaitingStart != nil,
+		AwaitingStart: s.pendingPrompt != nil,
 	}
 	if s.active != nil {
 		snapshot.ActiveOperation = s.active.number
@@ -195,9 +206,12 @@ func (s *session) state(p *peer) Snapshot {
 	if s.steering != nil {
 		snapshot.SteeringOperation = s.steering.number
 	}
-	if s.turn != nil {
+	switch {
+	case s.info.ACPVersion == 2:
+		snapshot.Turn = s.currentV2Turn()
+		snapshot.TurnStarted = s.running
+	case s.turn != nil:
 		snapshot.Turn = s.turn.number
-		snapshot.TurnStarted = s.turn.started
 	}
 	// Question IDs are monotonic, but a long-running question can survive
 	// arbitrarily many other questions. Sort only the pending entries.
@@ -292,7 +306,7 @@ func (s *session) closeBy(p *peer) *Error {
 	}
 	s.closed = true
 	s.publish(Event{Kind: SessionClosed})
-	if s.info.SessionID != "" && !s.info.AdapterExited && s.active == nil && s.listing == nil && s.steering == nil && s.awaitingStart == nil && !s.running && !s.canceling {
+	if s.info.SessionID != "" && !s.info.AdapterExited && s.active == nil && s.listing == nil && s.steering == nil && s.pendingPrompt == nil && !s.running && !s.canceling {
 		done := make(chan struct{})
 		s.closingDone = done
 		go s.closeAdapter(s.info.SessionID, done)
@@ -373,6 +387,9 @@ func (s *session) retire() {
 	}
 	if s.backend != nil {
 		s.backend.Wait()
+	}
+	if s.info.ACPVersion == 2 && len(s.setup) != 0 && !s.archiveV2.deleted {
+		s.checkpointV2(s.events.head)
 	}
 	s.server.remove(s)
 }

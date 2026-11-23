@@ -238,6 +238,12 @@ func (c *Client) Answer(ctx context.Context, answer Answer) error {
 	return err
 }
 
+// ConfirmSettings releases the resumed-session prompt gate for the reviewed snapshot.
+func (c *Client) ConfirmSettings(ctx context.Context, revision uint64) error {
+	_, err := rpc[bool](ctx, c, "confirm_settings", revision)
+	return err
+}
+
 func (c *Client) Cancel(ctx context.Context, turn uint64) error {
 	_, err := rpc[bool](ctx, c, "cancel", turn)
 	return err

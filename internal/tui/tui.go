@@ -773,12 +773,13 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.h.v2.Load() {
 			conversation := m.conversationV2()
 			conversation.archiveRows = len(t.history)
+			conversation.turn = t.snapshot.Turn
 			foreground := &conversation.foreground
 			if t.snapshot.Foreground != "" {
 				foreground.report(t.snapshot.Foreground)
 			}
 			foreground.submitting = t.snapshot.ActiveMethod == "session/prompt"
-			foreground.awaitingStart = t.snapshot.AwaitingStart || (foreground.submitting && !t.snapshot.TurnStarted)
+			foreground.awaitingStart = t.snapshot.Turn != 0 && !t.snapshot.TurnStarted
 			m.refreshForegroundV2()
 			m.publishV2Transcript(true)
 		} else {
@@ -791,22 +792,30 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if t.gap {
+		if t.partial {
+			m.recordNote("Some updates after the saved transcript expired. Showing the saved transcript and retained updates.")
+		} else if t.gap {
 			m.recordNote("Some live events expired. Showing the saved transcript and available updates.")
 		}
 		cmd = m.listen
 	case daemonNotice:
 		m.recordNote(t.text)
 		cmd = m.listen
-	case daemonCancelFailed:
-		m.cancelling = false
-		m.recordNote(terminalError(t.err))
+	case daemonCancelFinished:
+		if t.err != nil {
+			m.cancelling = false
+			m.recordNote(terminalError(t.err))
+		}
+		cmd = m.listen
 		if m.v2 != nil {
+			if m.v2.turn != t.turn && !m.v2.foreground.awaitingStart {
+				m.cancelling = false
+			}
 			m.refreshForegroundV2()
+			cmd = tea.Batch(cmd, m.deliver())
 		} else {
 			m.Status = "working"
 		}
-		cmd = m.listen
 	case daemonDisconnected:
 		if m.connection == connecting {
 			m.Messages = m.openingPreview
@@ -909,6 +918,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.listen
 		conversation := m.conversationV2()
 		if t.SessionUpdate == "state_update" {
+			conversation.turn = t.turn
 			completed := conversation.foreground.report(t.State)
 			if t.State == "idle" && !conversation.foreground.awaitingStart {
 				m.cancelling = false
@@ -924,7 +934,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case promptV2Result:
 		foreground := &m.conversationV2().foreground
-		m.v2.promptWritten = nil
+		m.v2.promptWrite = nil
 		foreground.settlePrompt(t.err)
 		if t.err != nil {
 			if foreground.state == "" || foreground.state == "idle" {

@@ -19,6 +19,7 @@ type daemonOpened struct {
 	snapshot livesession.Snapshot
 	history  []entry
 	gap      bool
+	partial  bool
 }
 type daemonReplayStart struct{ prompt []entry }
 type daemonReplayFinish struct{ active bool }
@@ -37,9 +38,11 @@ func (h *harness) readDaemon(ctx context.Context, snapshot livesession.Snapshot,
 			h.emitV2(ctx, daemonDisconnected{err})
 			return
 		}
-		// The archive is the baseline once replay has fallen behind. Jump
-		// to a fresh head so a busy adapter cannot outrun recovery again.
+		// Rebuild from the archive and the retained ACP v2 suffix.
 		snapshot.After = snapshot.Head
+		if snapshot.ACPVersion == 2 {
+			snapshot.After = snapshot.Floor
+		}
 		h.emitV2(ctx, daemonReplayReset{})
 		fresh = false
 	}
@@ -54,9 +57,15 @@ func (h *harness) readDaemonSnapshot(ctx context.Context, snapshot livesession.S
 	cursor := snapshot.After
 	gap := cursor > 0
 	var archive []entry
-	if gap {
+	if gap && snapshot.ACPVersion == 2 {
+		var err error
+		archive, err = h.readArchiveHistory(snapshot.ArchiveHead)
+		if err != nil {
+			return err
+		}
+	} else if gap {
 		archive = h.archiveHistory(-1)
-	} else if snapshot.ArchiveHead != 0 {
+	} else if snapshot.ACPVersion == 1 && snapshot.ArchiveHead != 0 {
 		archive = h.archiveHistory(snapshot.ArchiveHead)
 	}
 	var active bool
@@ -89,7 +98,11 @@ func (h *harness) readDaemonSnapshot(ctx context.Context, snapshot livesession.S
 			}
 			active = false
 		case e.Kind == livesession.Update:
-			if !gap || active || !transcriptUpdate(e) {
+			if snapshot.ACPVersion == 2 {
+				if !gap || e.Sequence > snapshot.ArchiveCursor || !h.archivedV2Update(e) {
+					h.applyDaemonUpdate(ctx, e, true, fresh)
+				}
+			} else if !gap || active || !transcriptUpdate(e) {
 				h.applyDaemonUpdate(ctx, e, true, fresh)
 			} else if e.Method == "terminal/output" {
 				h.rememberTerminal(e.Params)
@@ -99,7 +112,7 @@ func (h *harness) readDaemonSnapshot(ctx context.Context, snapshot livesession.S
 	if snapshot.ACPVersion == 1 {
 		h.emitV2(ctx, daemonReplayFinish{active: active && snapshot.Running})
 	}
-	h.emitV2(ctx, daemonOpened{snapshot: snapshot, history: archive, gap: gap})
+	h.emitV2(ctx, daemonOpened{snapshot: snapshot, history: archive, gap: gap, partial: gap && snapshot.ACPVersion == 2 && snapshot.Floor > snapshot.ArchiveCursor})
 	questions := daemonQuestions{h: h, active: make(map[uint64]context.CancelFunc)}
 	for _, question := range snapshot.Pending {
 		questions.open(readCtx, question)
@@ -123,8 +136,12 @@ func (h *harness) readDaemonSnapshot(ctx context.Context, snapshot livesession.S
 				}
 			}
 		case livesession.CancelFinished:
-			if e.Outcome != nil && e.Outcome.Err() != nil {
-				h.emitV2(ctx, daemonCancelFailed{e.Outcome.Err()})
+			var err error
+			if e.Outcome != nil {
+				err = e.Outcome.Err()
+			}
+			if err != nil || h.v2.Load() {
+				h.emitV2(ctx, daemonCancelFinished{turn: e.Turn, err: err})
 			}
 		case livesession.AdapterExited, livesession.SessionClosed:
 			if e.Kind == livesession.AdapterExited {
@@ -135,7 +152,10 @@ func (h *harness) readDaemonSnapshot(ctx context.Context, snapshot livesession.S
 	}
 }
 
-type daemonCancelFailed struct{ err error }
+type daemonCancelFinished struct {
+	turn uint64
+	err  error
+}
 
 func (h *harness) finishDaemonPrompt(ctx context.Context, e livesession.Event) {
 	outcome := e.Outcome
@@ -166,9 +186,17 @@ func (h *harness) promptResult(raw json.RawMessage, err error) tea.Msg {
 }
 
 func (h *harness) archiveHistory(head int64) []entry {
+	history, _ := h.readArchiveHistory(head)
+	return history
+}
+
+func (h *harness) readArchiveHistory(head int64) ([]entry, error) {
+	if head == 0 {
+		return nil, nil
+	}
 	rows, err := sessions.Transcript(h.cwd, h.id)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	history := make([]entry, 0, len(rows))
 	for _, row := range rows {
@@ -177,7 +205,7 @@ func (h *harness) archiveHistory(head int64) []entry {
 		}
 		history = append(history, entry{row.Role, row.Body})
 	}
-	return history
+	return history, nil
 }
 
 func replayedPrompt(params json.RawMessage) []entry {
@@ -215,12 +243,24 @@ func daemonUpdateKind(raw json.RawMessage) string {
 	return update.Update.SessionUpdate
 }
 
+func (h *harness) archivedV2Update(e livesession.Event) bool {
+	if e.Method != "session/update" || !isV2TranscriptUpdate(daemonUpdateKind(e.Params)) {
+		return false
+	}
+	var params struct{ SessionID string }
+	return json.Unmarshal(e.Params, &params) == nil && params.SessionID == h.id
+}
+
 func (h *harness) applyDaemonUpdate(ctx context.Context, e livesession.Event, replay, fresh bool) {
 	switch e.Method {
 	case "session/update":
 		kind := daemonUpdateKind(e.Params)
 		if replay && (kind == "state_update" || kind == "replay_complete" || (kind == "session_info_update" && !fresh) ||
 			kind == "config_option_update" || kind == "current_mode_update") {
+			return
+		}
+		if h.v2.Load() && kind == "state_update" {
+			_, _ = h.updateV2(ctx, e.Params, e.Turn)
 			return
 		}
 		_, _ = h.callback(ctx, e.Method, e.Params)

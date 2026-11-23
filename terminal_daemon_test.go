@@ -7,11 +7,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -75,20 +77,29 @@ func (p *terminalProcess) write(t *testing.T, input string) {
 
 func (p *terminalProcess) await(t *testing.T, ctx context.Context, marker string) {
 	t.Helper()
+	p.awaitAll(t, ctx, marker)
+}
+
+func (p *terminalProcess) awaitAll(t *testing.T, ctx context.Context, markers ...string) string {
+	t.Helper()
 	for {
 		plain := ansi.Strip(p.buf)
-		if strings.Contains(plain, marker) {
+		found := true
+		for _, marker := range markers {
+			found = found && strings.Contains(plain, marker)
+		}
+		if found {
 			p.buf = ""
-			return
+			return plain
 		}
 		select {
 		case part, ok := <-p.out:
 			if !ok {
-				t.Fatalf("terminal exited waiting for %q: %q", marker, plain)
+				t.Fatalf("terminal exited waiting for %q: %q", markers, plain)
 			}
 			p.buf += part
 		case <-ctx.Done():
-			t.Fatalf("waiting for %q: %q", marker, plain)
+			t.Fatalf("waiting for %q: %q", markers, plain)
 		}
 	}
 }
@@ -147,18 +158,7 @@ command=[%q, "-test.run=^TestPTYChild$"]
 			first.await(t, ctx, "Approve fixture")
 			first.detach(t)
 
-			endpoint, err := fixtureEndpoint(env, config, workspace)
-			if err != nil {
-				t.Fatal(err)
-			}
-			conn, err := endpoint.Dial(ctx)
-			if err != nil {
-				t.Fatalf("daemon died when client detached: %v", err)
-			}
-			observer, err := livesession.Connect(ctx, conn)
-			if err != nil {
-				t.Fatal(err)
-			}
+			observer := dialPTYDaemon(t, ctx, env, config, workspace)
 			defer observer.Close()
 			list, err := observer.List(ctx)
 			if err != nil || len(list) != 1 || list[0].Cwd != workspace {
@@ -234,6 +234,121 @@ command=[%q, "-test.run=^TestPTYChild$"]
 	}
 }
 
+func dialPTYDaemon(t *testing.T, ctx context.Context, env []string, config, workspace string) *livesession.Client {
+	t.Helper()
+	endpoint, err := fixtureEndpoint(env, config, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := endpoint.Dial(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := livesession.Connect(ctx, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func TestTerminalV2RecoversArchiveAndRetainedTurnAfterJournalEviction(t *testing.T) {
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(workspace, "config.toml")
+	source := fmt.Sprintf(`acp_v2=true
+stream_responses=true
+[[accounts]]
+name="fixture"
+[[accounts.env]]
+name="PETAL_PTY_ROLE"
+value="live-fixture"
+[[accounts.env]]
+name="PETAL_PTY_ACP_VERSION"
+value="2"
+[[accounts.models]]
+id="fixture"
+command=[%q, "-test.run=^TestPTYChild$"]
+`, exe)
+	if err := os.WriteFile(config, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := ptyEnvironment(t, workspace, config)
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+	defer cancel()
+
+	first := startTerminal(t, ctx, exe, workspace, env)
+	first.await(t, ctx, "control center")
+	first.write(t, "\r")
+	first.await(t, ctx, "choose a model")
+	first.write(t, "\r")
+	first.await(t, ctx, "ready")
+	first.write(t, "Archive baseline\r")
+	first.await(t, ctx, "archived-baseline")
+	first.write(t, "Overflow journal\r")
+	first.await(t, ctx, "unarchived-prefix")
+	first.detach(t)
+
+	observer := dialPTYDaemon(t, ctx, env, config, workspace)
+	defer observer.Close()
+	list, err := observer.List(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("live sessions = %+v, %v", list, err)
+	}
+	before, err := observer.Attach(ctx, livesession.AttachOptions{Handle: list[0].Handle})
+	if err != nil || before.Floor == 0 || before.Floor >= before.ArchiveCursor || before.ArchiveHead == 0 || !before.Running {
+		t.Fatalf("expected overlap between the checkpoint and retained events: %+v, %v", before, err)
+	}
+
+	second := startTerminal(t, ctx, exe, workspace, env)
+	second.awaitAll(t, ctx, "archived-baseline", "unarchived-prefix", "Some live events expired")
+	// Force a full repaint so the transcript can be counted in one frame.
+	if err := pty.Setsize(second.tty, &pty.Winsize{Rows: 34, Cols: 110}); err != nil {
+		t.Fatal(err)
+	}
+	frame := second.awaitAll(t, ctx, "archived-baseline", "unarchived-prefix", "Some live events expired")
+	if count := strings.Count(frame, "archived-baseline"); count != 1 {
+		t.Fatalf("archived row appeared %d times in the reattached transcript", count)
+	}
+	if err := second.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "overflow"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cursor := before.Head
+	for {
+		event, err := observer.Next(ctx, cursor)
+		var gap *livesession.Error
+		if errors.As(err, &gap) && gap.Code == livesession.Gap {
+			cursor = gap.Floor
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor = event.Sequence
+		if strings.Contains(string(event.Params), "retained-active-tail") {
+			break
+		}
+	}
+	after, err := observer.Snapshot(ctx)
+	if err != nil || after.Floor <= before.Head || after.ArchiveHead != before.ArchiveHead ||
+		after.ArchiveCursor != before.ArchiveCursor || after.Turn != before.Turn {
+		t.Fatalf("active overflow moved the archive checkpoint or turn: %+v, %v", after, err)
+	}
+	if err := second.cmd.Process.Signal(syscall.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	second.awaitAll(t, ctx, "archived-baseline", "retained-active-tail", "Some updates after the saved transcript expired")
+	second.detach(t)
+}
+
 func TestTerminalDaemonReopensArchive(t *testing.T) {
 	workspace := t.TempDir()
 	exe, err := os.Executable()
@@ -280,6 +395,10 @@ command=[%q, "-test.run=^TestPTYChild$"]
 	}
 	first.write(t, "/attach payload.bin\r")
 	first.await(t, ctx, "attachment-received")
+	first.write(t, "/model\r")
+	first.await(t, ctx, "Second model")
+	first.write(t, "Alternate\r")
+	first.await(t, ctx, "alternate…")
 	first.write(t, "/close\r")
 	if err := first.cmd.Wait(); err != nil {
 		t.Fatal(err)
@@ -287,8 +406,38 @@ command=[%q, "-test.run=^TestPTYChild$"]
 	second := startTerminal(t, ctx, exe, workspace, append(env, "PETAL_PTY_RESUME=1"))
 	second.await(t, ctx, "control center")
 	second.write(t, "\r")
-	second.await(t, ctx, "status-command-confirmed")
+	second.await(t, ctx, "Resuming changed")
+	observer := dialPTYDaemon(t, ctx, env, "", workspace)
+	defer observer.Close()
+	live, err := observer.List(ctx)
+	if err != nil || len(live) != 1 {
+		t.Fatalf("expected one resumed session: %+v, %v", live, err)
+	}
+	before, err := observer.Attach(ctx, livesession.AttachOptions{Handle: live[0].Handle})
+	if err != nil || !before.SettingsPending {
+		t.Fatalf("expected pending settings confirmation: %+v, %v", before, err)
+	}
 	second.detach(t)
+	third := startTerminal(t, ctx, exe, workspace, append(env, "PETAL_PTY_RESUME=1"))
+	third.await(t, ctx, "control center")
+	third.write(t, "\r")
+	third.await(t, ctx, "Resuming changed")
+	third.write(t, "1\r")
+	third.await(t, ctx, "ready")
+	third.write(t, "/config\r")
+	third.await(t, ctx, "Model · Alternate")
+	after, err := observer.Snapshot(ctx)
+	if err != nil || after.Closed || after.SettingsPending || after.SettingsRevision <= before.SettingsRevision {
+		t.Fatalf("expected restored settings on the same live session: %+v, %v", after, err)
+	}
+	third.write(t, "\x1b")
+	third.await(t, ctx, "status-command-confirmed")
+	third.detach(t)
+	t.Setenv("XDG_STATE_HOME", workspace)
+	record, err := sessions.Latest(workspace, "fixture")
+	if err != nil || len(record.Selections) != 1 || record.Selections[0].Value != "alternate" {
+		t.Fatalf("restored selections = %+v, %v", record.Selections, err)
+	}
 }
 
 type terminalAdapterFrame struct {
@@ -336,6 +485,11 @@ func runLivePTYAdapter(t *testing.T, child bool) {
 	message := func(role, key, text string) {
 		kind := role + "_message_chunk"
 		update(map[string]any{"sessionUpdate": kind, "messageId": key, "content": map[string]string{"type": "text", "text": text}})
+	}
+	overflow := func() {
+		for range 4200 {
+			update(map[string]any{"sessionUpdate": "fixture_padding"})
+		}
 	}
 	var delegate func()
 	var promptID json.RawMessage
@@ -386,9 +540,17 @@ func runLivePTYAdapter(t *testing.T, child bool) {
 			switch {
 			case input == "flush on shutdown":
 				message("agent", "flush", "pending archive tail")
+			case input == "Archive baseline":
+				overflow()
+				message("agent", "archive-row", "archived-baseline")
+			case input == "Overflow journal":
+				message("agent", "active-prefix", "unarchived-prefix")
+				waitForPTYFixtureFile(t, cwd, "overflow")
+				overflow()
+				message("agent", "active-tail", "retained-active-tail")
 				continue
 			case child:
-				waitForChildRelease(t, cwd)
+				waitForPTYFixtureFile(t, cwd, "release-child")
 				message("agent", "child", "child-receipt")
 			case strings.Contains(input, "Petal delegation update:"):
 				message("agent", "followup", "child-followup-confirmed")
@@ -437,15 +599,15 @@ func runLivePTYAdapter(t *testing.T, child bool) {
 	}
 }
 
-func waitForChildRelease(t *testing.T, cwd string) {
+func waitForPTYFixtureFile(t *testing.T, cwd, name string) {
 	t.Helper()
 	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); {
-		if _, err := os.Stat(filepath.Join(cwd, "release-child")); err == nil {
+		if _, err := os.Stat(filepath.Join(cwd, name)); err == nil {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("test never released the child")
+	t.Fatalf("fixture file %q was not created", name)
 }
 
 func runPTYDelegation(t *testing.T, cmd *exec.Cmd) {

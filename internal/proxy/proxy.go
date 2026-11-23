@@ -517,11 +517,20 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 	if p.editorWire != nil && p.editorWire.traceLog != nil {
 		reader.traceUpdates = p.editorWire.traceLog
 	}
-	if receive == nil && p.recorder != nil {
+	if receive == nil && p.recorder != nil && (p.local == nil || version != 2) {
 		reader.observeUpdate = func(raw json.RawMessage) {
 			var args Object
 			if json.Unmarshal(raw, &args) == nil {
 				p.recorder.observe(p.publicID(name, stringField(args, "sessionId")), version, args.member("update"))
+			}
+		}
+	}
+	if receive == nil && p.local != nil && version == 2 {
+		// Apply daemon updates before the reader exposes a subsequent ACP
+		// response. Resume validation and archive checkpoints use this order.
+		reader.sessionUpdate = func(raw json.RawMessage) {
+			if b.ready.Load() {
+				_, _ = p.relayV2ClientCall(lifetime, name, notificationPrefix+"session/update", raw, clientCaps, lifetime)
 			}
 		}
 	}

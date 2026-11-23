@@ -26,9 +26,9 @@ type daemonSession struct {
 
 	// Serialize operation allocation with submission. Cancellation targets a
 	// specific accepted operation even if a later prompt starts.
-	mu   sync.Mutex
-	next uint64
-	turn atomic.Uint64
+	mu              sync.Mutex
+	next            uint64
+	promptOperation atomic.Uint64
 
 	// Terminal releases are journaled. A tool update can also refer to a
 	// terminal which still exists on the host.
@@ -77,7 +77,7 @@ func (d *daemonSession) submit(ctx context.Context, method string, params any) (
 	if err == nil {
 		d.next = number + 1
 		if method == "session/prompt" {
-			d.turn.Store(number)
+			d.promptOperation.Store(number)
 		}
 	}
 	return number, err
@@ -90,7 +90,7 @@ func (h *harness) cancelAction() func(context.Context) error {
 			return h.conn.SendNotification(ctx, "session/cancel", map[string]string{"sessionId": h.id})
 		}
 	}
-	turn := d.turn.Load()
+	turn := d.promptOperation.Load()
 	written := h.promptWrite.Load()
 	return func(ctx context.Context) error {
 		number := turn
@@ -143,7 +143,7 @@ func (h *harness) openDaemon(ctx context.Context, c routing.Config, cwd string, 
 		return "", err
 	}
 	d.next = snapshot.NextOperation
-	d.turn.Store(snapshot.Turn)
+	d.promptOperation.Store(snapshot.Turn)
 	established := len(snapshot.Setup) != 0
 	if !established {
 		if err := h.setupDaemon(ctx, c, snapshot); err != nil {
@@ -170,9 +170,9 @@ func (h *harness) openDaemon(ctx context.Context, c routing.Config, cwd string, 
 		h.discardFailedSession(ctx)
 		return "", err
 	}
-	if !established {
-		if resume {
-			err = h.reviewResumedSettings(ctx)
+	if snapshot.SettingsPending || !established && snapshot.ResumeID == "" {
+		if snapshot.SettingsPending {
+			err = h.confirmDaemonSettings(ctx, snapshot)
 		} else {
 			err = h.applyRequestedModel(ctx, false)
 		}
@@ -190,6 +190,40 @@ func (h *harness) openDaemon(ctx context.Context, c routing.Config, cwd string, 
 	snapshot.After = snapshot.Floor
 	go h.readDaemon(ctx, snapshot, !established)
 	return snapshot.Account, nil
+}
+
+func (h *harness) confirmDaemonSettings(ctx context.Context, snapshot livesession.Snapshot) error {
+	client := h.daemon.client
+	stopQuestions, watchErr := h.watchSetupQuestions(ctx, snapshot)
+	if watchErr != nil {
+		return watchErr
+	}
+	defer stopQuestions()
+	for {
+		if snapshot.ActiveOperation != 0 {
+			// A restore may have been accepted before the previous frontend left.
+			if _, err := client.WaitResult(ctx, snapshot.ActiveOperation); err != nil {
+				return err
+			}
+			current, err := client.Snapshot(ctx)
+			if err != nil {
+				return err
+			}
+			snapshot = current
+		}
+		h.initialSettings = settingsFrom(v2Object(snapshot.Setup))
+		if err := h.reviewResumedSettings(ctx); err != nil {
+			return err
+		}
+		err := client.ConfirmSettings(ctx, snapshot.SettingsRevision)
+		if !daemonError(err, livesession.Conflict) {
+			return err
+		}
+		snapshot, err = client.Snapshot(ctx)
+		if err != nil {
+			return err
+		}
+	}
 }
 
 var reopenAfterExit = errors.New("reopen disconnected live session")
@@ -299,26 +333,11 @@ func daemonHello(version uint16, raw json.RawMessage) (acp.InitializeResponse, e
 
 func (h *harness) setupDaemon(ctx context.Context, c routing.Config, snapshot livesession.Snapshot) error {
 	d := h.daemon
-	// A canceled Next may still be polling on the server. Keep its slot
-	// on an observer connection and leave the controller free for live reads.
-	observer, err := d.dial(ctx)
-	if err != nil {
-		return err
+	stopQuestions, watchErr := h.watchSetupQuestions(ctx, snapshot)
+	if watchErr != nil {
+		return watchErr
 	}
-	defer observer.Close()
-	if observer.Instance() != d.client.Instance() {
-		return errors.New("live session daemon restarted during setup")
-	}
-	if _, err := observer.Attach(ctx, livesession.AttachOptions{Handle: d.handle}); err != nil {
-		return err
-	}
-	setupCtx, stop := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		h.readSetupQuestions(setupCtx, observer, snapshot)
-	}()
-	defer func() { stop(); <-done }()
+	defer stopQuestions()
 
 	if snapshot.ActiveOperation != 0 {
 		receipt, err := d.client.WaitResult(ctx, snapshot.ActiveOperation)
@@ -355,6 +374,25 @@ func (h *harness) setupDaemon(ctx context.Context, c routing.Config, snapshot li
 	return err
 }
 
+func (h *harness) watchSetupQuestions(ctx context.Context, snapshot livesession.Snapshot) (func(), error) {
+	d := h.daemon
+	observer, err := d.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if observer.Instance() != d.client.Instance() {
+		observer.Close()
+		return nil, errors.New("live session daemon restarted during setup")
+	}
+	if _, err = observer.Attach(ctx, livesession.AttachOptions{Handle: d.handle}); err != nil {
+		observer.Close()
+		return nil, err
+	}
+	setupCtx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); h.readSetupQuestions(setupCtx, observer, snapshot) }()
+	return func() { stop(); observer.Close(); <-done }, nil
+}
 func (h *harness) readSetupQuestions(ctx context.Context, observer *livesession.Client, snapshot livesession.Snapshot) {
 	h.v2.Store(snapshot.ACPVersion == 2)
 	questions := daemonQuestions{h: h, active: make(map[uint64]context.CancelFunc)}

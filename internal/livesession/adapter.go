@@ -110,7 +110,7 @@ func (s *session) setupAdapter(ctx context.Context, op *operation, raw json.RawM
 		return nil, err
 	}
 	s.mu.Lock()
-	validReplay := op.resumeState
+	validReplay := op.replay.foreground != ""
 	s.mu.Unlock()
 	if method == "session/resume" && s.info.ACPVersion == 2 && !validReplay {
 		return nil, errors.New("ACP v2 resume ended without replay completion and current state")
@@ -151,6 +151,7 @@ func (s *session) setupAdapter(ctx context.Context, op *operation, raw json.RawM
 	}
 	op.replay = nil
 	s.setup = body
+	s.settingsRevision++
 	s.mu.Unlock()
 	go s.watchAdapter(s.backend.SessionDone(id))
 	return returned, nil
@@ -167,7 +168,7 @@ func (s *session) watchAdapter(done <-chan struct{}) {
 	if !s.closed {
 		s.info.AdapterExited = true
 		s.running = false
-		s.awaitingStart = nil
+		s.turnV2, s.pendingPrompt = 0, nil
 		s.cancelQuestions()
 		s.publish(Event{Kind: AdapterExited})
 	}

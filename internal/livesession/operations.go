@@ -3,6 +3,7 @@
 package livesession
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -36,7 +37,7 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 		}
 		return 0, failure(Expired, "operation receipt is no longer retained")
 	}
-	if call.Operation != s.nextOp {
+	if call.Operation != s.nextOp || call.Operation >= independentTurnBase {
 		return 0, failure(Invalid, "operation number does not match next operation")
 	}
 	if s.info.AdapterExited {
@@ -54,8 +55,11 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 	if call.Method == "_session/steering" && (s.info.ACPVersion != 1 || s.active == nil || s.active != s.turn) {
 		return 0, failure(Conflict, "steering requires an active ACP v1 prompt")
 	}
-	if call.Method == "session/prompt" && (s.running || s.awaitingStart != nil) {
-		return 0, failure(Busy, "a turn is running or awaiting start")
+	if call.Method == "session/prompt" && s.settingsPending() {
+		return 0, failure(Conflict, "confirm resumed settings before prompting")
+	}
+	if call.Method == "session/prompt" && (s.running || s.pendingPrompt != nil) {
+		return 0, failure(Busy, "a turn is running")
 	}
 	params, err := s.callParams(call)
 	if err != nil {
@@ -66,7 +70,7 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 		dispatched: make(chan struct{}), done: make(chan struct{}),
 	}
 	if call.Method == "session/open" {
-		op.replay = &journal{}
+		op.replay = &setupReplay{}
 	}
 	s.nextOp++
 	switch {
@@ -78,11 +82,11 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 		s.active = op
 	}
 	if call.Method == "session/prompt" {
-		s.turn = op
 		if s.info.ACPVersion == 1 {
+			s.turn = op
 			s.running = true
 		} else {
-			s.awaitingStart = op
+			s.pendingPrompt = op
 		}
 	}
 	// ACP v1 adapters need not echo the user prompt. Preserve the accepted
@@ -137,7 +141,7 @@ func (s *session) callParams(call Call) (json.RawMessage, *Error) {
 		if call.Method == "session/fork" {
 			params["cwd"] = bytesOf(s.info.Cwd)
 		}
-		if (s.running || s.awaitingStart != nil) && (call.Method == "session/delete" || call.Method == "session/fork") {
+		if (s.running || s.pendingPrompt != nil) && (call.Method == "session/delete" || call.Method == "session/fork") {
 			return nil, failure(Busy, "wait for the current turn to finish")
 		}
 	default:
@@ -244,9 +248,6 @@ func (s *session) run(op *operation, params json.RawMessage) {
 			outcome = Outcome{Error: failure(Internal, "ACP v2 prompt response requires a messageId")}
 			size = len(bytesOf(outcome))
 		}
-		if s.awaitingStart == op && outcome.Err() != nil {
-			s.awaitingStart = nil
-		}
 	}
 	op.receipt = Receipt{Done: true, Outcome: outcome}
 	op.size = size
@@ -268,6 +269,9 @@ func (s *session) run(op *operation, params json.RawMessage) {
 	if op.method == "session/prompt" && s.info.ACPVersion == 1 {
 		s.running = false
 	}
+	if op == s.pendingPrompt && outcome.Err() != nil {
+		s.pendingPrompt = nil
+	}
 	if !s.closed {
 		finished := Event{Kind: CallFinished, Method: op.method, Operation: op.number, Outcome: eventOutcome(op.method, outcome)}
 		if op.method == "_session/steering" && proxy.SteeringInjected(outcome.Result) {
@@ -276,6 +280,7 @@ func (s *session) run(op *operation, params json.RawMessage) {
 		s.publish(finished)
 		if (op.method == "initialize" && outcome.Err() != nil) || (op.method == "session/delete" && outcome.Err() == nil) {
 			s.closed = true
+			s.archiveV2.deleted = true
 			s.publish(Event{Kind: SessionClosed})
 			s.stop()
 		}
@@ -304,6 +309,11 @@ func (s *session) execute(ctx context.Context, op *operation, raw json.RawMessag
 	}
 }
 
+type adapterUpdate struct {
+	SessionID string
+	Update    struct{ SessionUpdate, State string }
+}
+
 func (s *session) update(method string, raw json.RawMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -312,68 +322,88 @@ func (s *session) update(method string, raw json.RawMessage) {
 	}
 	event := Event{Kind: Update, Method: method, Params: raw}
 	if method == "session/update" {
-		var params struct {
-			SessionID string
-			Update    struct{ SessionUpdate, State string }
-		}
+		var params adapterUpdate
 		_ = json.Unmarshal(raw, &params)
 		if s.active != nil && s.active.replay != nil {
-			op := s.active
-			if s.options.ResumeID != "" && routeKey(params.SessionID) == routeKey(s.options.ResumeID) {
-				switch params.Update.SessionUpdate {
-				case "replay_complete":
-					op.replayComplete = true
-				case "state_update":
-					if op.replayComplete && params.Update.State != "" {
-						op.resumeState = true
-					}
+			replay := s.active.replay
+			if s.info.ACPVersion == 2 && s.options.ResumeID != "" && routeKey(params.SessionID) == routeKey(s.options.ResumeID) {
+				replay.archive.observe(raw, params.Update.SessionUpdate, params.Update.State, replay.head+1)
+				if replay.archive.cursor != 0 && params.Update.SessionUpdate == "state_update" && params.Update.State != "" {
+					replay.foreground = params.Update.State
+					replay.stateCursor = replay.head + 1
 				}
 			}
-			op.replay.append(event)
+			replay.append(event)
 			return
 		}
-		if routeKey(params.SessionID) == routeKey(s.info.SessionID) {
+		if s.info.SessionID != "" && routeKey(params.SessionID) == routeKey(s.info.SessionID) {
 			s.updateSetupFromNotification(raw)
-		}
-		if !s.info.AdapterExited && params.Update.SessionUpdate == "state_update" &&
-			routeKey(params.SessionID) == routeKey(s.info.SessionID) {
-			s.setRunning(params.Update.State)
+			if s.info.ACPVersion == 2 {
+				s.observeV2(raw, params.Update.SessionUpdate, params.Update.State, s.events.head+1)
+			}
+			if !s.info.AdapterExited && params.Update.SessionUpdate == "state_update" {
+				s.setRunning(params.Update.State)
+				event.Turn = s.currentV2Turn()
+			}
 		}
 	}
 	s.publish(event)
+}
+
+func (s *session) currentV2Turn() uint64 {
+	if s.turnV2 == 0 && s.pendingPrompt != nil {
+		return s.pendingPrompt.number
+	}
+	return s.turnV2
 }
 
 func (s *session) setRunning(state string) {
 	s.foreground = state
 	switch state {
 	case "running", "requires_action":
-		s.running = true
-		s.awaitingStart = nil
-		if s.turn != nil {
-			s.turn.started = true
+		if !s.running && s.info.ACPVersion == 2 {
+			if s.pendingPrompt != nil {
+				s.turnV2 = s.pendingPrompt.number
+				s.pendingPrompt = nil
+			} else {
+				s.nextIndependentTurn++
+				s.turnV2 = independentTurnBase | s.nextIndependentTurn
+			}
 		}
+		s.running = true
 	case "idle":
 		s.running = false
+		s.turnV2 = 0
 	}
 }
 
 // commitSetup publishes retained adapter updates only after the setup request
 // succeeds. An authentication failure can then be retried without replaying a
 // partially loaded conversation twice.
-func (s *session) commitSetup(replay *journal) {
-	floor := replay.floor()
+func (s *session) commitSetup(replay *setupReplay) {
+	base, floor := s.events.head, replay.floor()
+	resumedV2 := s.info.ACPVersion == 2 && s.options.ResumeID != ""
+	if resumedV2 {
+		s.commitReplayV2(&replay.archive, base)
+		s.setRunning(replay.foreground)
+	}
 	if floor > 0 {
 		s.events.skip(floor)
 	}
 	for cursor := floor; cursor < replay.head; cursor++ {
 		event, _ := replay.after(cursor)
-		var params struct {
-			SessionID string
-			Update    struct{ SessionUpdate, State string }
+		if resumedV2 && cursor+1 == replay.stateCursor {
+			event.Turn = s.currentV2Turn()
 		}
-		if json.Unmarshal(event.Params, &params) == nil && params.Update.SessionUpdate == "state_update" &&
-			routeKey(params.SessionID) == routeKey(s.info.SessionID) {
-			s.setRunning(params.Update.State)
+		if s.info.ACPVersion == 2 && !resumedV2 {
+			var params adapterUpdate
+			if json.Unmarshal(event.Params, &params) == nil && routeKey(params.SessionID) == routeKey(s.info.SessionID) {
+				s.observeV2(event.Params, params.Update.SessionUpdate, params.Update.State, base+cursor+1)
+				if params.Update.SessionUpdate == "state_update" {
+					s.setRunning(params.Update.State)
+					event.Turn = s.currentV2Turn()
+				}
+			}
 		}
 		s.publish(event)
 	}
@@ -385,50 +415,76 @@ func (s *session) cancelTurn(p *peer, number uint64) *Error {
 	if err := s.requireControl(p); err != nil {
 		return err
 	}
-	if number != 0 && number == s.cancelled {
+	var prompt *operation
+	switch {
+	case number != 0 && number == s.cancelled:
+		current := s.currentV2Turn()
+		if s.info.ACPVersion == 1 && s.running {
+			current = s.turn.number
+		}
+		if current != 0 && current != number {
+			return failure(NotFound, "turn does not match the current turn")
+		}
 		return nil
+	case s.info.ACPVersion == 2 && number != 0 && number == s.turnV2:
+		// The adapter has already reported the turn running.
+	case s.info.ACPVersion == 2 && s.pendingPrompt != nil && s.pendingPrompt.number == number:
+		prompt = s.pendingPrompt
+	case s.info.ACPVersion == 1 && s.turn != nil && s.turn.number == number:
+		if s.active != s.turn {
+			return nil
+		}
+		prompt = s.turn
+	default:
+		return failure(NotFound, "turn does not match the current turn")
 	}
-	if s.turn == nil || s.turn.number != number {
-		return failure(NotFound, "turn does not match the current prompt")
+	if s.canceling {
+		return failure(Busy, "another cancellation is in progress")
 	}
-	if s.active != s.turn && s.awaitingStart != s.turn && !s.running {
-		return nil
-	}
-	op, id := s.turn, s.info.SessionID
 	s.cancelled = number
 	s.canceling = true
-	go s.cancelPrompt(op, id)
+	go s.cancelPrompt(number, prompt, s.info.SessionID)
 	return nil
 }
 
-func (s *session) cancelPrompt(op *operation, id string) {
+func (s *session) cancelPrompt(number uint64, prompt *operation, id string) {
 	var err error
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
-	select {
-	case <-op.done:
-	case <-op.dispatched:
-	case <-ctx.Done():
+	dispatched := prompt == nil
+	if prompt != nil {
+		select {
+		case <-prompt.done:
+		case <-prompt.dispatched:
+		case <-ctx.Done():
+		}
+		select {
+		case <-prompt.dispatched:
+			dispatched = true
+		default:
+			err = ctx.Err()
+		}
 	}
-	select {
-	case <-op.dispatched:
+	s.mu.Lock()
+	current := s.info.ACPVersion == 1 || s.turnV2 == number ||
+		s.turnV2 == 0 && prompt != nil && s.pendingPrompt == prompt
+	s.mu.Unlock()
+	if dispatched && current {
 		params := bytesOf(map[string]string{"sessionId": id})
 		err = s.backend.Cancel(ctx, params)
-	default:
-		err = ctx.Err()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.canceling = false
 	if !s.closed {
-		if err == nil {
+		if err == nil && (s.info.ACPVersion == 1 || s.turnV2 == 0 || s.turnV2 == number) {
 			s.cancelQuestions()
 		}
 		var outcome Outcome
 		if err != nil {
 			outcome.Error = failure(Internal, err.Error())
 		}
-		s.publish(Event{Kind: CancelFinished, Operation: op.number, Outcome: &outcome})
+		s.publish(Event{Kind: CancelFinished, Operation: number, Turn: number, Outcome: &outcome})
 	}
 }
 
@@ -465,8 +521,9 @@ func (s *session) updateSetupSettings(method string, params, result json.RawMess
 	} else if json.Unmarshal(result, &changes) == nil && changes["configOptions"] != nil {
 		setup["configOptions"] = changes["configOptions"]
 	}
-	if raw := bytesOf(setup); len(raw) <= maxMetadata {
+	if raw := bytesOf(setup); len(raw) <= maxMetadata && !bytes.Equal(raw, s.setup) {
 		s.setup = raw
+		s.settingsRevision++
 	}
 }
 

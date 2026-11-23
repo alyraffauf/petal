@@ -394,6 +394,8 @@ func (s *Server) dispatch(p *peer, req request) (any, *Error) {
 		return decodeRequest(req.Params, live.terminalOutput)
 	case "answer":
 		return decodeRequest(req.Params, func(answer Answer) (bool, *Error) { return true, live.answer(p, answer) })
+	case "confirm_settings":
+		return decodeRequest(req.Params, func(revision uint64) (bool, *Error) { return true, live.confirmSettings(p, revision) })
 	case "cancel":
 		return decodeRequest(req.Params, func(turn uint64) (bool, *Error) { return true, live.cancelTurn(p, turn) })
 	case "close":

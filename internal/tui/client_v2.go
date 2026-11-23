@@ -169,9 +169,10 @@ type updateV2 struct {
 	SessionUpdate string
 	State         string
 	StopReason    string
+	turn          uint64
 }
 
-func (h *harness) updateV2(ctx context.Context, raw json.RawMessage) (bool, *acp.RequestError) {
+func (h *harness) updateV2(ctx context.Context, raw json.RawMessage, turn uint64) (bool, *acp.RequestError) {
 	var params struct {
 		SessionID string
 		Update    json.RawMessage
@@ -193,15 +194,26 @@ func (h *harness) updateV2(ctx context.Context, raw json.RawMessage) (bool, *acp
 			h.v2ResumeState.Store(true)
 		}
 		h.releaseV2Slot()
+		update.turn = turn
 		h.emitV2(ctx, update)
-	case "user_message", "user_message_chunk", "agent_message", "agent_message_chunk",
-		"agent_thought", "agent_thought_chunk", "tool_call_update", "tool_call_content_chunk", "compaction_update", "compaction_summary_chunk":
+	default:
+		if !isV2TranscriptUpdate(update.SessionUpdate) {
+			return false, nil
+		}
 		h.releaseV2Slot()
 		h.emitV2(ctx, event{v2Update: params.Update})
-	default:
-		return false, nil
 	}
 	return true, nil
+}
+
+func isV2TranscriptUpdate(kind string) bool {
+	switch kind {
+	case "user_message", "user_message_chunk", "agent_message", "agent_message_chunk",
+		"agent_thought", "agent_thought_chunk", "tool_call_update", "tool_call_content_chunk", "compaction_update", "compaction_summary_chunk":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *harness) releaseV2Slot() {

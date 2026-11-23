@@ -205,6 +205,91 @@ func TestLiveSessionDetachOverUnixSocket(t *testing.T) {
 	}
 }
 
+func TestResumedSettingsGateAndV2CancellationSurviveReconnect(t *testing.T) {
+	ctx, dial := startSocket(t, 2, false)
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "resume-running"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	const id = `["fake","fixture","thread"]`
+	opts := OpenOptions{Handle: NewHandle(), Cwd: cwd, Model: "fixture", ResumeID: id}
+	client := dial()
+	resumed := openSession(t, ctx, client, opts, 2)
+	if !resumed.SettingsPending || !resumed.Running || !resumed.TurnStarted || resumed.Turn == 0 || resumed.ActiveOperation != 0 {
+		t.Fatalf("resumed state = %+v", resumed)
+	}
+	rows, err := sessions.Transcript(cwd, id)
+	if err != nil || resumed.ArchiveCursor == 0 || resumed.ArchiveHead == 0 ||
+		len(rows) != 1 || rows[0].Body != "resumed-history" {
+		t.Fatalf("resume checkpoint must exclude active updates: %+v, rows %+v, %v", resumed, rows, err)
+	}
+	archiveCursor := resumed.ArchiveCursor
+	tail := advance(t, ctx, client, &archiveCursor, func(event Event) bool {
+		return strings.Contains(string(event.Params), "resumed-active")
+	})
+	if tail.Sequence > resumed.Head {
+		t.Fatalf("active tail should be retained at the setup snapshot: %+v", tail)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	client = dial()
+	reconnected := takeControl(t, ctx, client, AttachOptions{Handle: opts.Handle, Control: true})
+	if !reconnected.SettingsPending || reconnected.Turn != resumed.Turn {
+		t.Fatalf("reconnected state = %+v", reconnected)
+	}
+	prompt := Call{Operation: reconnected.NextOperation, Method: "session/prompt", Params: json.RawMessage(`{"prompt":[{"type":"text","text":"cancel"}]}`)}
+	if _, err := client.Submit(ctx, prompt); !hasCode(err, Conflict) {
+		t.Fatalf("prompt bypassed required settings review: %v", err)
+	}
+	if err := client.ConfirmSettings(ctx, reconnected.SettingsRevision-1); !hasCode(err, Conflict) {
+		t.Fatalf("confirmation accepted a stale revision: %v", err)
+	}
+	if err := client.Cancel(ctx, resumed.Turn); err != nil {
+		t.Fatal(err)
+	}
+	cursor := reconnected.Head
+	idle, cancelled := false, false
+	advance(t, ctx, client, &cursor, func(event Event) bool {
+		idle = idle || strings.Contains(string(event.Params), `"state":"idle"`)
+		cancelled = cancelled || event.Kind == CancelFinished && event.Turn == resumed.Turn
+		return idle && cancelled
+	})
+	if _, err := client.Submit(ctx, prompt); !hasCode(err, Conflict) {
+		t.Fatalf("prompt bypassed settings review after idle: %v", err)
+	}
+	if err := client.ConfirmSettings(ctx, reconnected.SettingsRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	client = dial()
+	confirmed := takeControl(t, ctx, client, AttachOptions{Handle: opts.Handle, Control: true})
+	if confirmed.SettingsPending {
+		t.Fatalf("confirmation lost on reconnect: %+v", confirmed)
+	}
+	submit(t, ctx, client, prompt)
+	cursor = confirmed.Head
+	started := advance(t, ctx, client, &cursor, func(event Event) bool { return strings.Contains(string(event.Params), `"state":"running"`) })
+	if started.Turn == 0 || started.Turn == resumed.Turn {
+		t.Fatalf("new turn identity = %d", started.Turn)
+	}
+	if err := client.Cancel(ctx, resumed.Turn); !hasCode(err, NotFound) {
+		t.Fatalf("cancel by previous turn ID: %v", err)
+	}
+	state, err := client.Snapshot(ctx)
+	if err != nil || !state.Running || state.Turn != started.Turn {
+		t.Fatalf("stale cancellation changed the current turn: %+v, %v", state, err)
+	}
+	if err := client.Cancel(ctx, started.Turn); err != nil {
+		t.Fatal(err)
+	}
+	advance(t, ctx, client, &cursor, func(event Event) bool { return strings.Contains(string(event.Params), "adapter-cancelled") })
+}
+
 func TestLiveV2AdapterExitClearsRunningState(t *testing.T) {
 	ctx, dial := startSocket(t, 2, false)
 	client := dial()

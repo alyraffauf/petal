@@ -133,7 +133,7 @@ func (r *transcriptRecorder) flush() {
 func (p *proxy) beforeTranscript(method, name, native, id string, params Object) (func(error) error, error) {
 	r := p.recorder
 	noop := func(err error) error { return err }
-	if r == nil {
+	if r == nil || p.local != nil && p.version == 2 {
 		return noop, nil
 	}
 	key := p.publicID(name, native)

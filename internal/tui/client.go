@@ -77,7 +77,7 @@ func (h *harness) callback(ctx context.Context, method string, raw json.RawMessa
 		case "session/request_permission":
 			return h.permissionV2(ctx, raw)
 		case "session/update":
-			handled, err := h.updateV2(ctx, raw)
+			handled, err := h.updateV2(ctx, raw, 0)
 			if handled || err != nil {
 				return nil, err
 			}

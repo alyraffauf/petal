@@ -59,8 +59,17 @@ func TestLiveAdapterFixture(t *testing.T) {
 				t.Fatalf("adapter cwd %s, supplied %s", cwd, frame.Params["cwd"])
 			}
 			if frame.Method == "session/resume" {
+				_, activeErr := os.Stat(filepath.Join(cwd, "resume-running"))
+				if activeErr == nil {
+					adapter.text("resumed-history")
+				}
 				adapter.update(json.RawMessage(`{"sessionUpdate":"replay_complete"}`))
-				adapter.state("idle", "")
+				if activeErr == nil {
+					adapter.state("running", "")
+					adapter.text("resumed-active")
+				} else {
+					adapter.state("idle", "")
+				}
 			}
 			adapter.reply(frame.ID, map[string]any{"sessionId": adapter.id, "fixtureMCP": frame.Params["mcpServers"]})
 		case "session/prompt":
@@ -85,6 +94,9 @@ func TestLiveAdapterFixture(t *testing.T) {
 				adapter.prompt(prompt)
 			}
 			adapter.reply(frame.ID, json.RawMessage(`{"sessions":[]}`))
+		case "session/cancel":
+			adapter.text("adapter-cancelled")
+			adapter.state("idle", "cancelled")
 		case "session/close":
 			adapter.reply(frame.ID, map[string]string{})
 		default:
@@ -220,6 +232,12 @@ func (a adapterFixture) prompt(frame adapterFrame) {
 		a.text("child-work")
 	case strings.Contains(text, "child-work") || strings.Contains(text, "activity"):
 		a.text("delegation-wake")
+		if a.v2 {
+			if cancel := a.read(); cancel.Method != "session/cancel" || field(cancel.Params, "sessionId") != a.id {
+				a.t.Fatalf("expected cancellation of the wake, got %+v", cancel)
+			}
+			a.text("wake-cancelled")
+		}
 	default:
 		a.text("before ")
 		a.waitForRelease()

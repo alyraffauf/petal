@@ -140,6 +140,9 @@ type Snapshot struct {
 	Closed            bool            `json:"closed,omitempty"`
 	Hello             json.RawMessage `json:"hello,omitempty"`
 	Setup             json.RawMessage `json:"setup,omitempty"`
+	SettingsPending   bool            `json:"settingsPending,omitempty"`
+	SettingsRevision  uint64          `json:"settingsRevision,omitempty"`
+	ArchiveCursor     uint64          `json:"archiveCursor,omitempty"`
 	ArchiveHead       int64           `json:"archiveHead,omitempty"`
 	SetupMethod       string          `json:"setupMethod,omitempty"`
 	Pending           []Question      `json:"pending,omitempty"`
@@ -169,6 +172,7 @@ type Event struct {
 	Question   *Question       `json:"question,omitempty"`
 	QuestionID uint64          `json:"questionID"`
 	Operation  uint64          `json:"operation"`
+	Turn       uint64          `json:"turn,omitempty"`
 	Outcome    *Outcome        `json:"outcome,omitempty"`
 }
 

@@ -19,6 +19,7 @@ import (
 // Local is a model-bound proxy owned by a daemon session. Requests come from
 // the session owner. The internal ACP connection serves adapter callbacks for
 // the whole session lifetime, including when no frontend is attached.
+// The owner archives ACP v2 updates alongside its journal.
 type Local struct {
 	proxy *proxy
 }

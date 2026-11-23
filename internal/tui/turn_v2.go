@@ -63,7 +63,8 @@ type conversationV2 struct {
 	dirty         bool
 	changed       bool
 	cancelSending bool
-	promptWritten <-chan struct{}
+	promptWrite   *promptWriteV2
+	turn          uint64
 }
 
 func (m *terminal) conversationV2() *conversationV2 {
@@ -85,7 +86,7 @@ func (m *terminal) deliverV2(params map[string]any) tea.Cmd {
 	h, ctx := m.h, m.ctx
 	prompt := &promptWriteV2{ready: make(chan struct{})}
 	h.promptWrite.Store(prompt)
-	conversation.promptWritten = prompt.ready
+	conversation.promptWrite = prompt
 	return func() tea.Msg {
 		if h.daemon != nil {
 			number, err := h.daemon.submit(ctx, "session/prompt", params)
@@ -114,17 +115,26 @@ func (m *terminal) cancelForegroundV2() tea.Cmd {
 	conversation.cancelSending = true
 	m.cancelling = true
 	m.refreshForegroundV2()
-	written, ctx := conversation.promptWritten, m.ctx
-	cancel := m.h.cancelAction()
+	written, turn, ctx := conversation.promptWrite, conversation.turn, m.ctx
+	h := m.h
 	return func() tea.Msg {
 		if written != nil {
 			select {
-			case <-written:
+			case <-written.ready:
 			case <-ctx.Done():
 				return nil
 			}
 		}
-		return cancelV2Result{cancel(ctx)}
+		if h.daemon == nil {
+			return cancelV2Result{h.cancelAction()(ctx)}
+		}
+		if turn == 0 && written != nil {
+			turn = written.operation
+		}
+		if turn == 0 {
+			return cancelV2Result{}
+		}
+		return cancelV2Result{h.daemon.client.Cancel(ctx, turn)}
 	}
 }
 
