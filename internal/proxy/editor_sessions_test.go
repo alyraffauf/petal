@@ -293,3 +293,61 @@ func TestFailedHandoffPromptKeepsForkLineage(t *testing.T) {
 		t.Fatalf("after a failed prompt, handoff %q lineage %v; want both restored", s.handoff, s.lineage)
 	}
 }
+
+func TestForkOfUnarchivedConversationRefusesSwitch(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := routing.Config{Accounts: map[string]routing.Account{}}
+	for model, account := range map[string]string{"claude/default": "a", "codex/default": "b"} {
+		config.Accounts[account] = routing.Account{Models: map[string][]string{model: {exe, "-test.run=^TestAccountAdapter$"}}, Env: map[string]string{"PETAL_NEGOTIATE_FIXTURE": account}}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	editor, server := net.Pipe()
+	t.Cleanup(func() { editor.Close(); server.Close() })
+	connect(ctx, config, server, server, false, nil)
+	client := acp.NewConnection(nil, editor, editor)
+	call := func(method string, params Object) (Object, error) {
+		return acp.SendRequest[Object](client, ctx, method, params)
+	}
+	if _, err := call("initialize", Object{"protocolVersion": json.RawMessage("1")}); err != nil {
+		t.Fatal(err)
+	}
+	open := Object{"cwd": encoded(cwd), "mcpServers": json.RawMessage("[]")}
+	forkAndSwitch := func(parent json.RawMessage) error {
+		t.Helper()
+		forked, err := call("session/fork", Object{"sessionId": parent, "cwd": encoded(cwd), "mcpServers": json.RawMessage("[]")})
+		if err != nil {
+			t.Fatalf("fork: %v", err)
+		}
+		_, err = call("session/set_config_option", Object{"sessionId": forked["sessionId"], "configId": encoded("model"), "value": encoded("codex/default")})
+		return err
+	}
+
+	// An imported conversation, resumed without replay, has history Petal never archived.
+	imported := encoded(`["a","claude/default","same"]`)
+	if _, err := call("session/resume", Object{"sessionId": imported, "cwd": encoded(cwd), "mcpServers": json.RawMessage("[]")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := forkAndSwitch(imported); err == nil {
+		t.Fatal("a fork of a conversation Petal never archived switched models and dropped its history")
+	}
+
+	opened, err := call("session/new", open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call("session/set_config_option", Object{"sessionId": opened["sessionId"], "configId": encoded("model"), "value": encoded("claude/default")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call("session/prompt", Object{"sessionId": opened["sessionId"], "prompt": json.RawMessage(`[{"type":"text","text":"before the fork"}]`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := forkAndSwitch(opened["sessionId"]); err != nil {
+		t.Fatalf("a fork of an archived conversation could not switch: %v", err)
+	}
+}

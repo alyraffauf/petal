@@ -48,8 +48,9 @@ type editorSession struct {
 	// forked from, oldest first. Petal's archive holds only a fork's own turns,
 	// so a model switch hands these off too.
 	lineage []historySegment
-	// legacyFork marks a fork saved before Petal recorded lineage. Its earlier
-	// history is unknown, so it cannot switch models.
+	// legacyFork marks a fork whose earlier history Petal does not have, such
+	// as one saved before Petal recorded lineage or one forked from a
+	// conversation Petal never archived. It cannot switch models.
 	legacyFork bool
 }
 
@@ -423,7 +424,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	repick := selecting && s.route != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
 	if repick && s.legacyFork {
 		s.mu.Unlock()
-		return nil, acp.NewInvalidParams("Petal did not record where this conversation was forked from, so switching models would lose the earlier conversation; start a new conversation to use another model")
+		return nil, acp.NewInvalidParams("Petal does not have the conversation this one was forked from, so switching models would lose it; start a new conversation to use another model")
 	}
 	if selecting && s.route != nil && requested == s.route.Model {
 		options := p.sessionModelOptions(s)
@@ -550,7 +551,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		}
 	}
 	route, routed := s.route, s.routedID
-	lineage, legacyFork := slices.Clone(s.lineage), s.legacyFork
+	lineage, legacyFork, prompted := slices.Clone(s.lineage), s.legacyFork, s.setup == nil
 	route.aliases.Store(routed, id)
 	s.mu.Unlock()
 	params["sessionId"] = encoded(routed)
@@ -590,10 +591,14 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 				fs := &editorSession{route: route, routedID: forked, legacyFork: legacyFork, options: opened["configOptions"], request: openRequest(params), cwd: projectKey(stringField(params, "cwd"))}
 				// The fork inherits the parent's conversation up to its last
 				// archived row. Rows the parent adds later are not the fork's.
-				if head, err := sessions.TranscriptHead(ctx, stringField(params, "cwd"), routed); err == nil {
-					fs.lineage = append(lineage, historySegment{ID: routed, Head: head})
-				} else {
+				// A parent that was prompted but has nothing archived holds history
+				// Petal never saw, such as an imported conversation.
+				head, err := sessions.TranscriptHead(ctx, stringField(params, "cwd"), routed)
+				switch {
+				case err != nil, head == 0 && len(lineage) == 0 && prompted:
 					fs.legacyFork = true
+				default:
+					fs.lineage = append(lineage, historySegment{ID: routed, Head: head})
 				}
 				route.aliases.Store(forked, forked)
 				e.sessions.Store(forked, fs)
