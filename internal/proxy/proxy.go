@@ -643,7 +643,7 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 					}
 				case "config_option_update":
 					if strings.HasPrefix(stringField(args, "sessionId"), "petal-") && item["configOptions"] != nil {
-						item["configOptions"] = p.editorOptions(item["configOptions"], false)["configOptions"]
+						item["configOptions"] = p.editorOptions(item["configOptions"])["configOptions"]
 						changed = true
 					}
 				case "subagent_update", "session_message":

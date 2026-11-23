@@ -57,7 +57,7 @@ func (p *proxy) relayV2ClientCall(ctx context.Context, name, method string, raw 
 			switch stringField(update, "sessionUpdate") {
 			case "config_option_update":
 				if strings.HasPrefix(stringField(params, "sessionId"), "petal-") && update["configOptions"] != nil {
-					update["configOptions"] = p.editorOptions(update["configOptions"], false)["configOptions"]
+					update["configOptions"] = p.editorOptions(update["configOptions"])["configOptions"]
 				}
 			case "subagent_update":
 				rewriteID(update, "sessionId")

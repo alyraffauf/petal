@@ -161,7 +161,7 @@ func (p *proxy) openEditorSession(ctx context.Context, params Object) (any, erro
 	// prompt. Keep the local picker usable if that route cannot start.
 	if _, err := p.bindEditorSession(ctx, s, id, p.Model); err == nil {
 		p.editorSessions.sessions.Store(id, s)
-		response := p.pendingModelOptions(s)
+		response := p.sessionModelOptions(s)
 		response["sessionId"] = encoded(id)
 		return response, nil
 	}
@@ -196,19 +196,21 @@ func (p *proxy) bindEditorSession(ctx context.Context, s *editorSession, id, mod
 	return opened, nil
 }
 
-func (p *proxy) pendingModelOptions(s *editorSession) Object {
-	return s.route.editorOptions(s.options, s.setup != nil)
+func (p *proxy) sessionModelOptions(s *editorSession) Object {
+	return s.route.editorOptions(s.options)
 }
 
-func (p *proxy) editorOptions(raw json.RawMessage, switchable bool) Object {
+// editorOptions replaces the adapter's own model option with Petal's routed
+// model list. Editors such as T3 Code treat the session's model option as the
+// provider's whole catalog, so it must list every route even after a session
+// is bound to one of them.
+func (p *proxy) editorOptions(raw json.RawMessage) Object {
 	var options []Object
 	_ = json.Unmarshal(raw, &options)
-	if switchable {
-		options = slices.DeleteFunc(options, func(o Object) bool {
-			return stringField(o, "category") == "model" || stringField(o, "id") == "model" || stringField(o, "configId") == "model"
-		})
-		options = append([]Object{p.modelOption()}, options...)
-	}
+	options = slices.DeleteFunc(options, func(o Object) bool {
+		return stringField(o, "category") == "model" || stringField(o, "id") == "model" || stringField(o, "configId") == "model"
+	})
+	options = append([]Object{p.modelOption()}, options...)
 	for _, o := range options {
 		if stringField(o, "category") == "thought_level" {
 			key := "id"
@@ -315,13 +317,17 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		requested = stringField(params, "modelId")
 	}
 	if method == "session/options" && s.route != nil && s.setup != nil {
-		options := p.pendingModelOptions(s)
+		options := p.sessionModelOptions(s)
 		s.mu.Unlock()
 		return options, nil
 	}
 	repick := selecting && s.route != nil && s.setup != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
-	if selecting && s.route != nil && s.setup != nil && requested == s.route.Model {
-		options := p.pendingModelOptions(s)
+	if selecting && s.route != nil && s.setup == nil && requested != s.route.Model {
+		s.mu.Unlock()
+		return nil, acp.NewInvalidParams(fmt.Sprintf("this conversation uses %s; start a new conversation to use %s", s.route.Model, requested))
+	}
+	if selecting && s.route != nil && requested == s.route.Model {
+		options := p.sessionModelOptions(s)
 		s.mu.Unlock()
 		if method == "session/set_model" {
 			return Object{}, nil
@@ -369,7 +375,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			_, _ = oldRoute.handle(ctx, "session/close", closeParams)
 		}
 		if selecting {
-			returnOptions := p.pendingModelOptions(s)
+			returnOptions := p.sessionModelOptions(s)
 			s.mu.Unlock()
 			if method == "session/set_model" {
 				update := Object{"sessionUpdate": encoded("config_option_update"), "configOptions": returnOptions["configOptions"]}
@@ -382,13 +388,8 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		}
 
 	}
-	if method == "session/prompt" && s.setup != nil {
+	if method == "session/prompt" {
 		s.setup = nil
-		if s.options != nil {
-			update := s.route.editorOptions(s.options, false)
-			update["sessionUpdate"] = encoded("config_option_update")
-			_ = p.editor.SendNotification(ctx, "session/update", map[string]any{"sessionId": id, "update": update})
-		}
 	}
 	if method == "session/set_config_option" && stringField(params, "configId") == "effort" {
 		var options []Object
@@ -422,7 +423,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			s.mu.Lock()
 			if s.route == route {
 				s.options = response["configOptions"]
-				response["configOptions"] = p.pendingModelOptions(s)["configOptions"]
+				response["configOptions"] = p.sessionModelOptions(s)["configOptions"]
 				result = response
 			}
 			s.mu.Unlock()
