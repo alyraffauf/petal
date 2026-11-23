@@ -384,10 +384,7 @@ func (p *proxy) handleV2(ctx context.Context, method string, raw json.RawMessage
 			return nil, fmt.Errorf("empty forked sessionId")
 		}
 		routed := p.publicID(name, id)
-		if err := p.reserveLocalRoute(routed); err != nil {
-			return nil, err
-		}
-		if endpoint != nil {
+		if endpoint != nil && p.local == nil {
 			if err := p.bindDelegation(endpoint, name, routed); err != nil {
 				return nil, err
 			}

@@ -197,6 +197,13 @@ func (s *session) fork(ctx context.Context, raw json.RawMessage) (any, error) {
 	if route == nil || route[2] == "" {
 		return nil, errors.New("adapter did not return a durable fork ID")
 	}
+	// The next live session will own the fork. Protect only its initial
+	// archive write here so a controller can resume it before the parent exits.
+	lease, err := sessions.LeaseRoute(s.options.Cwd, routeKey(response.SessionID))
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
 	parent, err := sessions.Lookup(s.options.Cwd, s.info.SessionID)
 	if err != nil {
 		return nil, err

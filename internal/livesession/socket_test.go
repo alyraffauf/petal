@@ -571,3 +571,45 @@ func waitForResult(t *testing.T, ctx context.Context, client *Client, operation 
 		t.Fatalf("call %d receipt = %+v, %v", operation, receipt, err)
 	}
 }
+
+func TestResumeForkWhileParentIsAttached(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
+			ctx, dial := startSocket(t, version, false)
+			cwd := t.TempDir()
+			parent := dial()
+			root := openSession(t, ctx, parent, OpenOptions{Handle: NewHandle(), Cwd: cwd, Model: "fixture"}, version)
+			submit(t, ctx, parent, Call{Operation: 3, Method: "session/fork"})
+			result, err := parent.WaitResult(ctx, 3)
+			if err != nil || result.Err() != nil {
+				t.Fatalf("fork: %+v, %v", result, err)
+			}
+			var fork struct{ SessionID string }
+			if err := json.Unmarshal(result.Outcome.Result, &fork); err != nil || fork.SessionID == "" {
+				t.Fatalf("fork ID: %s, %v", result.Outcome.Result, err)
+			}
+			child := dial()
+			opts := OpenOptions{Handle: NewHandle(), Cwd: cwd, Model: "fixture", ResumeID: fork.SessionID}
+			if _, err := child.Open(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			takeControl(t, ctx, child, AttachOptions{Handle: opts.Handle, Control: true})
+			for i, method := range []string{"initialize", "session/open"} {
+				op := uint64(i + 1)
+				submit(t, ctx, child, Call{Operation: op, Method: method})
+				res, err := child.WaitResult(ctx, op)
+				if err != nil || res.Err() != nil {
+					t.Fatalf("%s: %+v, %v", method, res, err)
+				}
+			}
+			snap, err := child.Snapshot(ctx)
+			if err != nil || snap.SessionID != fork.SessionID {
+				t.Fatalf("resumed: %+v, %v", snap, err)
+			}
+			snap, err = parent.Snapshot(ctx)
+			if err != nil || snap.SessionID != root.SessionID || snap.Closed {
+				t.Fatalf("parent: %+v, %v", snap, err)
+			}
+		})
+	}
+}

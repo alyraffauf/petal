@@ -48,11 +48,16 @@ func TestLiveAdapterFixture(t *testing.T) {
 		switch frame.Method {
 		case "initialize":
 			if adapter.v2 {
-				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"list":{},"mcp":{"stdio":{}}}}}`))
+				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{"fork":{},"list":{},"mcp":{"stdio":{}}}}}`))
 			} else {
-				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"close":{},"list":{}}}}`))
+				adapter.reply(frame.ID, json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"fork":{},"close":{},"list":{}}}}`))
 			}
+		case "session/fork":
+			adapter.reply(frame.ID, map[string]string{"sessionId": "forked"})
 		case "session/new", "session/load", "session/resume":
+			if id := field(frame.Params, "sessionId"); id != "" {
+				adapter.id = id
+			}
 			supplied, err := filepath.EvalSymlinks(field(frame.Params, "cwd"))
 			resolved, resolveErr := filepath.EvalSymlinks(cwd)
 			if err != nil || resolveErr != nil || supplied != resolved {
