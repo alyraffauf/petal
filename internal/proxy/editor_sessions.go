@@ -65,7 +65,7 @@ func openRequest(params Object) Object {
 
 func (p *proxy) modelOption() Object {
 	var choices []map[string]string
-	for _, id := range p.ModelNames() {
+	for _, id := range p.PickerModels() {
 		choices = append(choices, map[string]string{"value": id, "name": p.ModelLabel(id)})
 	}
 	options, _ := json.Marshal(choices)
@@ -73,7 +73,7 @@ func (p *proxy) modelOption() Object {
 	if p.version == 2 {
 		key = "configId"
 	}
-	return Object{key: encoded("model"), "category": encoded("model"), "name": encoded("Model"), "type": encoded("select"), "currentValue": encoded(p.Model), "options": options}
+	return Object{key: encoded("model"), "category": encoded("model"), "name": encoded("Model"), "type": encoded("select"), "currentValue": encoded(p.PickerModel(p.Model)), "options": options}
 }
 
 func projectKey(cwd string) string {
@@ -379,6 +379,8 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		s.mu.Unlock()
 		return options, nil
 	}
+	// Choosing the real model shown for a "/default" route binds that model's
+	// route, because the session's workspace may default to another model.
 	repick := selecting && s.route != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
 	if selecting && s.route != nil && requested == s.route.Model {
 		options := p.sessionModelOptions(s)

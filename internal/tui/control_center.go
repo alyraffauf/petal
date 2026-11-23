@@ -95,8 +95,9 @@ func (p *picker) buildNodes() []controlNode {
 		current = m.h.record.ID
 	}
 	if m == nil && len(p.models) > 0 {
+		// Each provider's default starts a session the way its own settings choose.
 		quick := []string{p.cfg.DefaultModel()}
-		for _, model := range p.models {
+		for _, model := range p.cfg.ModelNames() {
 			if strings.HasSuffix(model, "/default") && model != quick[0] {
 				quick = append(quick, model)
 			}

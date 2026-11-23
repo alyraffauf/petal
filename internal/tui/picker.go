@@ -118,6 +118,11 @@ func (m *picker) showHistory() {
 
 func (m *picker) filter() {
 	names := m.models
+	if m.setting == nil {
+		// History and resume need every routable model. The choices leave out
+		// a "/default" route that is listed as its real model.
+		names = slices.DeleteFunc(slices.Clone(names), func(id string) bool { return m.cfg.PickerModel(id) != id })
+	}
 
 	if query := m.search.Value(); query != "" {
 		keys := slices.Clone(names)
