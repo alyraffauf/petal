@@ -8,14 +8,19 @@ import (
 	"sync"
 	"time"
 
+	"petal/internal/acphost"
 	"petal/internal/acpv2"
 	"petal/internal/sessions"
 )
 
 // One recorder belongs to one editor-facing route. Embedded TUI and delegated
 // children already record their own transcripts.
-type transcriptRecorder struct{ active sync.Map }
+type transcriptRecorder struct {
+	active sync.Map
+	host   *acphost.Host
+}
 type recordedSession struct {
+	toolTerminals                   map[string][]terminalReference
 	children                        map[string]*nativeChild
 	mail                            map[string]*acpv2.Transcript
 	dirtyMail                       []string
@@ -49,6 +54,13 @@ func (s *recordedSession) store(messages []sessions.Message, replay bool) error 
 
 func (s *recordedSession) save(replace bool) error {
 	msgs := sessions.ProjectTranscript(&s.projection, s.version == 2)
+	for i := range msgs {
+		if msgs[i].Role == "tool" {
+			for _, ref := range s.toolTerminals[msgs[i].SourceID] {
+				msgs[i].Body += acphost.FormatTerminalOutput(ref.view())
+			}
+		}
+	}
 	msgs = append(msgs, s.nativeReplay...)
 	msgs = append(msgs, s.mailRows()...)
 	if len(msgs) > 0 || replace {
@@ -102,6 +114,9 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 		case "compaction_update", "compaction_summary_chunk":
 			s.last = ""
 		case "tool_call", "tool_call_update":
+			if r.host != nil {
+				s.trackToolTerminals(r.host, u)
+			}
 			s.last = ""
 		default:
 			return
@@ -194,6 +209,9 @@ func (p *proxy) beforeTranscript(method, name, native, id string, params Object)
 				s.mu.Lock()
 				defer s.mu.Unlock()
 				saveErr := s.save(false)
+				if saveErr == nil {
+					s.toolTerminals = nil
+				}
 				if err != nil {
 					return err
 				}

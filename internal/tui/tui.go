@@ -11,16 +11,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"bloomfx.dev/bloom"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
-	"github.com/charmbracelet/x/ansi"
+
 	acp "github.com/coder/acp-go-sdk"
 
+	"petal/internal/acphost"
 	"petal/internal/livesession"
 	"petal/internal/routing"
 	"petal/internal/sessions"
@@ -60,17 +60,7 @@ type screen struct {
 	commandIndex                int
 }
 
-func clean(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\t' {
-			return ' '
-		}
-		if unicode.IsControl(r) && r != '\n' {
-			return -1
-		}
-		return r
-	}, ansi.Strip(s))
-}
+func clean(s string) string { return acphost.CleanText(s) }
 
 type animationFrame struct{}
 

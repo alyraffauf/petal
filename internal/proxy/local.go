@@ -13,6 +13,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"petal/internal/acphost"
 	"petal/internal/routing"
 )
 
@@ -28,7 +29,7 @@ type Local struct {
 // writes, so updates preceding an ACP response are visible before Call returns.
 // update must not call back into the proxy or wait on a frontend. reserveRoute
 // runs before a newly returned route can record transcripts or bind delegation.
-func NewLocal(ctx context.Context, config routing.Config, cwd string, callback acp.MethodHandler, update func(string, json.RawMessage), reserveRoute func(string) error) *Local {
+func NewLocal(ctx context.Context, config routing.Config, cwd string, workspaceHost *acphost.Host, callback acp.MethodHandler, update func(string, json.RawMessage), reserveRoute func(string) error) *Local {
 	editor, host := net.Pipe()
 	context.AfterFunc(ctx, func() {
 		editor.Close()
@@ -36,11 +37,12 @@ func NewLocal(ctx context.Context, config routing.Config, cwd string, callback a
 	})
 	client := acp.NewConnection(callback, host, host)
 	client.SetLogger(slog.New(slog.DiscardHandler))
-	p := connectProxy(ctx, localOutput{editor, update}, editor, config, true, nil, &localRuntime{cwd: cwd, reserveRoute: reserveRoute})
+	p := connectProxy(ctx, localOutput{editor, update}, editor, config, true, nil, &localRuntime{host: workspaceHost, cwd: cwd, reserveRoute: reserveRoute})
 	return &Local{proxy: p}
 }
 
 type localRuntime struct {
+	host         *acphost.Host
 	reserveRoute func(string) error
 	cwd          string
 	mu           sync.Mutex

@@ -761,6 +761,9 @@ func connectProxy(lifetime context.Context, out io.Writer, in io.Reader, c routi
 	p := proxy{local: local, editorWire: editorWire, editorUpdates: updates, embedded: embedded, Config: c, lifetime: lifetime, backends: make(map[string]*backend)}
 	if !embedded || local != nil {
 		p.recorder = &transcriptRecorder{}
+		if local != nil {
+			p.recorder.host = local.host
+		}
 	}
 	if !embedded && c.Model == "" {
 		p.Model = c.DefaultModel()

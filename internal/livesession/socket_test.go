@@ -152,10 +152,20 @@ func TestLiveSessionDetachOverUnixSocket(t *testing.T) {
 				t.Fatalf("replay/live boundary %d: question %d (%d/%d), tail %d", replay.Head, questionEvent.Sequence, openings, closures, after.Sequence)
 			}
 			rows, err := sessions.Transcript(cwd, sessionID)
-			if err != nil || len(rows) != 2 || rows[0].Body != "input" || rows[1].Body != "before after" {
+			if err != nil || len(rows) == 0 || rows[0].Body != "input" {
 				t.Fatalf("archived transcript = %+v, %v", rows, err)
 			}
+			if version == 2 && (len(rows) != 2 || rows[1].Body != "before after") {
+				t.Fatalf("archived v2 response = %+v", rows)
+			}
 			if version == 1 {
+				if len(rows) != 4 || rows[1].Body != "before " || rows[2].Role != "tool" || rows[3].Body != "after" {
+					t.Fatalf("archived v1 response = %+v", rows)
+				}
+				hits, err := sessions.Search(cwd, "", "workspace contents", 0, 10)
+				if err != nil || len(hits) != 1 || hits[0].Session != sessionID || hits[0].Row != rows[2].Rowid {
+					t.Fatalf("terminal output search = %+v, %v", hits, err)
+				}
 				written, err := os.ReadFile(filepath.Join(cwd, "written"))
 				if err != nil || string(written) != "workspace contents" {
 					t.Fatalf("host write = %q, %v", written, err)

@@ -143,7 +143,7 @@ func (s *session) prepare() {
 		return
 	}
 	s.host = host
-	s.backend = proxy.NewLocal(s.ctx, config, s.options.Cwd, s.callback, s.update, func(id string) error {
+	s.backend = proxy.NewLocal(s.ctx, config, s.options.Cwd, host, s.callback, s.update, func(id string) error {
 		if err := s.leaseRoute(id); err != nil {
 			return err
 		}

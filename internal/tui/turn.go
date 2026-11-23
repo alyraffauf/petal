@@ -1,8 +1,11 @@
 package tui
 
 import (
-	acp "github.com/coder/acp-go-sdk"
 	"strings"
+
+	acp "github.com/coder/acp-go-sdk"
+
+	"petal/internal/acphost"
 )
 
 // A turn owns all incoming text until the agent acknowledges the prompt (or
@@ -89,13 +92,7 @@ func (m *terminal) toolResult(update toolEvent) (event, bool) {
 		result += "\n\n" + *call.body
 	}
 	for _, view := range call.terminals {
-		out := view()
-		if out.Truncated {
-			result += "\n\nEarlier output was truncated."
-		}
-		if out.Output != "" {
-			result += "\n\n    " + strings.ReplaceAll(strings.TrimSuffix(clean(out.Output), "\n"), "\n", "\n    ")
-		}
+		result += acphost.FormatTerminalOutput(view())
 	}
 	return event{role: "tool", text: result}, true
 }

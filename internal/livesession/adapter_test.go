@@ -291,6 +291,7 @@ func (a adapterFixture) workspace() {
 	if err := json.Unmarshal(terminal, &created); err != nil || created.TerminalID == "" {
 		a.t.Fatalf("terminal creation result = %s, %v", terminal, err)
 	}
+	a.update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "run", "title": "Read source", "content": []map[string]string{{"type": "terminal", "terminalId": created.TerminalID}}})
 	args := map[string]any{"terminalId": created.TerminalID}
 	a.request("terminal/wait_for_exit", args)
 	output := a.request("terminal/output", args)
@@ -299,4 +300,5 @@ func (a adapterFixture) workspace() {
 		a.t.Fatalf("terminal output = %s, %v", output, err)
 	}
 	a.request("terminal/release", args)
+	a.update(map[string]string{"sessionUpdate": "tool_call_update", "toolCallId": "run", "status": "completed"})
 }
