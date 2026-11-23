@@ -47,6 +47,8 @@ The control center lists saved threads across projects. Select a thread to reope
 
 To search the saved messages in this project, press **Ctrl+F** in the control center or type `/search` in chat. Use double quotes for an exact phrase. Press **Enter** to read a match in context. Press **Escape** to return to the results.
 
+When embeddings are enabled, opening Petal starts background indexing in the local daemon for the current project and pinned account. Terminals with the same scope and embedding settings share that work. Keyword matches appear first. Additional matches are labeled **by meaning**, and the results refresh as indexing catches up. Quoted phrases stay exact.
+
 Press **Page Up** to scroll back, or press **F3** to open the full-screen reader. In the control center, open **conversation turns** to jump to a prompt in the active thread.
 
 `petal --resume` starts with your most recent saved thread selected in the control center. While the terminal process runs, it keeps the unsent draft of each thread that you switch away from. Drafts and follow-ups still queued in the terminal disappear when you exit. After a daemon restart, choose a saved conversation to reopen it.

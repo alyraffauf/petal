@@ -143,18 +143,19 @@ func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDiale
 	if err != nil {
 		return err
 	}
-	live, err := client.List(parent)
-	client.Close()
+	defer client.Close()
+	live, err := client.ListProject(parent, cwd, c.PinnedAccount)
 	if err != nil {
 		return err
 	}
 	start, ok := recentLiveSession(cwd, c, live)
 	if resume || !ok {
-		start, ok, err = pick(cwd, c, resume)
+		start, ok, err = pick(cwd, c, resume, !client.SupportsProjectIndex())
 		if err != nil || !ok {
 			return err
 		}
 	}
+	client.Close()
 	drafts := make(sessionDrafts)
 	for {
 		next, err := runSession(parent, start, drafts, dial)
@@ -200,6 +201,11 @@ func runSession(parent context.Context, start sessionStart, drafts sessionDrafts
 		return nil, err
 	}
 	defer client.Close()
+	if client.SupportsProjectIndex() {
+		if _, err := client.ListProject(ctx, cwd, c.PinnedAccount); err != nil {
+			return nil, err
+		}
+	}
 	m.h = &harness{
 		daemon:   &daemonSession{client: client, dial: dial, handle: start.handle},
 		graphics: directGraphicsTerminal(), lifetime: ctx, events: make(chan tea.Msg, 128), permissions: make(chan struct{}, 1),

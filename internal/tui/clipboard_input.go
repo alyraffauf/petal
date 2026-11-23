@@ -49,6 +49,7 @@ func runChat(m *terminal) error {
 	defer func() {
 		if m.launch != nil {
 			m.launch.stopWatchingChildStatuses()
+			m.launch.stopTranscriptSearch()
 		}
 	}()
 	_, err := tea.NewProgram(&frame{Model: m, background: canvasBackground(m.cfg.TransparentBackground)}, tea.WithInput(input), tea.WithFilter(input.restorePacket)).Run()

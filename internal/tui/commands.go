@@ -105,6 +105,7 @@ func (m *terminal) openPicker(routeOnly bool) tea.Cmd {
 	c := m.cfg
 	c.PinnedAccount = ""
 	m.launch = newPicker(m.Cwd, c)
+	m.launch.legacyIndex = m.h != nil && m.h.daemon != nil && !m.h.daemon.client.SupportsProjectIndex()
 	m.launch.monochrome = m.monochrome
 	m.launch.embedded = true
 	m.launch.width, m.launch.height = m.Width, m.Height
