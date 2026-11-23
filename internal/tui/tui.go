@@ -329,7 +329,8 @@ func (m *terminal) View() tea.View {
 		route.PinnedAccount = m.Account
 	}
 	v.Model = clean(route.ModelLabel(v.Model))
-	v.activeModel = m.agentSettings.byCategory("model").current()
+	current := m.agentSettings.byCategory("model").current()
+	v.activeModel = m.modelSettingLabel(current, current)
 	if v.Status == "ready" {
 		v.Status = settingLabel(v.Status, m.agentSettings.byCategory("mode").currentLabel())
 		if m.h != nil && m.h.record.Parent != "" {
@@ -556,7 +557,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.launch.setting != nil {
 					return m, m.selectSetting(m.launch)
 				}
-				m.next = &sessionStart{cwd: m.Cwd, cfg: m.launch.cfg, resume: m.launch.resume, id: m.launch.id}
+				m.next = &sessionStart{cwd: m.launch.center.cwd, cfg: m.launch.cfg, resume: m.launch.resume, id: m.launch.id}
 				if m.connection == connectionFailed && m.launch.routeOnly && m.next.resume == m.resume && m.next.id == m.resumeID {
 					m.next.editor = m.editor
 				}

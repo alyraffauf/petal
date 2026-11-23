@@ -4,6 +4,9 @@ Usage: record.py PETAL_BINARY OUTPUT_JSON
 
 The output holds the timed frames of the workbench session and three named
 stills. render.py turns it into the GIF and the screenshots.
+
+agent.py plays the ACP bridges and provider.py plays the claude and codex CLIs,
+so Petal discovers its accounts and resolves their default models as usual.
 """
 
 import glob
@@ -17,36 +20,45 @@ import tempfile
 import time
 from pathlib import Path
 
-COLUMNS, ROWS = 96, 27
+# One row taller than the orchid needs beside six thread rows. render.py sizes cells to match.
+COLUMNS, ROWS = 96, 28
 # The project path shows in the footer, so it is short and fixed.
 PROJECT = Path(os.environ.get("DEMO_PROJECT", "/tmp/petal"))
-AGENT = Path(__file__).with_name("agent.py")
+# A second project with one saved thread, which the control center lists under its path.
+OTHER_PROJECT = PROJECT.with_name(PROJECT.name + "-website")
+OTHER_PROMPT = "Draft the launch post"  # agent.py answers this prompt and titles the thread with it.
+AGENT = Path(__file__).with_name("agent.py").resolve()
+PROVIDER = Path(__file__).with_name("provider.py").resolve()
+# The name provider.py reports for the Claude default. Its arrival means the labels have resolved.
+CLAUDE_MODEL = "claude-opus-5-5"
 TMUX = ["tmux", "-L", "petal-demo", "-f", "/dev/null"]
 
 
 def write_config(root):
     """Two Claude accounts with different quota, and one Codex account."""
     accounts = [
-        ("work", "claude/default", "parent", 30, 5),
-        ("personal", "claude/default", "parent", 90, 1),
-        ("team", "codex/default", "child", 80, 1),
+        ("work", "claude", "parent", 30, 5),
+        ("personal", "claude", "parent", 90, 1),
+        ("team", "codex", "child", 80, 1),
     ]
     lines = ['[history.embeddings]', 'provider = "off"', ""]
-    for name, model, role, quota_left, capacity in accounts:
+    for name, provider, role, quota_left, capacity in accounts:
+        executable_env = {"claude": "CLAUDE_CODE_EXECUTABLE", "codex": "CODEX_PATH"}[provider]
         lines += [
             "[[accounts]]",
             f'name = "{name}"',
+            f'provider = "{provider}"',
             f"capacity = {capacity}",
             f'usage = ["echo", "{quota_left}"]',
+            "[[accounts.env]]",
+            f'name = "{executable_env}"',
+            f'value = {json.dumps(str(root / "bin" / provider))}',
             "[[accounts.env]]",
             'name = "DEMO_ROLE"',
             f'value = "{role}"',
             "[[accounts.env]]",
             'name = "DEMO_CHILD_MODEL"',
             'value = "codex/default"',
-            "[[accounts.models]]",
-            f'id = "{model}"',
-            f'command = ["python3", "{AGENT}"]',
             "",
         ]
     config = root / "config.toml"
@@ -55,21 +67,24 @@ def write_config(root):
 
 
 def isolated_path(root, petal):
-    """A PATH without the real claude and codex, so Petal discovers only the demo accounts."""
+    """A PATH where the scripted agent and provider stand in for the real bridges and CLIs."""
     bin_directory = root / "bin"
     bin_directory.mkdir()
     (bin_directory / "petal").symlink_to(petal)
     for tool in ("python3", "git", "echo"):
         (bin_directory / tool).symlink_to(shutil.which(tool))
+    for bridge in ("claude-agent-acp", "codex-acp"):
+        (bin_directory / bridge).symlink_to(AGENT)
+    for cli in ("claude", "codex"):
+        (bin_directory / cli).symlink_to(PROVIDER)
     return bin_directory
 
 
 class Session:
     """One Petal process in a detached tmux window."""
 
-    def __init__(self, root, petal, config):
-        self.state = root / f"state-{time.monotonic_ns()}"
-        self.state.mkdir()
+    def __init__(self, root, petal, config, state, project):
+        self.state = state
         self.frames = []
         self.stills = {}
         self.started = time.monotonic()
@@ -81,11 +96,12 @@ class Session:
             "XDG_CONFIG_HOME": str(root / "config"),
             "PATH": str(root / "bin"),
         }
-        command = ["new-session", "-d", "-s", "demo", "-x", str(COLUMNS), "-y", str(ROWS), "-c", str(PROJECT)]
+        command = ["new-session", "-d", "-s", "demo", "-x", str(COLUMNS), "-y", str(ROWS), "-c", str(project)]
         for name, value in environment.items():
             command += ["-e", f"{name}={value}"]
         # Petal only emits 24-bit color when it does not detect tmux.
-        launch = f"env -u TMUX -u TMUX_PANE TERM=xterm-256color {petal} --config {config}"
+        # The shell tmux starts may rebuild PATH, so set it again on the command itself.
+        launch = f"env -u NO_COLOR -u TMUX -u TMUX_PANE TERM=xterm-256color PATH={root / 'bin'} {petal} --config {config}"
         started = self.tmux(*command, launch)
         if started.returncode != 0:
             raise RuntimeError(started.stderr)
@@ -131,19 +147,41 @@ class Session:
 
     def title_child(self, title):
         """Petal leaves a delegated child untitled. Title it so the thread tree reads well."""
-        database = sqlite3.connect(glob.glob(f"{self.state}/petal/conversations/*/index.sqlite")[0], timeout=5)
-        database.execute("update sessions set title = ? where title = ''", (title,))
-        database.commit()
-        database.close()
+        for index in glob.glob(f"{self.state}/petal/conversations/*/index.sqlite"):
+            database = sqlite3.connect(index, timeout=5)
+            database.execute("update sessions set title = ? where title = ''", (title,))
+            database.commit()
+            database.close()
 
     def close(self):
         self.tmux("kill-server")
 
 
-def start_review(session):
+def save_other_thread(session):
+    """Hold one finished conversation in the second project."""
     session.wait_for("control center")
-    session.record(1.8)
-    session.press("Enter", 1.0)
+    session.press("C-n")
+    session.wait_for("ready")
+    session.type(OTHER_PROMPT)
+    session.press("Enter")
+    session.wait_for("launch.md")
+
+
+def start_review(session):
+    session.wait_for(OTHER_PROMPT)
+    session.wait_for(CLAUDE_MODEL)
+    # Open on the thread saved in the other project, once the orchid has faded in.
+    for _ in range(4):
+        session.press("Down")
+    session.record(1.5)
+    # Drop the frames so far, so the animation does not start on a blank screen.
+    session.frames.clear()
+    session.started = time.monotonic()
+    session.record(2.2)
+    for _ in range(4):
+        session.press("Up", 0.14)
+    session.record(0.3)
+    session.press("Enter", 1.8)  # The models, by the names their defaults resolve to.
     session.press("Tab", 2.6)  # Show the accounts and their quota.
     session.press("Enter", 0.5)
     session.wait_for("ready")
@@ -185,15 +223,23 @@ def record_commands(session):
 
 def main():
     petal, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2])
-    PROJECT.mkdir(exist_ok=True)
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=PROJECT, check=True)
+    for project in (PROJECT, OTHER_PROJECT):
+        project.mkdir(exist_ok=True)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project, check=True)
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         config = write_config(root)
         isolated_path(root, petal)
         stills = {}
         for scene in (record_commands, record_workbench):
-            session = Session(root, petal, config)
+            state = root / f"state-{scene.__name__}"
+            state.mkdir()
+            seed = Session(root, petal, config, state, OTHER_PROJECT)
+            try:
+                save_other_thread(seed)
+            finally:
+                seed.close()
+            session = Session(root, petal, config, state, PROJECT)
             try:
                 scene(session)
             finally:

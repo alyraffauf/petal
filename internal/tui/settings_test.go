@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"petal/internal/proxy"
+	"petal/internal/routing"
 )
 
 func TestSettingPickerShowsCurrentGroupedValue(t *testing.T) {
@@ -44,5 +45,23 @@ func TestSettingsPickerShowsCurrentLegacyMode(t *testing.T) {
 	view := ansi.Strip(model.launch.View().Content)
 	if !strings.Contains(view, "› Read only (current)") {
 		t.Fatalf("legacy mode should be visible and selected:\n%s", view)
+	}
+}
+
+func TestComposerUsesActiveAccountsResolvedDefault(t *testing.T) {
+	m := terminal{screen: screen{Account: "work", Model: "claude/default", Width: 96, Height: 20, editor: testComposer("", 0)}}
+	m.cfg.Accounts = map[string]routing.Account{
+		"work":     {Provider: "claude", ModelLabels: map[string]string{"claude/default": "work-model"}},
+		"personal": {Provider: "claude", ModelLabels: map[string]string{"claude/default": "personal-model"}},
+	}
+	for value, want := range map[string]string{"default": "work-model", "claude/default": "work-model", "custom": "custom"} {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.agentSettings.Config = []setting{{Category: "model", Type: "select", CurrentValue: raw, Options: []valueChoice{{Value: value}}}}
+		if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Ask "+want+"…") {
+			t.Fatalf("model %q: %s", value, view)
+		}
 	}
 }

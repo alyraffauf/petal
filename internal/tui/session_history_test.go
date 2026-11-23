@@ -1,6 +1,7 @@
 package tui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"path/filepath"
 	"testing"
 	"time"
@@ -60,5 +61,46 @@ func TestNewThreadDirectoryRelativeToSession(t *testing.T) {
 	m.submit()
 	if m.next == nil || m.next.resume || m.next.cwd != filepath.Dir(cwd) {
 		t.Fatalf("new session in parent directory: %+v", m.next)
+	}
+}
+
+func TestControlCenterResumesInThreadDirectory(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	local, other := t.TempDir(), t.TempDir()
+	cfg := routing.Config{Accounts: map[string]routing.Account{"work": {Models: map[string][]string{"model": {"adapter"}}}}}
+	for _, cwd := range []string{local, other} {
+		if _, err := sessions.Create(cwd, sessions.Record{ID: "same", Model: "model", Account: "work", Title: cwd}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := newPicker(local, cfg)
+	p.showHistory()
+	for _, node := range p.nodes() {
+		if node.title == other && node.kind == "Project thread" {
+			p.selectNode(node)
+			p.centerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if p.chosen && p.resume && p.id == "same" && p.center.cwd == other {
+				return
+			}
+			t.Fatalf("selected wrong session: %q in %q", p.id, p.center.cwd)
+		}
+	}
+	t.Fatal("missing thread from other directory")
+}
+
+func TestAdapterDirectoryUnlocksSiblingArchiveThreads(t *testing.T) {
+	p := newPicker(t.TempDir(), routing.Config{})
+	p.history = true
+	found := sessions.ThreadInProject(t.TempDir(), sessions.Record{ID: "reported"})
+	p.otherProjects = []sessions.ProjectThread{{Project: found.Project, ID: "archived"}, {Project: "unrelated", ID: "archived"}}
+	p.Update(remoteSessions{picker: p, other: []sessions.ProjectThread{found}})
+	for _, r := range p.otherProjects {
+		want := ""
+		if r.Project == found.Project {
+			want = found.Directory
+		}
+		if r.Directory != want {
+			t.Fatalf("directory for %s/%s = %q, want %q", r.Project, r.ID, r.Directory, want)
+		}
 	}
 }
