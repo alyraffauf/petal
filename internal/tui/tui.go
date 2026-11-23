@@ -147,6 +147,7 @@ func Run(parent context.Context, c routing.Config, resume bool) error {
 	if err != nil {
 		return err
 	}
+	c.ResolveDefaultLabels(parent, cwd)
 	start, ok, err := pick(cwd, c, resume)
 	if err != nil || !ok {
 		return err
@@ -156,6 +157,9 @@ func Run(parent context.Context, c routing.Config, resume bool) error {
 		next, err := runSession(parent, start, drafts)
 		if err != nil || next == nil {
 			return err
+		}
+		if next.cwd != start.cwd {
+			next.cfg.ResolveDefaultLabels(parent, next.cwd)
 		}
 		start = *next
 	}
@@ -320,7 +324,11 @@ func (m *terminal) View() tea.View {
 	v.backlog = &m.chatBacklog
 	v.Cwd = clean(v.Cwd)
 	v.Account = clean(v.Account)
-	v.Model = clean(v.Model)
+	route := m.cfg
+	if m.Account != "" {
+		route.PinnedAccount = m.Account
+	}
+	v.Model = clean(route.ModelLabel(v.Model))
 	v.activeModel = m.agentSettings.byCategory("model").current()
 	if v.Status == "ready" {
 		v.Status = settingLabel(v.Status, m.agentSettings.byCategory("mode").currentLabel())

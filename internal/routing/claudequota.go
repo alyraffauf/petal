@@ -12,14 +12,23 @@ import (
 // Claude owns profile authentication. Keep stdin open until its control
 // response arrives. Closing it after the request can end the CLI prematurely.
 func (a Account) claudeQuota(ctx context.Context, cli, model string) (float64, error) {
-	cmd := a.Command(ctx, []string{cli, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence"})
-	in, out, cleanup, err := startQuotaProcess(ctx, cmd)
+	raw, err := a.claudeControl(ctx, cli, "", `{"subtype":"get_usage","skip_behaviors":true}`)
 	if err != nil {
 		return 0, err
 	}
+	return claudeRemaining(raw, model)
+}
+
+func (a Account) claudeControl(ctx context.Context, cli, cwd, request string) (json.RawMessage, error) {
+	cmd := a.Command(ctx, []string{cli, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence"})
+	cmd.Dir = cwd
+	in, out, cleanup, err := startQuotaProcess(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
 	defer cleanup()
-	if _, err := io.WriteString(in, `{"type":"control_request","request_id":"petal-usage","request":{"subtype":"get_usage","skip_behaviors":true}}`+"\n"); err != nil {
-		return 0, err
+	if _, err := io.WriteString(in, `{"type":"control_request","request_id":"petal-usage","request":`+request+`}`+"\n"); err != nil {
+		return nil, err
 	}
 	scan := bufio.NewScanner(out)
 	scan.Buffer(make([]byte, 4096), 4<<20)
@@ -33,20 +42,20 @@ func (a Account) claudeQuota(ctx context.Context, cli, model string) (float64, e
 			}
 		}
 		if err := json.Unmarshal(scan.Bytes(), &frame); err != nil {
-			return 0, err
+			return nil, err
 		}
 		if frame.Type != "control_response" || frame.Response.RequestID != "petal-usage" {
 			continue
 		}
 		if frame.Response.Subtype != "success" {
-			return 0, errors.New("Claude usage request rejected")
+			return nil, errors.New("Claude control request rejected")
 		}
-		return claudeRemaining(frame.Response.Response, model)
+		return frame.Response.Response, nil
 	}
 	if err := scan.Err(); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return 0, io.ErrUnexpectedEOF
+	return nil, io.ErrUnexpectedEOF
 }
 
 func claudeRemaining(data json.RawMessage, model string) (float64, error) {

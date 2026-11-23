@@ -45,3 +45,24 @@ printf '{"models":[{"slug":"%s","visibility":"list"},{"slug":"explicit","visibil
 		}
 	}
 }
+
+func TestDefaultLabelReflectsAllEligibleAccounts(t *testing.T) {
+	const id = "codex/default"
+	account := func(model string) Account {
+		return Account{Models: map[string][]string{id: {"adapter"}}, ModelLabels: map[string]string{id: model}}
+	}
+	c := Config{Accounts: map[string]Account{"work": account("model-a"), "personal": account("model-a")}}
+	if got := c.ModelLabel(id); got != "model-a" {
+		t.Fatal(got)
+	}
+	for _, other := range []string{"model-b", ""} {
+		c.Accounts["personal"] = account(other)
+		if got := c.ModelLabel(id); got != "Codex default" {
+			t.Fatal(got)
+		}
+	}
+	c.PinnedAccount = "work"
+	if got := c.ModelLabel(id); got != "model-a" {
+		t.Fatal(got)
+	}
+}
