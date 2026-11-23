@@ -138,6 +138,7 @@ func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDiale
 	if err != nil {
 		return err
 	}
+	c.ResolveDefaultLabels(parent, cwd)
 	client, err := dial(parent)
 	if err != nil {
 		return err
@@ -159,6 +160,9 @@ func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDiale
 		next, err := runSession(parent, start, drafts, dial)
 		if err != nil || next == nil {
 			return err
+		}
+		if next.cwd != start.cwd {
+			next.cfg.ResolveDefaultLabels(parent, next.cwd)
 		}
 		start = *next
 	}
@@ -356,8 +360,13 @@ func (m *terminal) View() tea.View {
 	v.backlog = &m.chatBacklog
 	v.Cwd = clean(v.Cwd)
 	v.Account = clean(v.Account)
-	v.Model = clean(v.Model)
-	v.activeModel = m.agentSettings.byCategory("model").current()
+	route := m.cfg
+	if m.Account != "" {
+		route.PinnedAccount = m.Account
+	}
+	v.Model = clean(route.ModelLabel(v.Model))
+	current := m.agentSettings.byCategory("model").current()
+	v.activeModel = m.modelSettingLabel(current, current)
 	if v.Status == "ready" {
 		v.Status = settingLabel(v.Status, m.agentSettings.byCategory("mode").currentLabel())
 		if m.h != nil && m.h.record.Parent != "" {
@@ -585,7 +594,7 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.launch.setting != nil {
 					return m, m.selectSetting(m.launch)
 				}
-				m.next = &sessionStart{cwd: m.Cwd, cfg: m.launch.cfg, resume: m.launch.resume, id: m.launch.id}
+				m.next = &sessionStart{cwd: m.launch.center.cwd, cfg: m.launch.cfg, resume: m.launch.resume, id: m.launch.id}
 				if m.connection == connectionFailed && m.launch.routeOnly && m.next.resume == m.resume && m.next.id == m.resumeID {
 					m.next.editor = m.editor
 				}

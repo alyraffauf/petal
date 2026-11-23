@@ -43,6 +43,8 @@ Press **F2** or type `/sessions` to open the control center. Type to filter thre
 
 ![The control center lists a completed delegated subagent under its parent thread, with the subagent's details on the right](screenshots/control-center.png)
 
+The control center lists saved threads across projects. Select a thread to reopen it in its original directory. Older archives show up under **Earlier project** until Petal learns their directory from an adapter or you open Petal there.
+
 To search the saved messages in this project, press **Ctrl+F** in the control center or type `/search` in chat. Use double quotes for an exact phrase. Press **Enter** to read a match in context. Press **Escape** to return to the results.
 
 Press **Page Up** to scroll back, or press **F3** to open the full-screen reader. In the control center, open **conversation turns** to jump to a prompt in the active thread.

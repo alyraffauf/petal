@@ -84,6 +84,9 @@ func openStoreContext(ctx context.Context, cwd string) (*sql.DB, error) {
 	if err == nil {
 		_, err = provider.Up(ctx)
 	}
+	if err == nil {
+		_, err = db.ExecContext(ctx, "INSERT OR IGNORE INTO project_directory (id, cwd) VALUES (1, ?)", cwd)
+	}
 	if err != nil {
 		db.Close()
 		return nil, err

@@ -126,6 +126,7 @@ func discoverAccount(provider, cli, adapter string, a Account, schedule func(fun
 	argv := []string{adapter}
 	if _, exists := a.Models[provider+"/default"]; !exists {
 		a.Models[provider+"/default"] = argv
+		a.discoveredDefault = true
 	}
 	addModel := func(id string) {
 		if _, exists := a.Models[id]; id != "" && !exists {
