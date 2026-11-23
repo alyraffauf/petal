@@ -37,7 +37,7 @@ func TestAccountAdapter(t *testing.T) {
 		var r any = map[string]any{}
 		switch q.Method {
 		case "initialize":
-			r = map[string]any{"protocolVersion": q.Params["protocolVersion"], "agentCapabilities": map[string]any{"loadSession": name == "b", "sessionCapabilities": map[string]any{"options": map[string]any{}, "list": map[string]any{}, "resume": map[string]any{}, "delete": map[string]any{}, "close": map[string]any{}}}, "authMethods": []map[string]any{
+			r = map[string]any{"protocolVersion": q.Params["protocolVersion"], "agentCapabilities": map[string]any{"loadSession": name == "b", "sessionCapabilities": map[string]any{"options": map[string]any{}, "list": map[string]any{}, "resume": map[string]any{}, "delete": map[string]any{}, "close": map[string]any{}, "fork": map[string]any{}}}, "authMethods": []map[string]any{
 				{"id": "login", "name": "Sign in"},
 				{"type": "terminal", "id": "interactive", "name": "Interactive", "args": []string{"auth"}},
 			}}
@@ -48,6 +48,8 @@ func TestAccountAdapter(t *testing.T) {
 			r = map[string]any{"configOptions": []map[string]string{{"id": "mode", "currentValue": "shared"}, {"id": "model", "currentValue": name}}}
 		case "session/new":
 			r = map[string]string{"sessionId": "same"}
+		case "session/fork":
+			r = map[string]string{"sessionId": "forked"}
 		case "session/prompt":
 			if q.Params["sessionId"] != "same" {
 				t.Fatal(q.Params)

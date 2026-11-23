@@ -36,7 +36,7 @@ On v2, reopening a session requests a full replay. Petal adds the newly observed
 
 The model option of every editor session lists all of Petal's models, with the conversation's current model selected. You can pick another model at any point in a conversation, including one from another provider.
 
-Petal opens a session on the new model and closes the old one. The next prompt carries the conversation so far: the latest compaction summary, if the old model compacted, and every saved message after it. Tool calls are carried as their one-line summaries, not their full output. Later switches carry that context forward, because the first prompt on each model includes it.
+Petal opens a session on the new model and closes the old one. The next prompt carries the conversation so far: the latest compaction summary, if the old model compacted, and every saved message after it. Tool calls are carried as their one-line summaries, not their full output. Later switches carry that context forward, because the first prompt on each model includes it. A fork can switch models too. Petal records where the fork left its parent, so the next model gets the parent conversation up to that point and the fork's own turns.
 
 Petal saves the pending context with the session, so it still reaches the next prompt after you close and resume the conversation or restart Petal.
 
