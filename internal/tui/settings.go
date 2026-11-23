@@ -176,15 +176,25 @@ func (m *terminal) openSettings(category string) {
 	m.openSettingPicker(menu, current)
 }
 
+// Adapters can report the provider default as either "default" or a routed ID.
+func (m *terminal) modelSettingLabel(value, fallback string) string {
+	account := m.cfg.Accounts[m.Account]
+	route := account.Provider + "/default"
+	if value == "default" || value == route {
+		if label := account.ModelLabels[route]; label != "" {
+			return label
+		}
+	}
+	return fallback
+}
+
 func (m *terminal) openSettingValues(s setting) {
 	menu := settingMenu{title: s.Name, target: s}
 	current := s.current()
 	for _, choice := range s.choices() {
 		label := choice.Name
-		if account, ok := m.cfg.Accounts[m.Account]; ok && s.Category == "model" && (choice.Value == "default" || choice.Value == account.Provider+"/default") {
-			if resolved := account.ModelLabels[account.Provider+"/default"]; resolved != "" {
-				label = resolved
-			}
+		if s.Category == "model" {
+			label = m.modelSettingLabel(choice.Value, label)
 		}
 		if choice.Value == current {
 			label += " (current)"

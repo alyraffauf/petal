@@ -329,7 +329,8 @@ func (m *terminal) View() tea.View {
 		route.PinnedAccount = m.Account
 	}
 	v.Model = clean(route.ModelLabel(v.Model))
-	v.activeModel = m.agentSettings.byCategory("model").current()
+	current := m.agentSettings.byCategory("model").current()
+	v.activeModel = m.modelSettingLabel(current, current)
 	if v.Status == "ready" {
 		v.Status = settingLabel(v.Status, m.agentSettings.byCategory("mode").currentLabel())
 		if m.h != nil && m.h.record.Parent != "" {
