@@ -249,3 +249,55 @@ func TestForkSwitchNeedsAncestorHistory(t *testing.T) {
 		t.Fatal("a deleted parent still allows the switch, which would drop the conversation before the fork")
 	}
 }
+
+func TestForkHandoffSkipsReplayedInheritedHistory(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	parent, fork := `["claude","opus","parent"]`, `["claude","opus","fork"]`
+	for _, id := range []string{parent, fork} {
+		if _, err := sessions.Create(cwd, sessions.Record{ID: id, Model: "opus"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sessions.SaveTranscript(cwd, parent, []sessions.Message{{Role: "user", Body: "the codename is BLUE-HERON"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	head, err := sessions.TranscriptHead(t.Context(), cwd, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fork's own turn, then a full replay that archives the inherited message again.
+	if err := sessions.SaveTranscript(cwd, fork, []sessions.Message{{Role: "user", Body: "fork turn"}, {Role: "user", Body: "the codename is BLUE-HERON"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := handoffPrompt(cwd, []historySegment{{ID: parent, Head: head}}, fork, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried := string(prompt)
+	if strings.Count(carried, "BLUE-HERON") != 1 || strings.Index(carried, "BLUE-HERON") > strings.Index(carried, "fork turn") {
+		t.Fatalf("handoff = %s; want the inherited message once, before the fork's turn", carried)
+	}
+}
+
+func TestHandoffRefusesWhenParentDeletedAfterSwitch(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	parent := `["claude","opus","parent"]`
+	if _, err := sessions.Create(cwd, sessions.Record{ID: parent, Model: "opus"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.SaveTranscript(cwd, parent, []sessions.Message{{Role: "user", Body: "before the fork"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	head, err := sessions.TranscriptHead(t.Context(), cwd, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.Forget(cwd, "", parent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handoffPrompt(cwd, []historySegment{{ID: parent, Head: head}}, `["claude","opus","fork"]`, json.RawMessage(`[]`)); err == nil {
+		t.Fatal("the handoff went ahead without the deleted parent's history")
+	}
+}

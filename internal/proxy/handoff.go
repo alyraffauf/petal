@@ -18,6 +18,11 @@ import (
 // lineage supplies the conversation before the fork, ahead of the previous
 // route's own archive.
 func handoffPrompt(cwd string, lineage []historySegment, previous string, prompt json.RawMessage) (json.RawMessage, error) {
+	// The parent may have been deleted since the switch. Fail before the
+	// prompt consumes the handoff, so it stays pending.
+	if err := lineageAvailable(cwd, lineage); err != nil {
+		return nil, err
+	}
 	var rows []sessiondb.ReadTranscriptRow
 	for _, segment := range lineage {
 		inherited, err := sessions.Transcript(cwd, segment.ID)
@@ -34,7 +39,20 @@ func handoffPrompt(cwd string, lineage []historySegment, previous string, prompt
 	if err != nil {
 		return nil, fmt.Errorf("read the conversation before the model switch: %w", err)
 	}
-	rows = append(rows, own...)
+	// A fork loaded with a full replay archives the inherited messages under
+	// its own ID too. Keep each inherited message once, ahead of the fork's turns.
+	type message struct{ role, body string }
+	inherited := map[message]int{}
+	for _, row := range rows {
+		inherited[message{row.Role, row.Body}]++
+	}
+	for _, row := range own {
+		if key := (message{row.Role, row.Body}); inherited[key] > 0 {
+			inherited[key]--
+			continue
+		}
+		rows = append(rows, row)
+	}
 	context := handoffText(rows)
 	if context == "" {
 		return prompt, nil
