@@ -29,11 +29,12 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 	config.Accounts["offline"] = routing.Account{Models: map[string][]string{"aaa/default": {"/missing/petal-test-adapter"}}}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
+	var client *acp.Connection
 	launch := func() func(string, Object) Object {
 		editor, server := net.Pipe()
 		t.Cleanup(func() { editor.Close(); server.Close() })
 		connect(ctx, config, server, server, false, nil)
-		client := acp.NewConnection(nil, editor, editor)
+		client = acp.NewConnection(nil, editor, editor)
 		call := func(method string, params Object) Object {
 			t.Helper()
 			r, err := acp.SendRequest[Object](client, ctx, method, params)
@@ -102,6 +103,11 @@ func TestEditorPicksProviderAndResumesOnSameAccount(t *testing.T) {
 			t.Fatalf("resumed %s offered %s, want Petal's routes", model, result["configOptions"])
 		}
 		other := map[string]string{"claude/default": "codex/default", "codex/default": "claude/default"}[model]
+		// Petal has saved nothing of this conversation, so a switch would lose it.
+		if _, err := acp.SendRequest[Object](client, ctx, "session/set_config_option", Object{"sessionId": ids[model], "configId": encoded("model"), "value": encoded(other)}); err == nil {
+			t.Fatalf("switched %s with no saved history", model)
+		}
+		reopen("session/prompt", Object{"sessionId": ids[model], "prompt": json.RawMessage(`[{"type":"text","text":"hello"}]`)})
 		switched := reopen("session/set_config_option", Object{"sessionId": ids[model], "configId": encoded("model"), "value": encoded(other)})
 		if err := json.Unmarshal(switched["configOptions"], &opts); err != nil || len(opts) == 0 || opts[0].CurrentValue != other {
 			t.Fatalf("switching %s to %s offered %s", model, other, switched["configOptions"])

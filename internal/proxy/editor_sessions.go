@@ -18,6 +18,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"petal/internal/paths"
+	"petal/internal/sessions"
 )
 
 // Editors discover the picker through session/new, before they send a model.
@@ -176,7 +177,7 @@ func (p *proxy) openEditorSession(ctx context.Context, params Object) (any, erro
 		if !ok || routed == "" {
 			return result, nil
 		}
-		s := &editorSession{route: route, routedID: routed, options: opened["configOptions"], request: openRequest(params), cwd: projectKey(stringField(params, "cwd"))}
+		s := &editorSession{setup: openRequest(params), route: route, routedID: routed, options: opened["configOptions"], request: openRequest(params), cwd: projectKey(stringField(params, "cwd"))}
 		route.aliases.Store(routed, routed)
 		p.editorSessions.sessions.Store(routed, s)
 		opened["configOptions"] = p.sessionModelOptions(s)["configOptions"]
@@ -396,6 +397,18 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		}
 		model := p.Model
 		oldRoute, oldID := s.route, s.routedID
+		if repick && s.setup == nil && s.handoff == "" {
+			// The new model learns the conversation only from Petal's archive.
+			// A conversation the editor imported from an adapter may have none.
+			rows, err := sessions.Transcript(stringField(s.request, "cwd"), oldID)
+			if err == nil && len(rows) == 0 {
+				err = acp.NewInvalidParams("Petal has no saved history for this conversation, so switching models would lose it; start a new conversation to use another model")
+			}
+			if err != nil {
+				s.mu.Unlock()
+				return nil, err
+			}
+		}
 		if selecting {
 			model = stringField(params, "value")
 			if method == "session/set_model" {
