@@ -60,3 +60,28 @@ func TestHandoffWithoutHistoryLeavesPromptAlone(t *testing.T) {
 		t.Fatalf("got %s, %v", got, err)
 	}
 }
+
+func TestClosingSessionKeepsUnsavedV2Turn(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	p := &proxy{recorder: &transcriptRecorder{}, version: 2}
+	p.Model = "opus"
+	id := p.publicID("claude", "native")
+	p.recorder.open(id, id, cwd, "claude", "opus")
+	// No idle update arrives before the switch closes the session.
+	p.recorder.observe(id, 2, Object{"sessionUpdate": encoded("agent_message"), "messageId": encoded("m1"), "content": json.RawMessage(`[{"type":"text","text":"the codename is BLUE-HERON"}]`)})
+	finish, err := p.beforeTranscript("session/close", "claude", "native", id, Object{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := finish(nil); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(prompt), "BLUE-HERON") {
+		t.Fatalf("handoff after close lost the unsaved turn: %s", prompt)
+	}
+}

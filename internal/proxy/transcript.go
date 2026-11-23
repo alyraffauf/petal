@@ -192,6 +192,17 @@ func (p *proxy) beforeTranscript(method, name, native, id string, params Object)
 	switch method {
 	case "session/delete", "session/close":
 		return func(err error) error {
+			if err == nil && method == "session/close" {
+				// An ACP v2 turn is held in memory until idle. Keep it when the
+				// session closes first, as a model switch does.
+				s.mu.Lock()
+				if !s.replay {
+					if saveErr := s.save(false); saveErr != nil {
+						slog.Error("save ACP transcript on close", "error", saveErr)
+					}
+				}
+				s.mu.Unlock()
+			}
 			if err == nil {
 				r.active.CompareAndDelete(key, s)
 				if method == "session/delete" {
