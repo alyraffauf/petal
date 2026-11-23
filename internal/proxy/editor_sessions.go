@@ -319,8 +319,10 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		s.mu.Unlock()
 		return options, nil
 	}
-	repick := selecting && s.route != nil && s.setup != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
-	if selecting && s.route != nil && s.setup != nil && requested == s.route.Model {
+	// A "/default" route is listed as the real model it runs.
+	current := selecting && s.route != nil && (requested == s.route.Model || requested == p.PickerModel(s.route.Model))
+	repick := selecting && s.route != nil && s.setup != nil && slices.Contains(p.ModelNames(), requested) && !current
+	if current && s.setup != nil {
 		options := p.pendingModelOptions(s)
 		s.mu.Unlock()
 		if method == "session/set_model" {

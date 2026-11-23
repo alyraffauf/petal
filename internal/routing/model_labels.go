@@ -109,9 +109,9 @@ func claudeLabels(env map[string]string) map[string]string {
 }
 
 // ResolveDefaults asks the installed CLIs which model a new session would use.
-// An account whose answer maps to one of its routes starts new sessions on that
-// route and hides its "/default" route from pickers. The "/default" route stays
-// routable so saved conversations still resume.
+// When the answer maps to one of an account's routes, pickers list that model
+// in place of the account's "/default" route. Sessions still run on "/default",
+// so the provider applies each workspace's own settings.
 func (c Config) ResolveDefaults(parent context.Context, cwd string) {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
@@ -146,9 +146,12 @@ func (c Config) ResolveDefaults(parent context.Context, cwd string) {
 		id := a.Provider + "/default"
 		if r.model != "" {
 			a.DefaultRoute = a.routeFor(r.model)
-			r.label = a.ModelLabels[a.DefaultRoute]
+			r.label = a.ModelLabels[r.model]
+			if a.DefaultRoute != "" {
+				r.label = a.ModelLabels[a.DefaultRoute]
+			}
 			if r.label == "" {
-				r.label = a.DefaultRoute
+				r.label = r.model
 			}
 		}
 		if r.label != "" {
@@ -162,10 +165,10 @@ func (c Config) ResolveDefaults(parent context.Context, cwd string) {
 
 // routeFor returns the route that runs a model the CLI reported. An alias such
 // as "opus" matches when its catalog name equals the model's. A model with no
-// route gets one, so the default is always a real, selectable model.
-func (a *Account) routeFor(model string) string {
+// route leaves the default unresolved.
+func (a Account) routeFor(model string) string {
 	dflt := a.Provider + "/default"
-	if model == "" || model == dflt || model == "default" {
+	if model == "" || model == dflt {
 		return ""
 	}
 	if len(a.Models[model]) > 0 {
@@ -178,17 +181,7 @@ func (a *Account) routeFor(model string) string {
 			}
 		}
 	}
-	argv := a.Models[dflt]
-	if len(argv) == 0 {
-		return ""
-	}
-	a.Models = maps.Clone(a.Models)
-	a.Models[model] = argv
-	if a.SelectModel == nil {
-		a.SelectModel = map[string]bool{}
-	}
-	a.SelectModel[model] = true
-	return model
+	return ""
 }
 
 func (a Account) defaultModelID(ctx context.Context, cli, cwd string) string {

@@ -229,7 +229,8 @@ func (c Config) ModelNames() []string {
 }
 
 // PickerModels lists the models to offer for selection. A "/default" route
-// whose real model is known is left out, because that model is listed itself.
+// whose real model is known is left out, because PickerModel shows that model
+// in its place.
 func (c Config) PickerModels() []string {
 	return slices.DeleteFunc(c.ModelNames(), func(model string) bool {
 		return c.resolvedDefault(model) != ""
@@ -269,9 +270,6 @@ func (c Config) DefaultModel() string {
 	models := c.ModelNames()
 	for _, model := range models {
 		if strings.HasSuffix(model, "/default") {
-			if route := c.resolvedDefault(model); route != "" {
-				return route
-			}
 			return model
 		}
 	}

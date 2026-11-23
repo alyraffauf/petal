@@ -27,8 +27,8 @@ type Account struct {
 	Capacity          *float64
 	ModelLabels       map[string]string `toml:"-" json:"-"`
 	SelectModel       map[string]bool   `toml:"-" json:"-"`
-	// DefaultRoute is the route the provider's own default resolved to, set by
-	// ResolveDefaults. Empty means unresolved.
+	// DefaultRoute is the listed route that the provider's own default model
+	// matched, set by ResolveDefaults. Empty means unresolved.
 	DefaultRoute string `toml:"-" json:"-"`
 	Env          map[string]string
 	Models       map[string][]string
