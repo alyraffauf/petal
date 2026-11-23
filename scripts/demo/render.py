@@ -14,7 +14,9 @@ import pyte
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageDraw, ImageFont
 
-CELL_WIDTH, CELL_HEIGHT, PADDING, FONT_SIZE = 20, 42, 36, 34
+# With record.py's 96 by 28 screen this gives 1992 by 1206 pixels, the size the website declares.
+CELL_WIDTH, CELL_HEIGHT, FONT_SIZE = 20, 40, 34
+PADDING_X, PADDING_Y = 36, 43
 BACKGROUND, FOREGROUND = "#131117", "#f4eef4"
 # Changes closer together than this merge into one GIF frame, about 12 per second.
 MINIMUM_FRAME_MS = 80
@@ -70,7 +72,7 @@ def draw_block_or_line(draw, character, left, top, color):
 def draw_screen(ansi, columns, rows, fonts):
     screen = pyte.Screen(columns, rows)
     pyte.Stream(screen).feed(ansi.rstrip("\n").replace("\n", "\r\n"))
-    image = Image.new("RGB", (columns * CELL_WIDTH + 2 * PADDING, rows * CELL_HEIGHT + 2 * PADDING), BACKGROUND)
+    image = Image.new("RGB", (columns * CELL_WIDTH + 2 * PADDING_X, rows * CELL_HEIGHT + 2 * PADDING_Y), BACKGROUND)
     draw = ImageDraw.Draw(image)
     for row in range(rows):
         for column in range(columns):
@@ -78,7 +80,7 @@ def draw_screen(ansi, columns, rows, fonts):
             foreground, background = cell_color(cell.fg, FOREGROUND), cell_color(cell.bg, BACKGROUND)
             if cell.reverse:
                 foreground, background = background, foreground
-            left, top = PADDING + column * CELL_WIDTH, PADDING + row * CELL_HEIGHT
+            left, top = PADDING_X + column * CELL_WIDTH, PADDING_Y + row * CELL_HEIGHT
             if background != BACKGROUND:
                 draw.rectangle([left, top, left + CELL_WIDTH - 1, top + CELL_HEIGHT - 1], fill=background)
             character = cell.data
