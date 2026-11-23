@@ -44,6 +44,9 @@ type editorSession struct {
 	// handoff is the routed session whose context the next prompt carries to
 	// the route chosen by a model switch.
 	handoff string
+	// fork marks a session opened by session/fork. Petal's archive holds only
+	// the fork's own turns, so a model switch could not hand off the rest.
+	fork bool
 }
 
 // saveBinding persists a change to the pending handoff, so a close and resume
@@ -382,6 +385,10 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	// Choosing the real model shown for a "/default" route binds that model's
 	// route, because the session's workspace may default to another model.
 	repick := selecting && s.route != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
+	if repick && s.fork {
+		s.mu.Unlock()
+		return nil, acp.NewInvalidParams("Petal cannot switch the model of a forked conversation; switch models before forking, or start a new conversation")
+	}
 	if selecting && s.route != nil && requested == s.route.Model {
 		options := p.sessionModelOptions(s)
 		s.mu.Unlock()
@@ -530,6 +537,19 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 				result = response
 			}
 			s.mu.Unlock()
+		}
+	}
+	if err == nil && method == "session/fork" {
+		// Track the fork so its model option and selections go through Petal.
+		if opened, ok := result.(Object); ok {
+			if forked := stringField(opened, "sessionId"); forked != "" && forked != routed {
+				fs := &editorSession{route: route, routedID: forked, fork: true, options: opened["configOptions"], request: openRequest(params), cwd: projectKey(stringField(params, "cwd"))}
+				route.aliases.Store(forked, forked)
+				e.sessions.Store(forked, fs)
+				if opened["configOptions"] != nil {
+					opened["configOptions"] = p.sessionModelOptions(fs)["configOptions"]
+				}
+			}
 		}
 	}
 	if err == nil && method == "session/delete" {

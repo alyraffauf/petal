@@ -235,3 +235,17 @@ func TestForkWaitsForPendingHandoff(t *testing.T) {
 		t.Fatalf("fork returned %v; want it refused until the handoff is sent", err)
 	}
 }
+
+func TestForkedSessionRefusesModelSwitch(t *testing.T) {
+	p := &proxy{editorSessions: &editorSessions{}, Config: routing.Config{Accounts: map[string]routing.Account{
+		"a": {Models: map[string][]string{"m": {"adapter"}, "n": {"adapter"}}},
+	}}}
+	p.initialized = true
+	p.Model = "m"
+	p.editorSessions.sessions.Store(`["a","m","fork"]`, &editorSession{route: p, routedID: `["a","m","fork"]`, fork: true})
+	_, err := p.handleEditor(t.Context(), "session/set_config_option", json.RawMessage(`{"sessionId":"[\"a\",\"m\",\"fork\"]","configId":"model","value":"n"}`))
+	var re *acp.RequestError
+	if !errors.As(err, &re) || !strings.Contains(fmt.Sprint(re.Data), "forked conversation") {
+		t.Fatalf("switching a fork returned %v; want it refused", err)
+	}
+}
