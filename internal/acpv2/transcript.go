@@ -46,6 +46,12 @@ func (t *Transcript) Entries() []Entry {
 	return entries
 }
 
+// HasCompaction reports whether the transcript holds an entry for a compaction.
+func (t *Transcript) HasCompaction(id string) bool {
+	_, ok := t.positions[transcriptKey{role: "compaction", id: id}]
+	return ok
+}
+
 // FinishedCompaction returns the latest summary after its terminal status arrives.
 func (t *Transcript) FinishedCompaction(id string) (Entry, bool) {
 	const role = "compaction"

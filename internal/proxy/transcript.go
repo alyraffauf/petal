@@ -137,7 +137,9 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 			state.status = status
 			s.compactions[compaction] = state
 		} else if state.status != nil {
-			if _, live := s.projection.FinishedCompaction(compaction); !live {
+			// Restore only after a checkpoint removed the entry. A live entry
+			// still holds the chunks streamed so far.
+			if !s.projection.HasCompaction(compaction) {
 				summary, _ := json.Marshal([]map[string]string{{"type": "text", "text": state.summary}})
 				_, _ = s.projection.ApplyFields(Object{"sessionUpdate": encoded("compaction_update"), "compactionId": encoded(compaction), "status": state.status, "summary": summary}, version)
 			}

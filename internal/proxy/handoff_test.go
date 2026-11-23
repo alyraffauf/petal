@@ -163,3 +163,29 @@ func TestLateCompactionChunksKeepWholeSummary(t *testing.T) {
 		t.Fatalf("handoff = %s; want the whole summary", prompt)
 	}
 }
+
+func TestStreamedCompactionSummaryStaysWhole(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	r := &transcriptRecorder{}
+	id := `["claude","opus","native"]`
+	r.open(id, id, cwd, "claude", "opus")
+	update := func(fields string) {
+		var u Object
+		if err := json.Unmarshal([]byte(fields), &u); err != nil {
+			t.Fatal(err)
+		}
+		r.observe(id, 1, u)
+	}
+	update(`{"sessionUpdate":"compaction_update","compactionId":"c1","status":"in_progress"}`)
+	update(`{"sessionUpdate":"compaction_summary_chunk","compactionId":"c1","content":{"type":"text","text":"first half "}}`)
+	update(`{"sessionUpdate":"compaction_summary_chunk","compactionId":"c1","content":{"type":"text","text":"second half"}}`)
+	update(`{"sessionUpdate":"compaction_update","compactionId":"c1","status":"completed"}`)
+	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(prompt), "first half second half") {
+		t.Fatalf("handoff = %s; want the whole streamed summary", prompt)
+	}
+}
