@@ -17,12 +17,14 @@ func TestHandoffCarriesContextSinceLastCompaction(t *testing.T) {
 	}
 	if err := sessions.SaveTranscript(cwd, id, []sessions.Message{
 		{Role: "user", Body: "forgotten question"},
-		{Role: "compaction", Body: "first summary", SourceID: "c1"},
+		{Role: "compaction", Body: "Context compaction completed\n\nfirst summary", SourceID: "c1"},
 		{Role: "user", Body: "superseded question"},
-		{Role: "compaction", Body: "latest summary", SourceID: "c2"},
+		{Role: "compaction", Body: "Context compaction completed\n\nlatest summary", SourceID: "c2"},
 		{Role: "user", Body: "which file?"},
 		{Role: "tool", Body: "**rg config** · completed"},
 		{Role: "assistant", Body: "main.go"},
+		{Role: "compaction", Body: "Context compaction failed interrupted", SourceID: "c3"},
+		{Role: "compaction", Body: "Context compaction cancelled", SourceID: "c4"},
 	}, false); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +42,7 @@ func TestHandoffCarriesContextSinceLastCompaction(t *testing.T) {
 			t.Errorf("handoff lacks %q:\n%s", want, carried)
 		}
 	}
-	for _, stale := range []string{"forgotten question", "first summary", "superseded question"} {
+	for _, stale := range []string{"forgotten question", "first summary", "superseded question", "failed", "cancelled"} {
 		if strings.Contains(carried, stale) {
 			t.Errorf("handoff includes %q from before the last compaction", stale)
 		}

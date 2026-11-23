@@ -165,7 +165,22 @@ func (p *proxy) openEditorSession(ctx context.Context, params Object) (any, erro
 		}
 		params["configOptions"], _ = json.Marshal(slices.Delete(initial, i, i+1))
 		raw, _ := json.Marshal(params)
-		return route.handle(ctx, "session/new", raw)
+		result, err := route.handle(ctx, "session/new", raw)
+		if err != nil {
+			return nil, err
+		}
+		// Track the session like one opened without a selection, so the routed
+		// model list it advertises can switch it.
+		opened, ok := result.(Object)
+		routed := stringField(opened, "sessionId")
+		if !ok || routed == "" {
+			return result, nil
+		}
+		s := &editorSession{route: route, routedID: routed, options: opened["configOptions"], request: openRequest(params), cwd: projectKey(stringField(params, "cwd"))}
+		route.aliases.Store(routed, routed)
+		p.editorSessions.sessions.Store(routed, s)
+		opened["configOptions"] = p.sessionModelOptions(s)["configOptions"]
+		return opened, nil
 	}
 	if !filepath.IsAbs(stringField(params, "cwd")) {
 		return nil, acp.NewInvalidParams("cwd must be absolute")

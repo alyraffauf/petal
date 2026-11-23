@@ -163,3 +163,36 @@ func TestExternalV2TurnIsSearchableAtIdle(t *testing.T) {
 	}
 
 }
+
+func TestSessionOpenedWithModelSelectionCanSwitch(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := routing.Config{Accounts: map[string]routing.Account{}}
+	for model, account := range map[string]string{"claude/default": "a", "codex/default": "b"} {
+		config.Accounts[account] = routing.Account{Models: map[string][]string{model: {exe, "-test.run=^TestAccountAdapter$"}}, Env: map[string]string{"PETAL_NEGOTIATE_FIXTURE": account}}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	editor, server := net.Pipe()
+	t.Cleanup(func() { editor.Close(); server.Close() })
+	connect(ctx, config, server, server, false, nil)
+	client := acp.NewConnection(nil, editor, editor)
+	call := func(method string, params Object) Object {
+		t.Helper()
+		r, err := acp.SendRequest[Object](client, ctx, method, params)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		return r
+	}
+	call("initialize", Object{"protocolVersion": json.RawMessage("1")})
+	opened := call("session/new", Object{"cwd": encoded(t.TempDir()), "mcpServers": json.RawMessage("[]"), "configOptions": json.RawMessage(`[{"configId":"model","value":"codex/default"}]`)})
+	switched := call("session/set_config_option", Object{"sessionId": opened["sessionId"], "configId": encoded("model"), "value": encoded("claude/default")})
+	var opts []struct{ ID, CurrentValue string }
+	if err := json.Unmarshal(switched["configOptions"], &opts); err != nil || len(opts) == 0 || opts[0].ID != "model" || opts[0].CurrentValue != "claude/default" {
+		t.Fatalf("switch after selecting a model at open returned %v", switched)
+	}
+}

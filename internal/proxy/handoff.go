@@ -32,14 +32,14 @@ func handoffPrompt(cwd, previous string, prompt json.RawMessage) (json.RawMessag
 func handoffText(rows []sessiondb.ReadTranscriptRow) string {
 	start := 0
 	for i, row := range rows {
-		if row.Role == "compaction" {
+		if row.Role == "compaction" && completedCompaction(row.Body) {
 			start = i
 		}
 	}
 	var b strings.Builder
 	for _, row := range rows[start:] {
 		body := strings.TrimSpace(row.Body)
-		if body == "" {
+		if body == "" || row.Role == "compaction" && !completedCompaction(row.Body) {
 			continue
 		}
 		label := map[string]string{
@@ -59,4 +59,12 @@ func handoffText(rows []sessiondb.ReadTranscriptRow) string {
 	}
 	return "<conversation-so-far>\nThis conversation began with another model. It continues with you from here. Below is the conversation so far, oldest first. Answer the user's next message in that context.\n\n" +
 		b.String() + "</conversation-so-far>"
+}
+
+// completedCompaction reports whether an archived compaction row holds a
+// summary. The archive also keeps failed and cancelled attempts, which replace
+// nothing, as a status line without a summary.
+func completedCompaction(body string) bool {
+	status, summary, _ := strings.Cut(strings.TrimSpace(body), "\n\n")
+	return strings.Contains(status, "completed") && strings.TrimSpace(summary) != ""
 }
