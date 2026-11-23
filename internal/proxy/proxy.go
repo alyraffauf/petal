@@ -234,6 +234,9 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 		if p.PinnedAccount != "" && name != p.PinnedAccount {
 			canonical := p.publicID(p.PinnedAccount, native)
 			if method == "session/load" || method == "session/resume" {
+				if err := p.reserveLocalRoute(canonical); err != nil {
+					return nil, err
+				}
 				p.aliases.Store(canonical, id)
 			} else if existing, ok := p.aliases.Load(canonical); !ok || !slices.Equal(decodeRouteID(existing.(string), 3), parts) {
 				return nil, acp.NewInvalidParams("session belongs to another account")
@@ -345,6 +348,9 @@ func (p *proxy) handle(ctx context.Context, method string, raw json.RawMessage) 
 			session["sessionId"] = encoded(public)
 		} else {
 			delegationParent = p.publicID(name, returnedNative)
+			if err := p.reserveLocalRoute(delegationParent); err != nil {
+				return nil, err
+			}
 			session["sessionId"] = encoded(delegationParent)
 		}
 		native = returnedNative

@@ -35,12 +35,12 @@ func Discover(runtimeRoot string) (Endpoint, error) {
 	return discover(runtimeRoot, "")
 }
 
-// DiscoverProfile isolates an explicit configuration from the default daemon.
-func DiscoverProfile(runtimeRoot, configPath string) (Endpoint, error) {
-	if configPath == "" {
+// DiscoverProfile isolates a daemon by its caller-defined profile identity.
+func DiscoverProfile(runtimeRoot, identity string) (Endpoint, error) {
+	if identity == "" {
 		return Discover(runtimeRoot)
 	}
-	hash := sha256.Sum256([]byte(configPath))
+	hash := sha256.Sum256([]byte(identity))
 	return discover(runtimeRoot, fmt.Sprintf("-%x", hash[:8]))
 }
 

@@ -130,11 +130,14 @@ func (s *session) setupAdapter(ctx context.Context, op *operation, raw json.RawM
 	if route == nil || route[2] == "" {
 		return nil, errors.New("adapter did not return a durable session ID")
 	}
-	if err := s.server.register(s, id); err != nil {
-		return nil, err
-	}
 	record := sessions.Record{ID: id, Account: route[0], Model: route[1], Opened: time.Now()}
-	_, archiveErr := sessions.Create(s.options.Cwd, record)
+	if len(body) > maxMetadata {
+		return nil, failure(Limit, "adapter session metadata exceeds daemon limit")
+	}
+	if _, err := sessions.Create(s.options.Cwd, record); err != nil {
+		return nil, fmt.Errorf("save session %s: %w", id, err)
+	}
+	s.server.register(s, id)
 	s.mu.Lock()
 	s.info.SessionID = id
 	s.info.Account = route[0]
@@ -147,17 +150,9 @@ func (s *session) setupAdapter(ctx context.Context, op *operation, raw json.RawM
 		s.commitSetup(op.replay)
 	}
 	op.replay = nil
-	if len(body) <= maxMetadata {
-		s.setup = body
-	}
+	s.setup = body
 	s.mu.Unlock()
 	go s.watchAdapter(s.backend.SessionDone(id))
-	if archiveErr != nil {
-		return nil, fmt.Errorf("save session %s: %w", id, archiveErr)
-	}
-	if len(body) > maxMetadata {
-		return nil, failure(Limit, "adapter session metadata exceeds daemon limit")
-	}
 	return returned, nil
 }
 

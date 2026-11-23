@@ -22,11 +22,12 @@ const lockFD = 3
 
 // Command describes a dedicated daemon subprocess. Path must be absolute.
 // When the command starts, it must call ServeStarted. Standard streams go to
-// the null device and the working directory is /. Configure logging inside
+// the null device and the working directory defaults to /. Configure logging inside
 // the daemon if needed.
 type Command struct {
 	Path string
 	Args []string
+	Dir  string
 }
 
 // Dial connects to an existing daemon. The caller owns the returned connection.
@@ -112,7 +113,10 @@ func (endpoint Endpoint) start(ctx context.Context, command Command) (<-chan err
 		return nil, err
 	}
 	cmd := exec.Command(command.Path, command.Args...)
-	cmd.Dir = "/"
+	cmd.Dir = command.Dir
+	if cmd.Dir == "" {
+		cmd.Dir = "/"
+	}
 	for _, entry := range os.Environ() {
 		if !strings.HasPrefix(entry, directoryEnv+"=") {
 			cmd.Env = append(cmd.Env, entry)

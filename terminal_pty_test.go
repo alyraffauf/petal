@@ -49,7 +49,10 @@ func ptyEnvironment(t *testing.T, workspace, configPath string) []string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
-	endpoint, err := localdaemon.DiscoverProfile(root, configPath)
+	env := append(os.Environ(), "TERM=xterm-256color", "HOME="+workspace, "XDG_STATE_HOME="+workspace,
+		"XDG_CONFIG_HOME="+workspace, "XDG_CACHE_HOME="+workspace, "XDG_RUNTIME_DIR="+root, "TMPDIR="+root,
+		"PATH="+workspace, "PETAL_PTY_ROLE=client", "PETAL_PTY_CONFIG="+configPath)
+	endpoint, err := fixtureEndpoint(env, configPath, workspace)
 	if err != nil {
 		var stat unix.Stat_t
 		if runtime.GOOS == "linux" && os.Getenv("NIX_BUILD_TOP") != "" &&
@@ -59,6 +62,12 @@ func ptyEnvironment(t *testing.T, workspace, configPath string) []string {
 		t.Fatal(err)
 	}
 	pidPath := filepath.Join(root, "daemon.pid")
+	cleanupPTYDaemon(t, endpoint, pidPath)
+	return append(env, "PETAL_PTY_PID="+pidPath)
+}
+
+func cleanupPTYDaemon(t *testing.T, endpoint localdaemon.Endpoint, pidPath string) {
+	t.Helper()
 	t.Cleanup(func() {
 		raw, err := os.ReadFile(pidPath)
 		if os.IsNotExist(err) {
@@ -88,9 +97,22 @@ func ptyEnvironment(t *testing.T, workspace, configPath string) []string {
 			}
 		}
 	})
-	return append(os.Environ(), "TERM=xterm-256color", "HOME="+workspace, "XDG_STATE_HOME="+workspace,
-		"XDG_CONFIG_HOME="+workspace, "XDG_CACHE_HOME="+workspace, "XDG_RUNTIME_DIR="+root, "TMPDIR="+root,
-		"PATH="+workspace, "PETAL_PTY_ROLE=client", "PETAL_PTY_CONFIG="+configPath, "PETAL_PTY_PID="+pidPath)
+}
+
+func fixtureEndpoint(env []string, configPath, cwd string) (localdaemon.Endpoint, error) {
+	values := make(map[string]string)
+	for _, entry := range env {
+		key, value, _ := strings.Cut(entry, "=")
+		values[key] = value
+	}
+	if configPath == "" {
+		configPath = filepath.Join(values["XDG_CONFIG_HOME"], "petal", "config.toml")
+	}
+	profile := newDaemonProfile(configPath, filepath.Join(values["XDG_STATE_HOME"], "petal"), func(key string) string { return values[key] })
+	if profile.relativeDiscovery {
+		profile.directory = cwd
+	}
+	return profile.endpoint(values["XDG_RUNTIME_DIR"])
 }
 
 // Start the CLI entry point and its ACP subprocess from the test executable.

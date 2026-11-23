@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -64,14 +61,7 @@ func main() {
 		if err != nil {
 			return err
 		}
-		path := settings.GetString("config")
-		if path != "" {
-			path, err = filepath.Abs(path)
-			if err != nil {
-				return err
-			}
-		}
-		dial, err := daemonDialer(path)
+		dial, err := daemonDialer(settings.GetString("config"), c)
 		if err != nil {
 			return err
 		}
@@ -112,29 +102,4 @@ func main() {
 	if err := root.Execute(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func daemonDialer(configPath string) (tui.DaemonDialer, error) {
-	endpoint, err := localdaemon.DiscoverProfile("", configPath)
-	if err != nil {
-		return nil, err
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	args := []string{"daemon"}
-	if configPath != "" {
-		args = append(args, "--config", configPath)
-	}
-	command := localdaemon.Command{Path: executable, Args: args}
-	return func(ctx context.Context) (*livesession.Client, error) {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		conn, err := endpoint.DialOrStart(ctx, command)
-		if err != nil {
-			return nil, fmt.Errorf("connect to Petal daemon: %w", err)
-		}
-		return livesession.Connect(ctx, conn)
-	}, nil
 }

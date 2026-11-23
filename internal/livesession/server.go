@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"petal/internal/localdaemon"
 	"petal/internal/proxy"
 	"petal/internal/routing"
+	"petal/internal/sessions"
 )
 
 const (
@@ -30,16 +33,17 @@ const (
 type Resolver func(OpenOptions) (routing.Config, error)
 
 type Server struct {
-	instance string
-	ctx      context.Context
-	stop     context.CancelFunc
-	workers  sync.WaitGroup
-	resolve  Resolver
-	clients  chan struct{}
-	mu       sync.Mutex
-	live     map[string]*session
-	byID     map[workspaceRoute]*session
-	closed   map[string]time.Time
+	instance         string
+	ctx              context.Context
+	stop             context.CancelFunc
+	workers          sync.WaitGroup
+	resolve          Resolver
+	clients          chan struct{}
+	mu               sync.Mutex
+	live             map[string]*session
+	byID             map[workspaceRoute]*session
+	closed           map[string]time.Time
+	reservationGrace time.Duration
 }
 
 func NewServer(ctx context.Context, resolve Resolver) *Server {
@@ -47,7 +51,7 @@ func NewServer(ctx context.Context, resolve Resolver) *Server {
 	return &Server{
 		instance: rand.Text(), ctx: ctx, stop: stop, resolve: resolve, clients: make(chan struct{}, maxConnections),
 		live: make(map[string]*session), byID: make(map[workspaceRoute]*session),
-		closed: make(map[string]time.Time),
+		closed: make(map[string]time.Time), reservationGrace: OpenReservationGrace,
 	}
 }
 
@@ -119,38 +123,64 @@ func (s *Server) open(opts OpenOptions) (Info, *Error) {
 		s.mu.Unlock()
 		return Info{}, failure(Limit, "daemon live-session or open-key limit reached")
 	}
-	resumeKey := workspaceRoute{opts.Cwd, routeKey(opts.ResumeID)}
-	if opts.ResumeID != "" && s.byID[resumeKey] != nil {
-		s.mu.Unlock()
-		return Info{}, failure(Conflict, "durable session already has a live owner")
-	}
-	// Reserve the handle and durable route before loading config or starting
-	// services. Concurrent retries can attach and wait for the same result.
+	// Reserve both identities before publishing a resumable handle.
 	live := newSession(s, opts)
-	s.live[opts.Handle] = live
 	if opts.ResumeID != "" {
-		s.byID[resumeKey] = live
+		if err := live.leaseRoute(opts.ResumeID); err != nil {
+			live.stop()
+			s.mu.Unlock()
+			return Info{}, err
+		}
+		s.byID[workspaceRoute{opts.Cwd, routeKey(opts.ResumeID)}] = live
 	}
-	s.workers.Go(func() { live.retire() })
+	s.live[opts.Handle] = live
+	s.workers.Go(live.retire)
 	s.mu.Unlock()
-	go live.prepare()
 	return live.initialInfo(), nil
 }
 
-func (s *Server) register(live *session, id string) *Error {
-	key := workspaceRoute{live.options.Cwd, routeKey(id)}
+// leaseRoute is called during reservation or by the single setup/fork
+// operation. Retirement waits for that operation before releasing leases.
+func (live *session) leaseRoute(id string) *Error {
+	parts := proxy.DecodeSessionRoute(id)
+	if parts == nil || parts[2] == "" || (live.options.Model != "" && live.options.Model != parts[1]) {
+		return failure(Invalid, "durable session ID does not belong to the selected model")
+	}
+	route := routeKey(id)
+	if live.leases[route] != nil {
+		return nil
+	}
+	// A fork can also install a recorder, so bound the number of routes
+	// retained by one live session until its backend flushes.
+	if len(live.leases) >= 64 {
+		return failure(Limit, "live session durable route limit reached")
+	}
+	lease, err := sessions.LeaseRoute(live.options.Cwd, route)
+	if errors.Is(err, sessions.ErrRouteLeased) {
+		return failure(Conflict, err.Error())
+	}
+	if err != nil {
+		return failure(Internal, fmt.Sprintf("reserve durable session: %v", err))
+	}
+	if live.leases == nil {
+		live.leases = make(map[string]*os.File)
+	}
+	live.leases[route] = lease
+	return nil
+}
+
+func (s *Server) register(live *session, id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if owner := s.byID[key]; owner != nil && owner != live {
-		return failure(Conflict, "adapter returned an ID already owned by another live session")
-	}
-	s.byID[key] = live
-	return nil
+	s.byID[workspaceRoute{live.options.Cwd, routeKey(id)}] = live
 }
 
 func (s *Server) remove(live *session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, lease := range live.leases {
+		_ = lease.Close()
+	}
 	delete(s.live, live.options.Handle)
 	for key, owner := range s.byID {
 		if owner == live {

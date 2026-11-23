@@ -197,17 +197,23 @@ var reopenAfterExit = errors.New("reopen disconnected live session")
 func (d *daemonSession) attach(ctx context.Context, cwd string, c routing.Config, id string) (livesession.Snapshot, error) {
 	if d.handle == "" {
 		options := livesession.OpenOptions{Handle: livesession.NewHandle(), Cwd: cwd, Model: c.Model, Account: c.PinnedAccount, ResumeID: id}
-		deadline := time.Now().Add(2 * time.Second)
+		leaseDeadline := time.Now().Add(2 * time.Second)
+		openCtx, cancel := context.WithTimeout(ctx, livesession.OpenReservationGrace+time.Second)
+		defer cancel()
 		for {
-			info, err := d.client.Open(ctx, options)
+			info, err := d.client.Open(openCtx, options)
 			if err == nil {
 				d.handle = info.Handle
 				break
 			}
-			if !daemonError(err, livesession.Conflict) || time.Now().After(deadline) {
+			retryLease := daemonError(err, livesession.Conflict) && time.Now().Before(leaseDeadline)
+			if !retryLease && !daemonError(err, livesession.Limit) {
 				return livesession.Snapshot{}, err
 			}
-			if err := waitForDaemonLease(ctx); err != nil {
+			if waitErr := waitForDaemonLease(openCtx); waitErr != nil {
+				if ctx.Err() != nil {
+					return livesession.Snapshot{}, ctx.Err()
+				}
 				return livesession.Snapshot{}, err
 			}
 		}

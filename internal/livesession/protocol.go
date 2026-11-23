@@ -66,8 +66,12 @@ type OpenOptions struct {
 	ResumeID string `json:"resumeID,omitempty"`
 }
 
-// NewHandle creates an open retry key. A previously unseen key must be
-// presented within ten minutes. Live handles remain valid until close.
+// OpenReservationGrace is the idle time allowed for an incomplete session
+// without a controller or an active operation.
+const OpenReservationGrace = 5 * time.Second
+
+// NewHandle creates an open retry key. Present a new key within ten minutes.
+// An incomplete reservation can expire before that retry window ends.
 func NewHandle() string {
 	var nonce [16]byte
 	rand.Read(nonce[:])

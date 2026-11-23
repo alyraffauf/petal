@@ -25,8 +25,9 @@ type Local struct {
 
 // NewLocal starts the callback connection. update runs inline with notification
 // writes, so updates preceding an ACP response are visible before Call returns.
-// update must not call back into the proxy or wait on a frontend.
-func NewLocal(ctx context.Context, config routing.Config, cwd string, callback acp.MethodHandler, update func(string, json.RawMessage)) *Local {
+// update must not call back into the proxy or wait on a frontend. reserveRoute
+// runs before a newly returned route can record transcripts or bind delegation.
+func NewLocal(ctx context.Context, config routing.Config, cwd string, callback acp.MethodHandler, update func(string, json.RawMessage), reserveRoute func(string) error) *Local {
 	editor, host := net.Pipe()
 	context.AfterFunc(ctx, func() {
 		editor.Close()
@@ -34,18 +35,26 @@ func NewLocal(ctx context.Context, config routing.Config, cwd string, callback a
 	})
 	client := acp.NewConnection(callback, host, host)
 	client.SetLogger(slog.New(slog.DiscardHandler))
-	p := connectProxy(ctx, localOutput{editor, update}, editor, config, true, nil, &localRuntime{cwd: cwd})
+	p := connectProxy(ctx, localOutput{editor, update}, editor, config, true, nil, &localRuntime{cwd: cwd, reserveRoute: reserveRoute})
 	return &Local{proxy: p}
 }
 
 type localRuntime struct {
-	cwd      string
-	mu       sync.Mutex
-	stopping bool
-	active   int
-	children sync.WaitGroup
-	next     atomic.Uint64
-	dispatch sync.Map
+	reserveRoute func(string) error
+	cwd          string
+	mu           sync.Mutex
+	stopping     bool
+	active       int
+	children     sync.WaitGroup
+	next         atomic.Uint64
+	dispatch     sync.Map
+}
+
+func (p *proxy) reserveLocalRoute(id string) error {
+	if p.local == nil || p.local.reserveRoute == nil {
+		return nil
+	}
+	return p.local.reserveRoute(id)
 }
 
 func (r *localRuntime) reserve() error {

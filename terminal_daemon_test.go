@@ -19,7 +19,6 @@ import (
 	"github.com/creack/pty"
 
 	"petal/internal/livesession"
-	"petal/internal/localdaemon"
 	"petal/internal/sessions"
 )
 
@@ -148,13 +147,7 @@ command=[%q, "-test.run=^TestPTYChild$"]
 			first.await(t, ctx, "Approve fixture")
 			first.detach(t)
 
-			root := ""
-			for _, value := range env {
-				if candidate, ok := strings.CutPrefix(value, "XDG_RUNTIME_DIR="); ok {
-					root = candidate
-				}
-			}
-			endpoint, err := localdaemon.DiscoverProfile(root, config)
+			endpoint, err := fixtureEndpoint(env, config, workspace)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -391,6 +384,9 @@ func runLivePTYAdapter(t *testing.T, child bool) {
 				reply(frame.ID, map[string]string{"messageId": "user-input"})
 			}
 			switch {
+			case input == "flush on shutdown":
+				message("agent", "flush", "pending archive tail")
+				continue
 			case child:
 				waitForChildRelease(t, cwd)
 				message("agent", "child", "child-receipt")

@@ -228,6 +228,11 @@ func hasCode(err error, want Code) bool {
 
 func startSocket(t *testing.T, version int, delegation bool) (context.Context, func() *Client) {
 	t.Helper()
+	return startSocketWithGrace(t, version, delegation, OpenReservationGrace)
+}
+
+func startSocketWithGrace(t *testing.T, version int, delegation bool, grace time.Duration) (context.Context, func() *Client) {
+	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root, err := os.MkdirTemp("/tmp", "petal-live-")
 	if err != nil {
@@ -262,6 +267,7 @@ func startSocket(t *testing.T, version int, delegation bool) (context.Context, f
 			Accounts: map[string]routing.Account{"fake": fixture("fixture"), "child": fixture("child")},
 		}, nil
 	})
+	server.reservationGrace = grace
 	done := make(chan error, 1)
 	go func() { done <- endpoint.Serve(ctx, server.Handler()) }()
 	t.Cleanup(func() {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"sync"
 	"time"
 
@@ -50,6 +51,11 @@ type session struct {
 	backend *proxy.Local
 	config  routing.Config
 	initErr error
+	leases  map[string]*os.File
+
+	// Guarded by mu.
+	preparing            bool
+	reservationIdleSince time.Time
 
 	mu           sync.Mutex
 	info         Info
@@ -86,8 +92,8 @@ func newSession(server *Server, options OpenOptions) *session {
 	ctx, stop := context.WithCancel(server.ctx)
 	return &session{
 		server: server, options: options, ctx: ctx, stop: stop, ready: make(chan struct{}), callbacks: make(chan struct{}, 32),
-		info:    Info{Handle: options.Handle, Cwd: options.Cwd, Model: options.Model, Account: options.Account, PinnedAccount: options.Account, ResumeID: options.ResumeID},
-		changed: make(chan struct{}), nextOp: 1, pending: make(map[uint64]*pendingQuestion), answered: make(map[uint64][32]byte),
+		info:                 Info{Handle: options.Handle, Cwd: options.Cwd, Model: options.Model, Account: options.Account, PinnedAccount: options.Account, ResumeID: options.ResumeID},
+		reservationIdleSince: time.Now(), changed: make(chan struct{}), nextOp: 1, pending: make(map[uint64]*pendingQuestion), answered: make(map[uint64][32]byte),
 	}
 }
 
@@ -127,7 +133,12 @@ func (s *session) prepare() {
 		return
 	}
 	s.host = host
-	s.backend = proxy.NewLocal(s.ctx, config, s.options.Cwd, s.callback, s.update)
+	s.backend = proxy.NewLocal(s.ctx, config, s.options.Cwd, s.callback, s.update, func(id string) error {
+		if err := s.leaseRoute(id); err != nil {
+			return err
+		}
+		return nil
+	})
 	s.mu.Lock()
 	s.info.Model = config.Model
 	s.info.Account = config.PinnedAccount
@@ -136,6 +147,10 @@ func (s *session) prepare() {
 
 func (s *session) publish(event Event) {
 	s.events.append(event)
+	s.notify()
+}
+
+func (s *session) notify() {
 	close(s.changed)
 	s.changed = make(chan struct{})
 }
@@ -158,6 +173,7 @@ func (s *session) attach(p *peer, opts AttachOptions) (Snapshot, *Error) {
 			return Snapshot{}, failure(Conflict, "another connection controls the session")
 		}
 		s.controller = p
+		s.notify()
 		s.info.LastAttached = time.Now()
 	}
 	snapshot := s.state(p)
@@ -208,6 +224,7 @@ func (s *session) claim(p *peer) (Snapshot, *Error) {
 		return Snapshot{}, failure(Conflict, "another connection controls the session")
 	}
 	s.controller = p
+	s.notify()
 	s.info.LastAttached = time.Now()
 	return s.state(p), nil
 }
@@ -217,6 +234,8 @@ func (s *session) detach(p *peer) {
 	defer s.mu.Unlock()
 	if s.controller == p {
 		s.controller = nil
+		s.reservationIdleSince = time.Now()
+		s.notify()
 	}
 }
 
@@ -255,8 +274,6 @@ func poll[T any](ctx context.Context, s *session, read func() (T, bool, *Error))
 		case <-changed:
 		case <-ctx.Done():
 			return value, failure(Closed, "connection is closed")
-		case <-s.ctx.Done():
-			return value, failure(Closed, "session is closed")
 		case <-timer.C:
 			return value, nil
 		}
@@ -286,16 +303,57 @@ func (s *session) closeBy(p *peer) *Error {
 	return nil
 }
 
+// Await the daemon stop or the end of an abandoned, incomplete reservation.
+func (s *session) awaitRetirement() {
+	for {
+		s.mu.Lock()
+		if s.info.SessionID != "" || s.closed {
+			s.mu.Unlock()
+			<-s.ctx.Done()
+			return
+		}
+		changed := s.changed
+		var timer *time.Timer
+		var expired <-chan time.Time
+		if s.controller == nil && s.active == nil {
+			remaining := time.Until(s.reservationIdleSince.Add(s.server.reservationGrace))
+			if remaining <= 0 {
+				s.closed = true
+				s.publish(Event{Kind: SessionClosed})
+				s.stop()
+				s.mu.Unlock()
+				return
+			}
+			timer = time.NewTimer(remaining)
+			expired = timer.C
+		}
+		s.mu.Unlock()
+		select {
+		case <-s.ctx.Done():
+		case <-changed:
+		case <-expired:
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		if s.ctx.Err() != nil {
+			return
+		}
+	}
+}
+
 func (s *session) retire() {
-	<-s.ctx.Done()
+	s.awaitRetirement()
 	s.mu.Lock()
 	if !s.closed {
 		s.closed = true
 		s.publish(Event{Kind: SessionClosed})
 	}
-	active, steering, listing, closing := s.active, s.steering, s.listing, s.closingDone
+	active, steering, listing, closing, preparing := s.active, s.steering, s.listing, s.closingDone, s.preparing
 	s.mu.Unlock()
-	<-s.ready
+	if preparing {
+		<-s.ready
+	}
 	if closing != nil {
 		<-closing
 	}

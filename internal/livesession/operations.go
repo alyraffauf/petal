@@ -92,6 +92,10 @@ func (s *session) submit(p *peer, call Call) (uint64, *Error) {
 		started.Params = promptEventParams(params)
 	}
 	s.publish(started)
+	if !s.preparing {
+		s.preparing = true
+		go s.prepare()
+	}
 	go s.run(op, params)
 	return op.number, nil
 }
@@ -259,6 +263,7 @@ func (s *session) run(op *operation, params json.RawMessage) {
 		s.listing = nil
 	default:
 		s.active = nil
+		s.reservationIdleSince = time.Now()
 	}
 	if op.method == "session/prompt" && s.info.ACPVersion == 1 {
 		s.running = false
@@ -269,7 +274,7 @@ func (s *session) run(op *operation, params json.RawMessage) {
 			finished.Params = promptEventParams(params)
 		}
 		s.publish(finished)
-		if op.method == "session/delete" && outcome.Error == nil && outcome.ACPError == nil {
+		if (op.method == "initialize" && outcome.Err() != nil) || (op.method == "session/delete" && outcome.Err() == nil) {
 			s.closed = true
 			s.publish(Event{Kind: SessionClosed})
 			s.stop()
