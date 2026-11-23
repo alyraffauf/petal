@@ -920,6 +920,9 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t.SessionUpdate == "state_update" {
 			conversation.turn = t.turn
 			completed := conversation.foreground.report(t.State)
+			if !conversation.foreground.awaitingStart && !conversation.foreground.submitting {
+				conversation.promptWrite = nil
+			}
 			if t.State == "idle" && !conversation.foreground.awaitingStart {
 				m.cancelling = false
 			}
@@ -934,8 +937,10 @@ func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case promptV2Result:
 		foreground := &m.conversationV2().foreground
-		m.v2.promptWrite = nil
 		foreground.settlePrompt(t.err)
+		if !foreground.awaitingStart {
+			m.v2.promptWrite = nil
+		}
 		if t.err != nil {
 			if foreground.state == "" || foreground.state == "idle" {
 				m.cancelling = false

@@ -130,3 +130,32 @@ func connectTestDaemon(t *testing.T, ctx context.Context, serve func(daemonTestP
 	}
 	return client
 }
+
+func TestCancelAcknowledgedPromptBeforeRunning(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	client := connectTestDaemon(t, ctx, func(p daemonTestPeer) {
+		var req struct {
+			ID     uint64
+			Method string
+			Params uint64
+		}
+		if err := p.in.Decode(&req); err != nil || req.Method != "cancel" || req.Params != 7 {
+			t.Errorf("cancel request = %+v, %v", req, err)
+			return
+		}
+		p.reply(req.ID, true)
+	})
+	h := &harness{daemon: &daemonSession{client: client}}
+	h.v2.Store(true)
+	m := &terminal{root: bloom.New(), h: h, ctx: ctx, screen: screen{connection: connected}}
+	c := m.conversationV2()
+	c.foreground.beginPrompt()
+	c.promptWrite = &promptWriteV2{operation: 7, ready: make(chan struct{})}
+	close(c.promptWrite.ready)
+	m.Update(promptV2Result{})
+	result := m.cancelForegroundV2()().(cancelV2Result)
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+}
