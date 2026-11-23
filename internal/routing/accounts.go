@@ -27,9 +27,12 @@ type Account struct {
 	Capacity          *float64
 	ModelLabels       map[string]string `toml:"-" json:"-"`
 	SelectModel       map[string]bool   `toml:"-" json:"-"`
-	Env               map[string]string
-	Models            map[string][]string
-	Usage             []string
+	// DefaultRoute is the route the provider's own default resolved to, set by
+	// ResolveDefaults. Empty means unresolved.
+	DefaultRoute string `toml:"-" json:"-"`
+	Env          map[string]string
+	Models       map[string][]string
+	Usage        []string
 }
 
 func (a *Account) configureHome(configDir string) error {

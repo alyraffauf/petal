@@ -228,11 +228,50 @@ func (c Config) ModelNames() []string {
 	return result
 }
 
+// PickerModels lists the models to offer for selection. A "/default" route
+// whose real model is known is left out, because that model is listed itself.
+func (c Config) PickerModels() []string {
+	return slices.DeleteFunc(c.ModelNames(), func(model string) bool {
+		return c.resolvedDefault(model) != ""
+	})
+}
+
+// resolvedDefault returns the real route behind a "/default" route when every
+// account offering it resolved one.
+func (c Config) resolvedDefault(model string) string {
+	if !strings.HasSuffix(model, "/default") {
+		return ""
+	}
+	route := ""
+	for name, a := range c.Accounts {
+		if c.PinnedAccount != "" && name != c.PinnedAccount || len(a.Models[model]) == 0 {
+			continue
+		}
+		if a.DefaultRoute == "" || route != "" && route != a.DefaultRoute {
+			return ""
+		}
+		route = a.DefaultRoute
+	}
+	return route
+}
+
+// PickerModel returns the listed model that stands for a route, which is the
+// real model behind a resolved "/default" route.
+func (c Config) PickerModel(model string) string {
+	if route := c.resolvedDefault(model); route != "" {
+		return route
+	}
+	return model
+}
+
 // DefaultModel prefers the provider's configured model when serving an editor.
 func (c Config) DefaultModel() string {
 	models := c.ModelNames()
 	for _, model := range models {
 		if strings.HasSuffix(model, "/default") {
+			if route := c.resolvedDefault(model); route != "" {
+				return route
+			}
 			return model
 		}
 	}

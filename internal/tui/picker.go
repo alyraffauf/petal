@@ -72,7 +72,7 @@ func newPicker(cwd string, c routing.Config) *picker {
 	search.SetStyles(styles)
 	search.KeyMap.Paste.SetEnabled(false) // Terminal pastes arrive as tea.PasteMsg.
 	search.Focus()
-	m := &picker{center: controlCenter{cwd: cwd}, cfg: c, background: canvasBackground(c.TransparentBackground), models: c.ModelNames(), search: search}
+	m := &picker{center: controlCenter{cwd: cwd}, cfg: c, background: canvasBackground(c.TransparentBackground), models: c.PickerModels(), search: search}
 	m.filter()
 	return m
 }

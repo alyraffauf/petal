@@ -138,7 +138,7 @@ func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDiale
 	if err != nil {
 		return err
 	}
-	c.ResolveDefaultLabels(parent, cwd)
+	c.ResolveDefaults(parent, cwd)
 	client, err := dial(parent)
 	if err != nil {
 		return err
@@ -163,7 +163,7 @@ func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDiale
 			return err
 		}
 		if next.cwd != start.cwd {
-			next.cfg.ResolveDefaultLabels(parent, next.cwd)
+			next.cfg.ResolveDefaults(parent, next.cwd)
 		}
 		start = *next
 	}

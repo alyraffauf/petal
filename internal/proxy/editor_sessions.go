@@ -40,7 +40,7 @@ type editorSession struct {
 
 func (p *proxy) modelOption() Object {
 	var choices []map[string]string
-	for _, id := range p.ModelNames() {
+	for _, id := range p.PickerModels() {
 		choices = append(choices, map[string]string{"value": id, "name": p.ModelLabel(id)})
 	}
 	options, _ := json.Marshal(choices)
@@ -48,7 +48,7 @@ func (p *proxy) modelOption() Object {
 	if p.version == 2 {
 		key = "configId"
 	}
-	return Object{key: encoded("model"), "category": encoded("model"), "name": encoded("Model"), "type": encoded("select"), "currentValue": encoded(p.Model), "options": options}
+	return Object{key: encoded("model"), "category": encoded("model"), "name": encoded("Model"), "type": encoded("select"), "currentValue": encoded(p.PickerModel(p.Model)), "options": options}
 }
 
 func projectKey(cwd string) string {
