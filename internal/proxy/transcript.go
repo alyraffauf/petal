@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,17 +21,21 @@ type transcriptRecorder struct {
 	host   *acphost.Host
 }
 type recordedSession struct {
-	toolTerminals                   map[string][]terminalReference
-	children                        map[string]*nativeChild
-	mail                            map[string]*acpv2.Transcript
-	dirtyMail                       []string
-	mailPending                     map[string]bool
-	nativeReplay                    []sessions.Message
-	mu                              sync.Mutex
-	cwd, id                         string
-	record                          sessions.Record
-	version                         uint16
-	projection                      acpv2.Transcript
+	toolTerminals map[string][]terminalReference
+	children      map[string]*nativeChild
+	mail          map[string]*acpv2.Transcript
+	dirtyMail     []string
+	mailPending   map[string]bool
+	nativeReplay  []sessions.Message
+	mu            sync.Mutex
+	cwd, id       string
+	record        sessions.Record
+	version       uint16
+	projection    acpv2.Transcript
+	// compactions keeps each compaction's last status and archived summary. A
+	// summary chunk that arrives after a checkpoint cleared the projection then
+	// extends the whole summary and still counts as finished.
+	compactions                     map[string]compactionState
 	last                            string
 	seq                             int
 	replay, full, complete, resumed bool
@@ -122,18 +127,57 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 			return
 		}
 	}
+	compaction := stringField(u, "compactionId")
+	if compaction != "" && !s.replay {
+		if s.compactions == nil {
+			s.compactions = map[string]compactionState{}
+		}
+		state := s.compactions[compaction]
+		if status := u["status"]; status != nil {
+			state.status = status
+			s.compactions[compaction] = state
+		} else if state.status != nil {
+			// Restore only after a checkpoint removed the entry. A live entry
+			// still holds the chunks streamed so far.
+			if !s.projection.HasCompaction(compaction) {
+				summary, _ := json.Marshal([]map[string]string{{"type": "text", "text": state.summary}})
+				_, _ = s.projection.ApplyFields(Object{"sessionUpdate": encoded("compaction_update"), "compactionId": encoded(compaction), "status": state.status, "summary": summary}, version)
+			}
+		}
+	}
 	changed, _ := s.projection.ApplyFields(u, version)
 	// Manual compaction can complete between turns, with no subsequent
-	// prompt response or idle update to trigger a checkpoint.
+	// prompt response or idle update to trigger a checkpoint. Save everything
+	// observed so far, so the archive keeps the messages before the summary
+	// ahead of it.
 	if changed && !s.replay && (kind == "compaction_update" || kind == "compaction_summary_chunk") {
-		id := stringField(u, "compactionId")
-		if entry, ok := s.projection.FinishedCompaction(id); ok {
-			message := sessions.Message{Role: entry.Role, Body: entry.Text, SourceID: id}
-			if err := s.store([]sessions.Message{message}, false); err != nil {
+		if entry, ok := s.projection.FinishedCompaction(compaction); ok {
+			state := s.compactions[compaction]
+			_, state.summary, _ = strings.Cut(entry.Text, "\n\n")
+			s.compactions[compaction] = state
+			if err := s.save(false); err != nil {
 				slog.Error("save ACP compaction", "error", err)
 			}
 		}
 	}
+}
+
+type compactionState struct {
+	status  json.RawMessage
+	summary string
+}
+
+// unsaved reports whether a session holds observed history that is not yet in
+// the archive, such as an ACP v2 turn that has not reported idle.
+func (r *transcriptRecorder) unsaved(key string) bool {
+	value, ok := r.active.Load(key)
+	if !ok {
+		return false
+	}
+	s := value.(*recordedSession)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.replay && (len(s.projection.Entries()) > 0 || len(s.nativeReplay) > 0)
 }
 
 // flush checkpoints the last observed updates during daemon shutdown,
@@ -192,6 +236,17 @@ func (p *proxy) beforeTranscript(method, name, native, id string, params Object)
 	switch method {
 	case "session/delete", "session/close":
 		return func(err error) error {
+			if err == nil && method == "session/close" {
+				// An ACP v2 turn is held in memory until idle. Keep it when the
+				// session closes first, as a model switch does.
+				s.mu.Lock()
+				if !s.replay {
+					if saveErr := s.save(false); saveErr != nil {
+						slog.Error("save ACP transcript on close", "error", saveErr)
+					}
+				}
+				s.mu.Unlock()
+			}
 			if err == nil {
 				r.active.CompareAndDelete(key, s)
 				if method == "session/delete" {

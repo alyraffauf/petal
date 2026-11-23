@@ -72,6 +72,8 @@ type proxy struct {
 	delegationMu        sync.Mutex
 	delegationEndpoints map[string]*delegationEndpoint
 	delegationCwds      map[string]string
+	// editorPicker marks a proxy whose editor sessions show Petal's model list.
+	editorPicker bool
 }
 
 func unknownSession(id string) *acp.RequestError {
@@ -642,8 +644,8 @@ func (p *proxy) startBackendWithReceiver(ctx context.Context, name string, init 
 						b.skills.Delete(session)
 					}
 				case "config_option_update":
-					if strings.HasPrefix(stringField(args, "sessionId"), "petal-") && item["configOptions"] != nil {
-						item["configOptions"] = p.editorOptions(item["configOptions"], false)["configOptions"]
+					if p.editorPicker && item["configOptions"] != nil {
+						item["configOptions"] = p.editorOptions(item["configOptions"])["configOptions"]
 						changed = true
 					}
 				case "subagent_update", "session_message":
@@ -784,6 +786,7 @@ func connectProxy(lifetime context.Context, out io.Writer, in io.Reader, c routi
 		p.Model = c.DefaultModel()
 		if len(c.ModelNames()) > 1 {
 			p.editorSessions = &editorSessions{routes: make(map[string]*proxy)}
+			p.editorPicker = true
 			// The catalog can route successive sessions to different adapters.
 			// Stock Claude and Codex share v1; a model-bound entry can negotiate v2.
 			var claude, codex bool

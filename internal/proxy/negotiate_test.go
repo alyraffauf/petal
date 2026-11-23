@@ -93,7 +93,12 @@ func TestAccountAdapter(t *testing.T) {
 			if q.Params["sessionId"] != "same" {
 				t.Fatal(q.Params)
 			}
-			r = map[string]string{"account": name}
+			result := map[string]any{"account": name}
+			if q.Method == "session/resume" || q.Method == "session/load" {
+				// Like Claude Code, offer the adapter's own model list.
+				result["configOptions"] = []map[string]any{{"id": "model", "category": "model", "type": "select", "currentValue": "native", "options": []map[string]string{{"value": "native", "name": "Native"}}}}
+			}
+			r = result
 		}
 		if os.Getenv("PETAL_NEGOTIATE_ECHO_MCP") != "" {
 			switch q.Method {
