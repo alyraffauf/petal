@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -219,5 +221,17 @@ func TestSessionOpenedWithModelSelectionCanSwitch(t *testing.T) {
 	var opts []struct{ ID, CurrentValue string }
 	if err := json.Unmarshal(switched["configOptions"], &opts); err != nil || len(opts) == 0 || opts[0].ID != "model" || opts[0].CurrentValue != "claude/default" {
 		t.Fatalf("switch after selecting a model at open returned %v", switched)
+	}
+}
+
+func TestForkWaitsForPendingHandoff(t *testing.T) {
+	p := &proxy{editorSessions: &editorSessions{}}
+	p.initialized = true
+	s := &editorSession{route: p, routedID: `["a","m","same"]`, handoff: `["b","n","old"]`}
+	p.editorSessions.sessions.Store("petal-x", s)
+	_, err := p.handleEditor(t.Context(), "session/fork", json.RawMessage(`{"sessionId":"petal-x","cwd":"/tmp","mcpServers":[]}`))
+	var re *acp.RequestError
+	if !errors.As(err, &re) || !strings.Contains(fmt.Sprint(re.Data), "before forking") {
+		t.Fatalf("fork returned %v; want it refused until the handoff is sent", err)
 	}
 }

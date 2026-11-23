@@ -461,6 +461,12 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		}
 
 	}
+	if method == "session/fork" && s.handoff != "" {
+		// The new model has not received the earlier conversation yet, so a
+		// fork of its session would start without it.
+		s.mu.Unlock()
+		return nil, acp.NewInvalidParams("send a prompt after switching models before forking this conversation")
+	}
 	handoff := ""
 	if method == "session/prompt" {
 		s.setup = nil
