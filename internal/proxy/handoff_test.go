@@ -144,3 +144,22 @@ func TestCompactionDuringTurnKeepsArchiveOrder(t *testing.T) {
 		t.Fatalf("handoff = %s; want the summary and the later answer only", carried)
 	}
 }
+
+func TestLateCompactionChunksKeepWholeSummary(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cwd := t.TempDir()
+	r := &transcriptRecorder{}
+	id := `["claude","opus","native"]`
+	r.open(id, id, cwd, "claude", "opus")
+	r.observe(id, 1, Object{"sessionUpdate": encoded("compaction_update"), "compactionId": encoded("c1"), "status": encoded("completed")})
+	for _, chunk := range []string{"first half ", "second half"} {
+		r.observe(id, 1, Object{"sessionUpdate": encoded("compaction_summary_chunk"), "compactionId": encoded("c1"), "content": json.RawMessage(`{"type":"text","text":` + string(encoded(chunk)) + `}`)})
+	}
+	prompt, err := handoffPrompt(cwd, id, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(prompt), "first half second half") {
+		t.Fatalf("handoff = %s; want the whole summary", prompt)
+	}
+}

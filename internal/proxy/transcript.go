@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,21 +21,21 @@ type transcriptRecorder struct {
 	host   *acphost.Host
 }
 type recordedSession struct {
-	toolTerminals                   map[string][]terminalReference
-	children                        map[string]*nativeChild
-	mail                            map[string]*acpv2.Transcript
-	dirtyMail                       []string
-	mailPending                     map[string]bool
-	nativeReplay                    []sessions.Message
-	mu                              sync.Mutex
-	cwd, id                         string
-	record                          sessions.Record
-	version                         uint16
-	projection                      acpv2.Transcript
-	// compactionStatus keeps each compaction's last status, so a summary chunk
-	// that arrives after a checkpoint cleared the projection still counts as
-	// finished.
-	compactionStatus map[string]json.RawMessage
+	toolTerminals map[string][]terminalReference
+	children      map[string]*nativeChild
+	mail          map[string]*acpv2.Transcript
+	dirtyMail     []string
+	mailPending   map[string]bool
+	nativeReplay  []sessions.Message
+	mu            sync.Mutex
+	cwd, id       string
+	record        sessions.Record
+	version       uint16
+	projection    acpv2.Transcript
+	// compactions keeps each compaction's last status and archived summary. A
+	// summary chunk that arrives after a checkpoint cleared the projection then
+	// extends the whole summary and still counts as finished.
+	compactions                     map[string]compactionState
 	last                            string
 	seq                             int
 	replay, full, complete, resumed bool
@@ -126,14 +127,20 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 			return
 		}
 	}
-	if id := stringField(u, "compactionId"); id != "" && !s.replay {
+	compaction := stringField(u, "compactionId")
+	if compaction != "" && !s.replay {
+		if s.compactions == nil {
+			s.compactions = map[string]compactionState{}
+		}
+		state := s.compactions[compaction]
 		if status := u["status"]; status != nil {
-			if s.compactionStatus == nil {
-				s.compactionStatus = map[string]json.RawMessage{}
+			state.status = status
+			s.compactions[compaction] = state
+		} else if state.status != nil {
+			if _, live := s.projection.FinishedCompaction(compaction); !live {
+				summary, _ := json.Marshal([]map[string]string{{"type": "text", "text": state.summary}})
+				_, _ = s.projection.ApplyFields(Object{"sessionUpdate": encoded("compaction_update"), "compactionId": encoded(compaction), "status": state.status, "summary": summary}, version)
 			}
-			s.compactionStatus[id] = status
-		} else if status := s.compactionStatus[id]; status != nil {
-			_, _ = s.projection.ApplyFields(Object{"sessionUpdate": encoded("compaction_update"), "compactionId": encoded(id), "status": status}, version)
 		}
 	}
 	changed, _ := s.projection.ApplyFields(u, version)
@@ -142,12 +149,20 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 	// observed so far, so the archive keeps the messages before the summary
 	// ahead of it.
 	if changed && !s.replay && (kind == "compaction_update" || kind == "compaction_summary_chunk") {
-		if _, ok := s.projection.FinishedCompaction(stringField(u, "compactionId")); ok {
+		if entry, ok := s.projection.FinishedCompaction(compaction); ok {
+			state := s.compactions[compaction]
+			_, state.summary, _ = strings.Cut(entry.Text, "\n\n")
+			s.compactions[compaction] = state
 			if err := s.save(false); err != nil {
 				slog.Error("save ACP compaction", "error", err)
 			}
 		}
 	}
+}
+
+type compactionState struct {
+	status  json.RawMessage
+	summary string
 }
 
 // unsaved reports whether a session holds observed history that is not yet in
