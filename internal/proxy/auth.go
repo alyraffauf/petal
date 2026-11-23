@@ -48,6 +48,7 @@ func (b *backend) trackSessionStartup(method string, params Object) {
 		b.promptedSessions.Store(stringField(params, "sessionId"), struct{}{})
 	case "session/load", "session/resume":
 		b.promptedSessions.Delete(stringField(params, "sessionId"))
+		b.skills.Delete(stringField(params, "sessionId"))
 	}
 }
 
