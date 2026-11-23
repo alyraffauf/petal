@@ -195,11 +195,7 @@ func (p *picker) buildNodes() []controlNode {
 		}
 		group := "project/" + thread.Project
 		if project != group {
-			title := thread.Directory
-			if title == "" {
-				title = "Earlier project " + thread.Project[:8]
-			}
-			all = append(all, controlNode{id: group, title: petalLabel(title), kind: "Project", index: i})
+			all = append(all, controlNode{id: group, title: petalLabel(thread.Directory), kind: "Project", index: i})
 			project = group
 		}
 		parent := group
@@ -382,7 +378,7 @@ func (p *picker) centerKey(k tea.KeyPressMsg) tea.Cmd {
 			p.center.folded[n.id] = !p.center.folded[n.id]
 		case "Project thread":
 			r := p.otherProjects[n.index]
-			if r.Directory == "" || !slices.Contains(p.models, r.Model) || (m != nil && (m.ask != nil || m.Busy || m.changingSetting || m.forking)) {
+			if !slices.Contains(p.models, r.Model) || (m != nil && (m.ask != nil || m.Busy || m.changingSetting || m.forking)) {
 				return nil
 			}
 			p.center.cwd, p.id, p.cfg.Model, p.resume, p.chosen = r.Directory, r.ID, r.Model, true, true
@@ -442,9 +438,6 @@ func (p *picker) centerDetails(n controlNode) []entry {
 	switch n.kind {
 	case "Project", "Project thread":
 		r := p.otherProjects[n.index]
-		if r.Directory == "" {
-			return []entry{{"system", "Open Petal in this thread’s original directory to enable resume."}}
-		}
 		details := []entry{{"system", petalLabel(r.Directory)}}
 		if n.kind == "Project thread" {
 			if !slices.Contains(p.models, r.Model) {

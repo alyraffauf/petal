@@ -46,7 +46,7 @@ func (m *terminal) browseSessions() tea.Cmd {
 				return remoteSessions{picker, records, other, err}
 			}
 			for _, r := range result.Sessions {
-				if !filepath.IsAbs(r.Cwd) {
+				if !filepath.IsAbs(r.Cwd) || (r.Cwd != cwd && !sessions.Resumable(r.Cwd)) {
 					continue
 				}
 				route := proxy.DecodeSessionRoute(string(r.SessionId))
