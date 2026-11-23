@@ -60,18 +60,20 @@ A rate-limit error on a prompt puts the whole account on a five-minute cooldown 
 
 Petal has built-in discovery and quota checks for Claude Code and Codex. To use another ACP v1 server, configure the command that starts the server over stdio. Omit `provider` and `home`. Use the server's own sign-in and configuration.
 
-For example, install OpenCode, run `opencode auth login`, and add this table to your Petal config. [OpenCode ACP setup](https://opencode.ai/docs/cli/acp/)
+Petal discovers OpenCode on your path. Sign in with `opencode auth login`, then choose the OpenCode model by its display name in **new session** or run `petal acp opencode/default`. Petal launches `opencode acp`. The picker reads the selected model name from a temporary ACP connection. If the lookup fails, it shows **OpenCode default**. Petal has no built-in quota probe for OpenCode.
+
+For another harness, set the command to its ACP stdio entry point. For example, if your harness starts with `my-agent --acp`, configure it as follows.
 
 ```toml
 [[accounts]]
-name = "opencode"
+name = "my-agent"
 
 [[accounts.models]]
-id = "opencode/default"
-command = ["opencode", "acp"]
+id = "my-agent/default"
+command = ["my-agent", "--acp"]
 ```
 
-Open **new session** in Petal and choose `opencode/default`, or start `petal acp opencode/default` from your editor. The ID names the route in Petal. OpenCode picks its model from its own settings. For another server, replace the ID and the command array with your route name, executable, and arguments.
+Choose `my-agent/default` in the same picker or pass it to `petal acp`.
 
 To route between two custom accounts, give both accounts the same route name. Add a `[[accounts.env]]` entry with `name` and `value` for each profile variable.
 

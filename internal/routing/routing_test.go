@@ -61,8 +61,8 @@ func TestProfileDiscoveryPreservesExplicitCommands(t *testing.T) {
 	}
 	c := Config{Accounts: map[string]Account{"work": {Provider: "codex", Env: map[string]string{"CODEX_HOME": dir}, Models: map[string][]string{"gpt-test": {"custom"}}}}}
 	c.discover()
-	if _, exists := c.Accounts["opencode"]; exists {
-		t.Fatal("discovered an unsupported provider")
+	if got := c.Accounts["opencode"].Models["opencode/default"]; !slices.Equal(got, []string{filepath.Join(dir, "opencode"), "acp"}) {
+		t.Fatalf("OpenCode command = %v", got)
 	}
 	if _, dup := c.Accounts["codex"]; dup {
 		t.Fatal("default credentials duplicated a configured provider")
