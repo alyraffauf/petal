@@ -16,10 +16,21 @@ type ProjectThread struct {
 	Project, Directory, ID, Parent, Title, Model, Account string
 }
 
+// Resumable reports whether a thread's directory still exists, since adapters resume in it.
+func Resumable(dir string) bool {
+	if !filepath.IsAbs(dir) {
+		return false
+	}
+	info, err := os.Stat(dir)
+	return err == nil && info.IsDir()
+}
+
 func ThreadInProject(cwd string, r Record) ProjectThread {
 	return ProjectThread{Project: key(cwd), Directory: cwd, ID: r.ID, Parent: r.Parent, Title: r.Title, Model: r.Model, Account: r.Account}
 }
 
+// OtherProjectThreads lists saved threads from other projects that can still be resumed.
+// Stores that never recorded their directory, or whose directory is gone, are skipped.
 func OtherProjectThreads(cwd string) ([]ProjectThread, error) {
 	root, err := paths.XDG("STATE", "conversations")
 	if err != nil {
@@ -69,9 +80,9 @@ func readProjectThreads(path, hash string) ([]ProjectThread, error) {
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		if key(cwd) != hash || !filepath.IsAbs(cwd) {
-			cwd = ""
-		}
+	}
+	if key(cwd) != hash || !Resumable(cwd) {
+		return nil, nil
 	}
 	rows, err := db.Query("SELECT id, parent, title, model, account FROM sessions ORDER BY COALESCE(NULLIF(updated,''),opened) DESC, id")
 	if err != nil {

@@ -53,6 +53,7 @@ func TestLongDraftKeepsCaretVisible(t *testing.T) {
 }
 
 func TestFailedResumeRecoveryKeepsSessionAndDraft(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	keys := func(m *terminal, code rune) { m.Update(tea.KeyPressMsg{Code: code}) }
 	makeFailed := func() *terminal {
 		return &terminal{root: bloom.New(), screen: screen{connection: connectionFailed, editor: testComposer("draft", 3)},
@@ -88,6 +89,7 @@ func TestFailedResumeRecoveryKeepsSessionAndDraft(t *testing.T) {
 }
 
 func TestSwitchingThreadsRestoresEachDraft(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cfg := routing.Config{Model: "m", Accounts: map[string]routing.Account{"a": {Models: map[string][]string{"m": {"agent"}}}}}
 	drafts := make(sessionDrafts)
 	first := sessions.Record{ID: `["a","m","first"]`, Model: "m"}
