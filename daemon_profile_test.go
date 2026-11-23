@@ -283,27 +283,37 @@ func waitProfileRetry(t *testing.T, ctx context.Context) {
 	}
 }
 
-func TestMCPHeaderEnvironmentSelectsDaemon(t *testing.T) {
+func TestCredentialEnvironmentSelectsDaemon(t *testing.T) {
 	const key = "PETAL_TEST_HTTP_HEADER"
 	servers := []routing.MCPServer{{Headers: []routing.MCPHeader{{FromEnv: key}}}}
-	discovery := func() []string {
-		var profile daemonProfile
-		profile.includeMCPEnvironment(servers)
-		return profile.discovery
-	}
-	t.Setenv(key, "first-test-credential")
-	first := discovery()
-	t.Setenv(key, "second-test-credential")
-	second := discovery()
-	if slices.Equal(first, second) {
-		t.Fatal("credential rotation did not change the daemon profile")
-	}
-	t.Setenv(key, "")
-	empty := discovery()
-	if err := os.Unsetenv(key); err != nil {
-		t.Fatal(err)
-	}
-	if slices.Equal(discovery(), empty) {
-		t.Fatal("absent and empty credentials shared a socket")
+	for _, credential := range []string{"mcp", "embeddings"} {
+		t.Run(credential, func(t *testing.T) {
+			var config routing.Config
+			if credential == "mcp" {
+				config.MCPServers = servers
+			} else {
+				config.History.Embeddings.APIKeyEnv = key
+			}
+			discovery := func() []string {
+				var profile daemonProfile
+				profile.includeCredentials(config)
+				return profile.discovery
+			}
+			t.Setenv(key, "first-test-credential")
+			first := discovery()
+			t.Setenv(key, "second-test-credential")
+			second := discovery()
+			if slices.Equal(first, second) {
+				t.Fatal("credential rotation did not change the daemon profile")
+			}
+			t.Setenv(key, "")
+			empty := discovery()
+			if err := os.Unsetenv(key); err != nil {
+				t.Fatal(err)
+			}
+			if slices.Equal(discovery(), empty) {
+				t.Fatal("absent and empty credentials shared a socket")
+			}
+		})
 	}
 }

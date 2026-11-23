@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 	"petal/internal/sessions"
@@ -29,19 +28,12 @@ func (m *terminal) saveSessionInfo() {
 		return
 	}
 	m.pendingInfo = acp.SessionSessionInfoUpdate{}
+	if m.h.daemon != nil {
+		sessions.ApplySessionInfo(&m.h.record, info)
+		return
+	}
 	if err := m.h.updateRecord(func(record *sessions.Record) bool {
-		previousTitle, previousUpdated := record.Title, record.Updated
-		if !info.Title.IsUnset() {
-			record.Title, _ = info.Title.Value()
-		}
-		if stamp, ok := info.UpdatedAt.Value(); ok {
-			if parsed, err := time.Parse(time.RFC3339Nano, stamp); err == nil {
-				record.Updated = parsed
-			}
-		} else if info.UpdatedAt.IsNull() {
-			record.Updated = time.Time{}
-		}
-		return record.Title != previousTitle || !record.Updated.Equal(previousUpdated)
+		return sessions.ApplySessionInfo(record, info)
 	}); err != nil {
 		m.recordNote("Could not save session details: " + err.Error())
 	}

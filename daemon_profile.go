@@ -48,13 +48,17 @@ func newDaemonProfile(config, state string, getenv func(string) string) daemonPr
 	return profile
 }
 
-func (p *daemonProfile) includeMCPEnvironment(servers []routing.MCPServer) {
-	for _, server := range servers {
+func (p *daemonProfile) includeCredentials(config routing.Config) {
+	include := func(key string) {
+		if key != "" {
+			value, present := os.LookupEnv(key)
+			p.discovery = append(p.discovery, key, strconv.FormatBool(present), value)
+		}
+	}
+	include(config.History.Embeddings.APIKeyEnv)
+	for _, server := range config.MCPServers {
 		for _, header := range server.Headers {
-			if header.FromEnv != "" {
-				value, present := os.LookupEnv(header.FromEnv)
-				p.discovery = append(p.discovery, header.FromEnv, strconv.FormatBool(present), value)
-			}
+			include(header.FromEnv)
 		}
 	}
 }
@@ -95,7 +99,7 @@ func daemonDialer(configPath string, config routing.Config) (tui.DaemonDialer, e
 		return nil, err
 	}
 	profile := newDaemonProfile(configPath, statePath, os.Getenv)
-	profile.includeMCPEnvironment(config.MCPServers)
+	profile.includeCredentials(config)
 	for _, account := range config.Accounts {
 		profile.relativeDiscovery = profile.relativeDiscovery || relativeProviderPaths(func(key string) string { return account.Env[key] })
 	}

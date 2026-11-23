@@ -70,6 +70,10 @@ func TestLiveSessionDetachOverUnixSocket(t *testing.T) {
 			}
 			observerCursor := before.Sequence
 			questionEvent := advance(t, ctx, observer, &observerCursor, func(event Event) bool { return event.Kind == QuestionOpened })
+			record, err = sessions.Lookup(cwd, sessionID)
+			if err != nil || record.Title != "Detached title" || record.Updated.UTC().Format(time.RFC3339) != "2024-01-12T08:00:00Z" {
+				t.Fatalf("detached metadata = %+v, %v", record, err)
+			}
 			question := questionEvent.Question
 			if err := observer.Answer(ctx, Answer{QuestionID: question.ID, OptionID: "allow"}); !hasCode(err, ReadOnly) {
 				t.Fatalf("observer answer: %v", err)

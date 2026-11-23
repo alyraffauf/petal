@@ -316,22 +316,26 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 		}
 	}()
 	var pending string
-	await := func(marker string) {
+	await := func(markers ...string) {
 		t.Helper()
 		for {
 			plain := ansi.Strip(pending)
-			if strings.Contains(plain, marker) {
+			matched := true
+			for _, marker := range markers {
+				matched = matched && strings.Contains(plain, marker)
+			}
+			if matched {
 				pending = ""
 				return
 			}
 			select {
 			case chunk, ok := <-output:
 				if !ok {
-					t.Fatalf("terminal closed waiting for %q: %q", marker, plain)
+					t.Fatalf("terminal closed waiting for %q: %q", markers, plain)
 				}
 				pending += chunk
 			case <-ctx.Done():
-				t.Fatalf("waiting for %q: %q", marker, plain)
+				t.Fatalf("waiting for %q: %q", markers, plain)
 			}
 		}
 	}
@@ -373,7 +377,7 @@ func TestTerminalPasteResizeAndSteer(t *testing.T) {
 	write("\r")
 	await("partial-reply-visible")
 	write("revised\r")
-	await("steered")
+	await("steered", "ready")
 	write("\x1bOR") // xterm F3
 	await("conversation")
 	write("\x1bOR")

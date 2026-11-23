@@ -246,6 +246,9 @@ func (a adapterFixture) prompt(frame adapterFrame) {
 	default:
 		a.text("before ")
 		a.waitForRelease()
+		if text == "input" {
+			a.update(map[string]string{"sessionUpdate": "session_info_update", "title": "Detached title", "updatedAt": "2024-01-12T08:00:00Z"})
+		}
 		if text != "delegate" {
 			a.permission()
 			if !a.v2 {

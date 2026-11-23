@@ -8,7 +8,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
+
+	acp "github.com/coder/acp-go-sdk"
 
 	"petal/internal/proxy"
 	"petal/internal/sessions"
@@ -319,6 +322,17 @@ type adapterUpdate struct {
 	Update    struct{ SessionUpdate, State string }
 }
 
+func (s *session) persistSessionInfo(raw json.RawMessage) {
+	var params struct{ Update acp.SessionSessionInfoUpdate }
+	if json.Unmarshal(raw, &params) != nil {
+		return
+	}
+	_, err := sessions.Update(s.info.Cwd, s.info.SessionID, func(r *sessions.Record) bool { return sessions.ApplySessionInfo(r, params.Update) })
+	if err != nil {
+		slog.Error("save session metadata", "error", err)
+	}
+}
+
 func (s *session) update(method string, raw json.RawMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -342,6 +356,9 @@ func (s *session) update(method string, raw json.RawMessage) {
 			return
 		}
 		if s.info.SessionID != "" && routeKey(params.SessionID) == routeKey(s.info.SessionID) {
+			if params.Update.SessionUpdate == "session_info_update" {
+				s.persistSessionInfo(raw)
+			}
 			s.updateSetupFromNotification(raw)
 			if s.info.ACPVersion == 2 {
 				s.observeV2(raw, params.Update.SessionUpdate, params.Update.State, s.events.head+1)
@@ -400,13 +417,18 @@ func (s *session) commitSetup(replay *setupReplay) {
 		if resumedV2 && cursor+1 == replay.stateCursor {
 			event.Turn = s.currentV2Turn()
 		}
-		if s.info.ACPVersion == 2 && !resumedV2 {
+		if event.Method == "session/update" {
 			var params adapterUpdate
 			if json.Unmarshal(event.Params, &params) == nil && routeKey(params.SessionID) == routeKey(s.info.SessionID) {
-				s.observeV2(event.Params, params.Update.SessionUpdate, params.Update.State, base+cursor+1)
-				if params.Update.SessionUpdate == "state_update" {
-					s.setRunning(params.Update.State)
-					event.Turn = s.currentV2Turn()
+				if params.Update.SessionUpdate == "session_info_update" {
+					s.persistSessionInfo(event.Params)
+				}
+				if s.info.ACPVersion == 2 && !resumedV2 {
+					s.observeV2(event.Params, params.Update.SessionUpdate, params.Update.State, base+cursor+1)
+					if params.Update.SessionUpdate == "state_update" {
+						s.setRunning(params.Update.State)
+						event.Turn = s.currentV2Turn()
+					}
 				}
 			}
 		}
