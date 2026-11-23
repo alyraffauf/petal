@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Scripted ACP v1 agent for the demo recording.
 
 Petal starts one copy per account. DEMO_ROLE selects the part to play. The
@@ -18,10 +19,13 @@ CHILD_TASK = (
     "Review the retry change in internal/routing/retry.go. "
     "Run go test ./internal/routing and report any failure with its cause."
 )
+# record.py sends this in a second project, so the control center has a thread to show from it.
+SEED_PROMPT = "Draft the launch post"
 TEST_OUTPUT = """--- FAIL: TestBackoffCaps (0.00s)
     retry_test.go:41: attempt 6: got delay 0s, want 30s
 FAIL
-FAIL\tpetal/internal/routing\t0.412s"""
+FAIL\tpetal/internal/routing\t0.412s
+FAIL"""
 
 stdout_lock = threading.Lock()
 
@@ -138,7 +142,9 @@ def quote_original_output(session_id):
 
 
 def answer_as_parent(session_id, prompt, request_id):
-    if "second opinion" in prompt:
+    if prompt == SEED_PROMPT:
+        say(session_id, "The launch post draft is in `posts/launch.md`.")
+    elif "second opinion" in prompt:
         delegate_review(session_id)
     elif "exactly" in prompt:
         quote_original_output(session_id)
@@ -177,7 +183,8 @@ def main():
             prompt = " ".join(block.get("text", "") for block in params.get("prompt", []))
             if ROLE == "parent" and session_id not in titled_sessions:
                 titled_sessions.add(session_id)
-                update(session_id, {"sessionUpdate": "session_info_update", "title": "Review the retry change"})
+                title = SEED_PROMPT if prompt == SEED_PROMPT else "Review the retry change"
+                update(session_id, {"sessionUpdate": "session_info_update", "title": title})
             answer = answer_as_parent if ROLE == "parent" else answer_as_child
             threading.Thread(target=answer, args=(session_id, prompt, request_id), daemon=True).start()
         elif request_id is not None and method:
