@@ -36,6 +36,21 @@ type editorSession struct {
 	route    *proxy
 	routedID string
 	options  json.RawMessage
+	// request holds the cwd and MCP servers that opened the conversation, so a
+	// model switch can open the same conversation on another route.
+	request Object
+	// handoff is the routed session whose context the next prompt carries to
+	// the route chosen by a model switch.
+	handoff string
+}
+
+// openRequest keeps the fields of session/new from a session/new, load, or
+// resume request.
+func openRequest(params Object) Object {
+	request := maps.Clone(params)
+	delete(request, "sessionId")
+	delete(request, "configOptions")
+	return request
 }
 
 func (p *proxy) modelOption() Object {
@@ -101,7 +116,7 @@ func (p *proxy) editorRoute(ctx context.Context, model string) (*proxy, error) {
 	if !slices.Contains(p.ModelNames(), model) {
 		return nil, acp.NewInvalidParams("unknown Petal model")
 	}
-	route := &proxy{recorder: p.recorder, Config: p.Config, editor: p.editor, editorWire: p.editorWire, lifetime: p.lifetime}
+	route := &proxy{recorder: p.recorder, Config: p.Config, editor: p.editor, editorWire: p.editorWire, lifetime: p.lifetime, editorPicker: true}
 	route.Model = model
 	route.configureDelegation()
 	var hello Object
@@ -156,7 +171,7 @@ func (p *proxy) openEditorSession(ctx context.Context, params Object) (any, erro
 		return nil, acp.NewInvalidParams("cwd must be absolute")
 	}
 	id := "petal-" + rand.Text()
-	s := &editorSession{setup: params, cwd: projectKey(stringField(params, "cwd"))}
+	s := &editorSession{setup: params, request: openRequest(params), cwd: projectKey(stringField(params, "cwd"))}
 	// A working default adapter supplies model-specific settings before the first
 	// prompt. Keep the local picker usable if that route cannot start.
 	if _, err := p.bindEditorSession(ctx, s, id, p.Model); err == nil {
@@ -177,7 +192,11 @@ func (p *proxy) bindEditorSession(ctx context.Context, s *editorSession, id, mod
 	if err != nil {
 		return nil, err
 	}
-	setup, _ := json.Marshal(s.setup)
+	request := s.setup
+	if request == nil {
+		request = s.request
+	}
+	setup, _ := json.Marshal(request)
 	result, err := route.handle(ctx, "session/new", setup)
 	if err != nil {
 		return nil, err
@@ -261,7 +280,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		return p.openEditorSession(ctx, params)
 	}
 	value, found := e.sessions.Load(id)
-	if !found && strings.HasPrefix(id, "petal-") && (method == "session/load" || method == "session/resume") {
+	if !found && (strings.HasPrefix(id, "petal-") || decodeRouteID(id, 3) != nil) && (method == "session/load" || method == "session/resume") {
 		cwd := filepath.Clean(stringField(params, "cwd"))
 		path, err := editorBindingPath(projectKey(cwd), id)
 		if err != nil {
@@ -279,6 +298,11 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 				}
 			}
 		}
+		if errors.Is(err, os.ErrNotExist) && !strings.HasPrefix(id, "petal-") {
+			// A session the editor imported from session/list is its own route
+			// until a model switch binds it to another one.
+			routed, err = []byte(id), nil
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, unknownSession(id)
 		}
@@ -293,7 +317,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		if err != nil {
 			return nil, err
 		}
-		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: projectKey(stringField(params, "cwd")), routedID: string(routed)})
+		value, _ = e.sessions.LoadOrStore(id, &editorSession{route: route, cwd: projectKey(stringField(params, "cwd")), routedID: string(routed), request: openRequest(params)})
 		found = true
 	}
 	if !found {
@@ -311,6 +335,9 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		return nil, unknownSession(id)
 	}
 	s.mu.Lock()
+	if method == "session/load" || method == "session/resume" {
+		s.request = openRequest(params)
+	}
 	selecting := method == "session/set_model" || method == "session/set_config_option" && stringField(params, "configId") == "model"
 	requested := stringField(params, "value")
 	if method == "session/set_model" {
@@ -321,11 +348,7 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		s.mu.Unlock()
 		return options, nil
 	}
-	repick := selecting && s.route != nil && s.setup != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
-	if selecting && s.route != nil && s.setup == nil && requested != s.route.Model {
-		s.mu.Unlock()
-		return nil, acp.NewInvalidParams(fmt.Sprintf("this conversation uses %s; start a new conversation to use %s", s.route.Model, requested))
-	}
+	repick := selecting && s.route != nil && slices.Contains(p.ModelNames(), requested) && requested != s.route.Model
 	if selecting && s.route != nil && requested == s.route.Model {
 		options := p.sessionModelOptions(s)
 		s.mu.Unlock()
@@ -370,6 +393,11 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 			return nil, err
 		}
 		if repick && oldID != s.routedID {
+			// After the first prompt, the new route continues the conversation.
+			// Keep the oldest unsent handoff when the model changes twice.
+			if s.setup == nil && s.handoff == "" {
+				s.handoff = oldID
+			}
 			oldRoute.aliases.Delete(oldID)
 			closeParams, _ := json.Marshal(Object{"sessionId": encoded(oldID)})
 			_, _ = oldRoute.handle(ctx, "session/close", closeParams)
@@ -388,8 +416,17 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		}
 
 	}
+	handoff := ""
 	if method == "session/prompt" {
 		s.setup = nil
+		if s.handoff != "" {
+			prompt, err := handoffPrompt(stringField(s.request, "cwd"), s.handoff, params["prompt"])
+			if err != nil {
+				s.mu.Unlock()
+				return nil, err
+			}
+			params["prompt"], handoff = prompt, s.handoff
+		}
 	}
 	if method == "session/set_config_option" && stringField(params, "configId") == "effort" {
 		var options []Object
@@ -411,6 +448,13 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 	params["sessionId"] = encoded(routed)
 	raw, _ = json.Marshal(params)
 	result, err := route.handle(ctx, method, raw)
+	if err == nil && handoff != "" {
+		s.mu.Lock()
+		if s.handoff == handoff {
+			s.handoff = ""
+		}
+		s.mu.Unlock()
+	}
 	if err == nil && (method == "session/set_config_option" || method == "session/options" || method == "session/resume" || method == "session/load") {
 		var response Object
 		switch v := result.(type) {

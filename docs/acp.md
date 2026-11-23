@@ -32,6 +32,14 @@ On v2, reopening a session requests a full replay. Petal adds the newly observed
 - A revised message body gets its own row. Petal never rewrites a stored message.
 - For messages without adapter IDs, replay matches occurrences by role and exact text. Petal cannot always tell identical anonymous messages apart across separate compacted snapshots.
 
+## Switch models in a conversation
+
+The model option of every editor session lists all of Petal's models, with the conversation's current model selected. You can pick another model at any point in a conversation, including one from another provider.
+
+Petal opens a session on the new model and closes the old one. The next prompt carries the conversation so far: the latest compaction summary, if the old model compacted, and every saved message after it. Tool calls are carried as their one-line summaries, not their full output. Later switches carry that context forward, because the first prompt on each model includes it.
+
+A switch that has not been followed by a prompt is lost if Petal exits before the next prompt.
+
 ## Capability negotiation
 
 Editors see the capabilities that the eligible accounts share. After routing, each session keeps its original adapter. If you pin one account, the editor sees the capabilities of that adapter.
