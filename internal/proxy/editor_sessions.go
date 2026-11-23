@@ -415,8 +415,9 @@ func (p *proxy) handleEditor(ctx context.Context, method string, raw json.RawMes
 		if repick && s.setup == nil && s.handoff == "" {
 			// The new model learns the conversation only from Petal's archive.
 			// A conversation the editor imported from an adapter may have none.
+			// Closing the old route saves history it has observed but not stored.
 			rows, err := sessions.Transcript(stringField(s.request, "cwd"), oldID)
-			if err == nil && len(rows) == 0 {
+			if err == nil && len(rows) == 0 && (p.recorder == nil || !p.recorder.unsaved(oldID)) {
 				err = acp.NewInvalidParams("Petal has no saved history for this conversation, so switching models would lose it; start a new conversation to use another model")
 			}
 			if err != nil {

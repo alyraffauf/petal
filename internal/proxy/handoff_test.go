@@ -106,3 +106,17 @@ func TestHandoffKeepsLeadingSkillInvocable(t *testing.T) {
 		t.Fatalf("forwarded %s, want /bro followed by the handoff", forwarded)
 	}
 }
+
+func TestRecorderReportsUnsavedV2Turn(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	r := &transcriptRecorder{}
+	id := `["claude","opus","native"]`
+	r.open(id, id, t.TempDir(), "claude", "opus")
+	if r.unsaved(id) {
+		t.Fatal("a new session reports unsaved history")
+	}
+	r.observe(id, 2, Object{"sessionUpdate": encoded("agent_message"), "messageId": encoded("m1"), "content": json.RawMessage(`[{"type":"text","text":"first turn"}]`)})
+	if !r.unsaved(id) {
+		t.Fatal("a v2 turn before idle is not reported, so a switch would be refused")
+	}
+}

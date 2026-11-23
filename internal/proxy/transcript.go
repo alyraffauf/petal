@@ -136,6 +136,19 @@ func (r *transcriptRecorder) observe(key string, version uint16, u Object) {
 	}
 }
 
+// unsaved reports whether a session holds observed history that is not yet in
+// the archive, such as an ACP v2 turn that has not reported idle.
+func (r *transcriptRecorder) unsaved(key string) bool {
+	value, ok := r.active.Load(key)
+	if !ok {
+		return false
+	}
+	s := value.(*recordedSession)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.replay && (len(s.projection.Entries()) > 0 || len(s.nativeReplay) > 0)
+}
+
 // flush checkpoints the last observed updates during daemon shutdown,
 // including an ACP v2 turn that did not report idle before closing.
 func (r *transcriptRecorder) flush() {
