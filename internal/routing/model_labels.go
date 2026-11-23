@@ -36,6 +36,8 @@ func fallbackModelLabel(id string) string {
 	switch id {
 	case "claude/default":
 		return "Claude default"
+	case "opencode/default":
+		return "OpenCode default"
 	case "codex/default":
 		return "Codex default"
 	}
@@ -135,6 +137,8 @@ func (c Config) ResolveDefaultLabels(parent context.Context, cwd string) {
 
 func (a Account) defaultModelName(ctx context.Context, cli, cwd string) string {
 	switch a.Provider {
+	case "opencode":
+		return a.openCodeDefaultLabel(ctx, cli, cwd)
 	case "claude":
 		raw, err := a.claudeControl(ctx, cli, cwd, `{"subtype":"get_settings"}`)
 		var settings struct{ Applied struct{ Model string } }

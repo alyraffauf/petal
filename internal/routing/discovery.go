@@ -47,6 +47,23 @@ func (c *Config) discover() {
 	if c.Accounts == nil {
 		c.Accounts = map[string]Account{}
 	}
+	// An explicitly configured route owns its launch command.
+	if _, named := c.Accounts["opencode"]; !named {
+		configured := false
+		for _, account := range c.Accounts {
+			if _, exists := account.Models["opencode/default"]; exists {
+				configured = true
+				break
+			}
+		}
+		if cli := executable("opencode"); cli != "" && !configured {
+			c.Accounts["opencode"] = Account{
+				Provider: "opencode", discoveredDefault: true,
+				ModelLabels: map[string]string{},
+				Models:      map[string][]string{"opencode/default": {cli, "acp"}},
+			}
+		}
+	}
 	for _, provider := range []string{"claude", "codex"} {
 		var adapter, bundled string
 		switch provider {
