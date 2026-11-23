@@ -56,6 +56,7 @@ func claudeLabels(env map[string]string) map[string]string {
 		dir = filepath.Join(home, ".claude")
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "cache", "model-catalog", "*-cc.json"))
+	var catalogModels []struct{ ID, Name string }
 	var newest int64
 	for _, file := range files {
 		var cache struct {
@@ -72,6 +73,7 @@ func claudeLabels(env map[string]string) map[string]string {
 			continue
 		}
 		newest = cache.FetchedAt
+		catalogModels = cache.Catalog.Config.Models
 		for alias := range labels {
 			labels[alias] = strings.ToUpper(alias[:1]) + alias[1:]
 			target := cache.Catalog.Config.Targets[alias].Default
@@ -83,12 +85,18 @@ func claudeLabels(env map[string]string) map[string]string {
 			}
 		}
 	}
-	for alias := range labels {
+	for _, m := range catalogModels {
+		if m.ID != "" && m.Name != "" {
+			labels[m.ID] = m.Name
+		}
+	}
+	for _, alias := range []string{"opus", "sonnet", "haiku", "fable"} {
 		key := "ANTHROPIC_DEFAULT_" + strings.ToUpper(alias) + "_MODEL"
 		if custom := lookup(key); custom != "" {
 			labels[alias] = custom
 			if v := lookup(key + "_NAME"); v != "" {
 				labels[alias] = v
+				labels[custom] = v
 			}
 		}
 	}
@@ -131,6 +139,9 @@ func (a Account) defaultModelName(ctx context.Context, cli, cwd string) string {
 		raw, err := a.claudeControl(ctx, cli, cwd, `{"subtype":"get_settings"}`)
 		var settings struct{ Applied struct{ Model string } }
 		if err == nil && json.Unmarshal(raw, &settings) == nil {
+			if label := a.ModelLabels[settings.Applied.Model]; label != "" && settings.Applied.Model != "claude/default" {
+				return label
+			}
 			return settings.Applied.Model
 		}
 	case "codex":
@@ -139,23 +150,28 @@ func (a Account) defaultModelName(ctx context.Context, cli, cwd string) string {
 		if err != nil || json.Unmarshal(raw, &settings) != nil {
 			return ""
 		}
-		if settings.Config.Model != "" {
-			return settings.Config.Model
+		configured := settings.Config.Model
+		if label := a.ModelLabels[configured]; label != "" && configured != "codex/default" {
+			return label
 		}
 		raw, err = a.codexRead(ctx, cwd, "model/list")
 		var models struct {
 			Data []struct {
-				ID        string
-				IsDefault bool
+				ID, DisplayName string
+				IsDefault       bool
 			}
 		}
 		if err == nil && json.Unmarshal(raw, &models) == nil {
 			for _, m := range models.Data {
-				if m.IsDefault {
+				if m.ID == configured || (configured == "" && m.IsDefault) {
+					if m.DisplayName != "" {
+						return m.DisplayName
+					}
 					return m.ID
 				}
 			}
 		}
+		return configured
 	}
 	return ""
 }

@@ -29,13 +29,19 @@ OTHER_PROJECT = PROJECT.with_name(PROJECT.name + "-website")
 OTHER_PROMPT = "Draft the launch post"  # agent.py answers this prompt and titles the thread with it.
 AGENT = Path(__file__).with_name("agent.py").resolve()
 PROVIDER = Path(__file__).with_name("provider.py").resolve()
-# The name provider.py reports for the Claude default. Its arrival means the labels have resolved.
-CLAUDE_MODEL = "claude-opus-5-5"
+# Provider catalog labels shown in the recording.
+CLAUDE_MODEL = "Opus 5.5"
 TMUX = ["tmux", "-L", "petal-demo", "-f", "/dev/null"]
 
 
 def write_config(root):
     """Two Claude accounts with different quota, and one Codex account."""
+    catalog = root / ".claude/cache/model-catalog/demo-cc.json"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text(json.dumps({"fetchedAt": 1, "catalog": {"config": {
+        "models": [{"id": "claude-opus-5-5", "name": CLAUDE_MODEL}],
+        "provider_alias_targets": {"opus": {"default": "claude-opus-5-5"}},
+    }}}))
     accounts = [
         ("work", "claude", "parent", 30, 5),
         ("personal", "claude", "parent", 90, 1),
@@ -170,6 +176,7 @@ def save_other_thread(session):
 def start_review(session):
     session.wait_for(OTHER_PROMPT)
     session.wait_for(CLAUDE_MODEL)
+    session.wait_for("GPT-6.2-Sol")
     # Open on the thread saved in the other project, once the orchid has faded in.
     for _ in range(4):
         session.press("Down")

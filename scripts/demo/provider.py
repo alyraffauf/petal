@@ -28,7 +28,7 @@ def reply_to(request):
 
 def main():
     if os.path.basename(sys.argv[0]) == "codex" and sys.argv[1:3] == ["debug", "models"]:
-        print(json.dumps({"models": []}))
+        print(json.dumps({"models": [{"slug": CODEX_MODEL, "display_name": "GPT-6.2-Sol", "visibility": "list"}]}))
         return
     for line in sys.stdin:
         reply = reply_to(json.loads(line))
