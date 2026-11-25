@@ -47,20 +47,24 @@ func newHerdrReporter(config string) *herdrReporter {
 	r := &herdrReporter{pending: make(chan herdrStatus, 1), done: make(chan struct{})}
 	go func() {
 		defer close(r.done)
-		run := func(args []string) {
+		run := func(args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			_ = exec.CommandContext(ctx, binary, args...).Run()
+			return exec.CommandContext(ctx, binary, args...).Run()
 		}
 		for status := range r.pending {
 			args := []string{"pane", "report-agent", pane, "--source", "custom:petal", "--agent", "petal", "--state", status.state}
+			stateOnly := args
 			if status.id != "" {
 				args = append(args, "--agent-session-id", status.id, "--", "petal", "--directory", status.cwd, "--session", status.id)
 				if config != "" {
 					args = append(args, "--config", config)
 				}
 			}
-			run(args)
+			if err := run(args); err != nil && status.id != "" {
+				// Herdr rejects the whole report when it cannot accept the resume command.
+				run(stateOnly)
+			}
 		}
 		run([]string{"pane", "release-agent", pane, "--source", "custom:petal", "--agent", "petal"})
 	}()

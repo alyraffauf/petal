@@ -2,7 +2,7 @@
 
 ## Use Petal in Herdr
 
-Run `petal` in a Herdr pane. With `herdr` on your path, Petal reports when it is working, waiting for input, or idle. Herdr can reopen the current conversation after a server restart using `petal` on your path. To reopen a conversation yourself, run `petal --directory <project> --session <id>`.
+Run `petal` in a Herdr pane. With `herdr` on your path, Petal reports when it is working, waiting for input, or idle. Herdr 0.9.2 or later can reopen the current conversation after a server restart using `petal` on your path. To reopen a conversation yourself, run `petal --directory <project> --session <id>`.
 
 ## Start a conversation
 
