@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -106,6 +107,7 @@ type terminal struct {
 	cfg                routing.Config
 	resumeID           string
 	draftSessionID     string
+	herdr              *herdrReporter
 	resume, cancelling bool
 	ask                *permission
 	chatBacklog        backlogViewport
@@ -133,8 +135,13 @@ func (m *terminal) retrySession() *sessionStart {
 	return start
 }
 
-func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDialer) error {
-	cwd, err := os.Getwd()
+type StartOptions struct {
+	Resume                         bool
+	Session, Directory, ConfigPath string
+}
+
+func Run(parent context.Context, c routing.Config, options StartOptions, dial DaemonDialer) error {
+	cwd, err := filepath.Abs(options.Directory)
 	if err != nil {
 		return err
 	}
@@ -148,9 +155,21 @@ func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDiale
 	if err != nil {
 		return err
 	}
-	start, ok := recentLiveSession(cwd, c, live)
-	if resume || !ok {
-		start, ok, err = pick(cwd, c, resume, !client.SupportsProjectIndex())
+	start, ok := recentLiveSession(cwd, c, live, options.Session)
+	reporter := newHerdrReporter(options.ConfigPath)
+	if reporter != nil {
+		defer reporter.close()
+	}
+	if options.Session != "" && !ok {
+		start, err = savedSession(cwd, c, options.Session)
+		if err != nil {
+			return err
+		}
+	} else if options.Resume || !ok {
+		if reporter != nil {
+			reporter.publish(herdrStatus{state: "idle"})
+		}
+		start, ok, err = pick(cwd, c, options.Resume, !client.SupportsProjectIndex())
 		if err != nil || !ok {
 			return err
 		}
@@ -158,7 +177,7 @@ func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDiale
 	client.Close()
 	drafts := make(sessionDrafts)
 	for {
-		next, err := runSession(parent, start, drafts, dial)
+		next, err := runSession(parent, start, drafts, dial, reporter)
 		if err != nil || next == nil {
 			return err
 		}
@@ -168,9 +187,31 @@ func Run(parent context.Context, c routing.Config, resume bool, dial DaemonDiale
 		start = *next
 	}
 }
-func recentLiveSession(cwd string, cfg routing.Config, sessions []livesession.Info) (sessionStart, bool) {
+
+func savedSession(cwd string, cfg routing.Config, id string) (sessionStart, error) {
+	record, err := sessions.Lookup(cwd, id)
+	if err != nil {
+		return sessionStart{}, err
+	}
+	if record.ID == "" {
+		return sessionStart{}, fmt.Errorf("unknown session %q in %s", id, cwd)
+	}
+	if cfg.PinnedAccount != "" && record.Account != "" && cfg.PinnedAccount != record.Account {
+		return sessionStart{}, fmt.Errorf("session %q belongs to account %q", id, record.Account)
+	}
+	cfg.Model = record.Model
+	if record.Account != "" {
+		cfg.PinnedAccount = record.Account
+	}
+	return sessionStart{cwd: cwd, cfg: cfg, resume: true, id: id}, nil
+}
+
+func recentLiveSession(cwd string, cfg routing.Config, sessions []livesession.Info, requestedID string) (sessionStart, bool) {
 	var latest livesession.Info
 	for _, live := range sessions {
+		if requestedID != "" && live.SessionID != requestedID && live.ResumeID != requestedID {
+			continue
+		}
 		if live.Cwd != cwd || live.AdapterExited || (cfg.PinnedAccount != "" && live.PinnedAccount != cfg.PinnedAccount) {
 			continue
 		}
@@ -189,11 +230,11 @@ func recentLiveSession(cwd string, cfg routing.Config, sessions []livesession.In
 	return sessionStart{cwd: cwd, cfg: cfg, resume: id != "", id: id, handle: latest.Handle}, true
 }
 
-func runSession(parent context.Context, start sessionStart, drafts sessionDrafts, dial DaemonDialer) (*sessionStart, error) {
+func runSession(parent context.Context, start sessionStart, drafts sessionDrafts, dial DaemonDialer, reporter *herdrReporter) (*sessionStart, error) {
 	c := start.cfg
 	ctx, stop := context.WithCancel(parent)
 	defer stop()
-	m := &terminal{root: bloom.New(), ctx: ctx, cfg: c, resume: start.resume, resumeID: start.id}
+	m := &terminal{herdr: reporter, root: bloom.New(), ctx: ctx, cfg: c, resume: start.resume, resumeID: start.id}
 	cwd := start.cwd
 	m.screen = screen{transcriptRevision: 1, background: canvasBackground(c.TransparentBackground), Cwd: cwd, Model: c.Model, Account: c.PinnedAccount, connection: connecting}
 	client, err := dial(ctx)
@@ -510,6 +551,9 @@ func (m *terminal) restorePermissionDraft() {
 }
 
 func (m *terminal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.herdr != nil {
+		defer func() { m.herdr.publish(m.herdrStatus()) }()
+	}
 	if launch := m.launch; launch != nil && launch.center.childStatuses != nil {
 		defer func() {
 			if launch != m.launch {
