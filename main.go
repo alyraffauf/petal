@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	var resume bool
+	var options tui.StartOptions
 	var terminalAuth string
 	settings := viper.New()
 	root := &cobra.Command{Use: "petal", Short: "Open an interactive agent session", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true}
@@ -71,9 +71,13 @@ func main() {
 		if err != nil {
 			return err
 		}
-		return tui.Run(cmd.Context(), c, resume, dial)
+		options.ConfigPath = settings.GetString("config")
+		return tui.Run(cmd.Context(), c, options, dial)
 	}
-	root.Flags().BoolVar(&resume, "resume", false, "choose a saved conversation for this directory")
+	root.Flags().BoolVar(&options.Resume, "resume", false, "choose a saved conversation for this directory")
+	root.Flags().StringVar(&options.Session, "session", "", "open this conversation in the project directory")
+	root.Flags().StringVar(&options.Directory, "directory", "", "project directory for the terminal UI")
+	root.MarkFlagsMutuallyExclusive("resume", "session")
 	server.Flags().StringVar(&terminalAuth, "terminal-auth", "", "ACP terminal authentication")
 	_ = server.Flags().MarkHidden("terminal-auth")
 	bridge := &cobra.Command{
